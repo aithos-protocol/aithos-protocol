@@ -13,7 +13,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { loadIdentity } from "../identity.js";
+import { loadIdentity, isTrackedIdentity } from "../identity.js";
 import { ethosDir, verifyEthos } from "../ethos.js";
 import { identityDir, loadConfig, readJson } from "../storage.js";
 import type { DidDocument } from "../identity.js";
@@ -32,22 +32,26 @@ export function runEthosVerify(opts: EthosVerifyOpts): void {
   }
 
   const didDoc = readJson<DidDocument>(join(identityDir(handle), "did.json"));
-  const identity = opts.noDecrypt ? null : loadIdentity(handle);
+  // Tracked identities have no sealed seeds → we silently downgrade to
+  // public-only verification (same effect as --no-decrypt).
+  const tracked = isTrackedIdentity(handle);
+  const identity = opts.noDecrypt || tracked ? null : loadIdentity(handle);
 
   const result = verifyEthos(handle, identity, didDoc);
 
   if (opts.json) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ tracked, ...result }, null, 2));
     process.exit(result.ok ? 0 : 1);
   }
 
+  const trackedSuffix = tracked ? " [tracked — public-only verify]" : "";
   if (result.ok) {
-    console.log(`[handle=${handle}] ethos: OK`);
+    console.log(`[handle=${handle}]${trackedSuffix} ethos: OK`);
     for (const w of result.warnings) console.log(`  warning: ${w}`);
     return;
   }
 
-  console.log(`[handle=${handle}] ethos: FAILED`);
+  console.log(`[handle=${handle}]${trackedSuffix} ethos: FAILED`);
   for (const e of result.errors) console.log(`  - ${e}`);
   for (const w of result.warnings) console.log(`  warning: ${w}`);
   process.exit(1);

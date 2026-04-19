@@ -9,7 +9,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { loadIdentity } from "../identity.js";
+import { loadIdentity, isTrackedIdentity, TrackedIdentityError } from "../identity.js";
 import { ethosDir, loadZoneDoc, readManifest } from "../ethos.js";
 import type { Sphere } from "../did.js";
 import { loadConfig } from "../storage.js";
@@ -30,6 +30,11 @@ interface Row {
   mandateId?: string;
 }
 
+interface SkippedZone {
+  zone: Sphere;
+  reason: string;
+}
+
 export function runEthosList(opts: EthosListOpts): void {
   const handle = opts.handle ?? loadConfig().default_handle;
   if (!handle) throw new Error("No identity handle. Pass --handle <h>.");
@@ -37,37 +42,60 @@ export function runEthosList(opts: EthosListOpts): void {
     throw new Error(`No ethos for "${handle}".`);
   }
 
-  const identity = loadIdentity(handle);
+  const tracked = isTrackedIdentity(handle);
+  // Tracked identities can only load the public zone; circle/self are encrypted
+  // and we don't hold the sphere secrets to decrypt them.
+  const identity = tracked ? null : loadIdentity(handle);
   const manifest = readManifest(handle);
 
   const zones: Sphere[] = opts.zone ? [ensureZone(opts.zone)] : ["public", "circle", "self"];
 
   const rows: Row[] = [];
+  const skipped: SkippedZone[] = [];
   for (const z of zones) {
-    const doc = loadZoneDoc(handle, z, identity, manifest);
-    for (const s of doc.sections) {
-      const last = s.revisions[s.revisions.length - 1];
-      const delegated = !!last.authorized_by;
-      rows.push({
+    if (tracked && z !== "public") {
+      skipped.push({
         zone: z,
-        id: s.id,
-        title: s.title,
-        revision: last.revision,
-        at: last.at,
-        delegated,
-        mandateId: last.authorized_by,
+        reason: "encrypted — no sphere key (identity is tracked-only)",
       });
+      continue;
+    }
+    try {
+      const doc = loadZoneDoc(handle, z, identity ?? undefined, manifest);
+      for (const s of doc.sections) {
+        const last = s.revisions[s.revisions.length - 1];
+        const delegated = !!last.authorized_by;
+        rows.push({
+          zone: z,
+          id: s.id,
+          title: s.title,
+          revision: last.revision,
+          at: last.at,
+          delegated,
+          mandateId: last.authorized_by,
+        });
+      }
+    } catch (e) {
+      if (e instanceof TrackedIdentityError) {
+        skipped.push({ zone: z, reason: e.message });
+      } else {
+        throw e;
+      }
     }
   }
 
   if (opts.json) {
-    console.log(JSON.stringify(rows, null, 2));
+    console.log(JSON.stringify({ rows, skipped, tracked }, null, 2));
     return;
   }
 
-  console.log(`[handle=${handle}] Ethos sections` + (opts.zone ? ` (zone=${opts.zone})` : ""));
+  const trackedSuffix = tracked ? " [tracked]" : "";
+  console.log(
+    `[handle=${handle}]${trackedSuffix} Ethos sections` +
+      (opts.zone ? ` (zone=${opts.zone})` : ""),
+  );
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && skipped.length === 0) {
     console.log("(no sections)");
     return;
   }
@@ -89,19 +117,27 @@ export function runEthosList(opts: EthosListOpts): void {
     "─".repeat(W_AT)   + "─┼─" +
     "─".repeat(5);
 
-  console.log(header);
-  console.log(rule);
-  for (const r of rows) {
-    const titleCell = r.delegated ? `${r.title}  [delegated: ${r.mandateId}]` : r.title;
-    console.log(
-      [
-        pad(r.zone, W_ZONE),
-        pad(r.id, W_ID),
-        pad(String(r.revision), W_REV),
-        pad(r.at, W_AT),
-        titleCell,
-      ].join(sep),
-    );
+  if (rows.length > 0) {
+    console.log(header);
+    console.log(rule);
+    for (const r of rows) {
+      const titleCell = r.delegated ? `${r.title}  [delegated: ${r.mandateId}]` : r.title;
+      console.log(
+        [
+          pad(r.zone, W_ZONE),
+          pad(r.id, W_ID),
+          pad(String(r.revision), W_REV),
+          pad(r.at, W_AT),
+          titleCell,
+        ].join(sep),
+      );
+    }
+  }
+  if (skipped.length > 0) {
+    if (rows.length > 0) console.log();
+    for (const s of skipped) {
+      console.log(`  (${s.zone}: ${s.reason})`);
+    }
   }
 }
 

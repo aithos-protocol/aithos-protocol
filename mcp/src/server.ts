@@ -30,6 +30,9 @@ import {
 } from "@aithos/cli/storage";
 import {
   loadIdentity,
+  loadIdentityMetadata,
+  isTrackedIdentity,
+  TrackedIdentityError,
   rootDid,
   sphereDidUrl,
   type DidDocument,
@@ -105,8 +108,8 @@ function sectionSummary(
 }
 
 /**
- * Best-effort zone loader: decrypts circle/self if the identity is local,
- * otherwise returns the public zone alone and errors for encrypted zones.
+ * Best-effort zone loader: decrypts circle/self if the identity is owned,
+ * errors with a tracked-identity message if only the public data is available.
  */
 function readZone(handle: string, zone: Sphere): ZoneDoc {
   if (zone === "public") {
@@ -121,6 +124,8 @@ function readZone(handle: string, zone: Sphere): ZoneDoc {
     }
   }
   // circle / self need a local Identity (subject secret) to decrypt.
+  // loadIdentity throws TrackedIdentityError if any sealed seed is missing,
+  // which we let bubble up — the caller gets a clear message.
   const identity = loadIdentity(handle);
   const manifest = readManifest(handle);
   return loadZoneDoc(handle, zone, identity, manifest);
@@ -162,13 +167,12 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       const handles = listIdentities();
       const out = handles.map((h) => {
         try {
-          const id = loadIdentity(h);
+          const meta = loadIdentityMetadata(h);
           return {
-            handle: h,
-            did: rootDid(id),
-            spheres: Object.fromEntries(
-              SPHERE_FRAGMENTS.map((s) => [s, sphereDidUrl(id, s)]),
-            ),
+            handle: meta.handle,
+            did: meta.did,
+            tracked: meta.tracked,
+            spheres: meta.sphereDids,
           };
         } catch (e) {
           return { handle: h, error: (e as Error).message };
@@ -194,14 +198,14 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
     async ({ handle }) => {
       const h = resolveHandle(handle);
-      const id = loadIdentity(h);
+      const meta = loadIdentityMetadata(h);
       return ok({
-        handle: id.handle,
-        displayName: id.displayName,
-        did: rootDid(id),
-        spheres: Object.fromEntries(
-          SPHERE_FRAGMENTS.map((s) => [s, sphereDidUrl(id, s)]),
-        ),
+        handle: meta.handle,
+        displayName: meta.displayName,
+        did: meta.did,
+        tracked: meta.tracked,
+        spheres: meta.sphereDids,
+        sphereKeys: meta.sphereKeys,
       });
     },
   );
@@ -222,25 +226,34 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
     async ({ handle, zone }) => {
       const h = resolveHandle(handle);
+      const tracked = isTrackedIdentity(h);
       const zones: Sphere[] = zone ? [zone] : [...SPHERE_FRAGMENTS];
       const sections: ReturnType<typeof sectionSummary>[] = [];
+      const skipped: Array<{ zone: Sphere; reason: string }> = [];
       for (const z of zones) {
+        // Fast path: tracked identity, encrypted zone — don't even try to
+        // decrypt, surface a clean "skipped" record instead of a synthetic
+        // error row shaped like a section.
+        if (tracked && z !== "public") {
+          skipped.push({
+            zone: z,
+            reason:
+              "encrypted — no sphere key (identity is tracked-only)",
+          });
+          continue;
+        }
         try {
           const doc = readZone(h, z);
           for (const s of doc.sections) sections.push(sectionSummary(z, s));
         } catch (e) {
-          // surface decryption / load failures per-zone rather than aborting
-          sections.push({
-            zone: z,
-            id: "",
-            title: `[error: ${(e as Error).message}]`,
-            revision: 0,
-            updated_at: "",
-            tags: [],
-          });
+          if (e instanceof TrackedIdentityError) {
+            skipped.push({ zone: z, reason: e.message });
+          } else {
+            skipped.push({ zone: z, reason: (e as Error).message });
+          }
         }
       }
-      return ok({ handle: h, sections });
+      return ok({ handle: h, tracked, sections, skipped });
     },
   );
 
@@ -260,6 +273,15 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
     async ({ handle, zone, sectionId, includeHistory }) => {
       const h = resolveHandle(handle);
+      // Short-circuit encrypted zones on a tracked identity with an explicit
+      // message — the on-disk ciphertext cannot be read without the sphere key,
+      // so there's no point trying and surfacing a generic decryption error.
+      if (isTrackedIdentity(h) && zone !== "public") {
+        throw new Error(
+          `cannot read section in ${zone} zone of "${h}": identity is tracked-only ` +
+            `(no sphere key on disk). Only the public zone is readable.`,
+        );
+      }
       const doc = readZone(h, zone);
       const section = doc.sections.find((s) => s.id === sectionId);
       if (!section) {
@@ -309,9 +331,14 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       const didDoc = readJson<DidDocument>(
         path.join(identityDir(h), "did.json"),
       );
-      const identity = decrypt === false ? null : loadIdentity(h);
+      // Tracked identities have no sealed seeds: we transparently downgrade to
+      // a public-only verification rather than throwing. The result object
+      // already notes which zones were skipped.
+      const tracked = isTrackedIdentity(h);
+      const identity =
+        decrypt === false || tracked ? null : loadIdentity(h);
       const result = verifyEthos(h, identity, didDoc);
-      return ok(result);
+      return ok({ tracked, ...result });
     },
   );
 
@@ -449,22 +476,20 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       } else {
         m = loadMandate(mandate);
       }
-      // `issuer` is `did:aithos:<mb>` — find the matching local identity to
-      // load its DID document. If the mandate targets a non-local issuer we
-      // can't verify here without the caller supplying the DID doc.
+      // `issuer` is `did:aithos:<mb>` — find the matching local identity (owned
+      // or tracked) to load its DID document. Verification only needs public
+      // keys, so a tracked identity is perfectly fine as an issuer lookup.
       const subjectDid = m.issuer;
       let didDoc: DidDocument | undefined;
       for (const h of listIdentities()) {
         try {
-          const id = loadIdentity(h);
-          if (rootDid(id) === subjectDid) {
-            didDoc = readJson<DidDocument>(
-              path.join(identityDir(h), "did.json"),
-            );
+          const meta = loadIdentityMetadata(h);
+          if (meta.did === subjectDid) {
+            didDoc = meta.didDocument;
             break;
           }
         } catch {
-          /* skip */
+          /* skip identities with corrupted did.json */
         }
       }
       if (!didDoc) {
@@ -493,8 +518,8 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       const handles = listIdentities();
       const list = handles.map((h) => {
         try {
-          const id = loadIdentity(h);
-          return { handle: h, did: rootDid(id) };
+          const meta = loadIdentityMetadata(h);
+          return { handle: h, did: meta.did, tracked: meta.tracked };
         } catch (e) {
           return { handle: h, error: (e as Error).message };
         }

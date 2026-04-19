@@ -224,9 +224,122 @@ export function writeIdentityToDisk(id: Identity): { dir: string; did: string } 
   return { dir, did };
 }
 
+/**
+ * A tracked identity is one we hold the public data for — `did.json` plus
+ * whatever is in `ethos/` — but for which we do NOT possess the private
+ * sphere seeds. This is the normal state when you've imported someone else's
+ * ethos bundle to follow or verify it.
+ *
+ * Tracked identities can:
+ *   - have their metadata listed (handle, DID, public sphere keys)
+ *   - have their `public` zone read (plaintext, signature-verifiable)
+ *   - have their ethos partially verified (public zone + manifest signature)
+ *
+ * Tracked identities CANNOT:
+ *   - decrypt circle/self zones (no sphere secret)
+ *   - issue mandates / revocations / rotations (no sphere secret)
+ *   - append new revisions under either the sphere key or a delegate (the
+ *     write-mandate flow still requires the subject's sphere key to have
+ *     previously issued the mandate, which implies owned state)
+ *
+ * The distinction is purely an on-disk one: sealed seed files present ⇒ owned.
+ * Missing one or more ⇒ tracked.
+ */
+export class TrackedIdentityError extends Error {
+  constructor(handle: string, missing: string[]) {
+    super(
+      `identity "${handle}" is tracked-only — this operation requires the private ` +
+        `sphere key(s), but the following sealed seed file(s) are missing: ` +
+        missing.join(", ") +
+        `. Tracked identities can be introspected (DID, public zone, signatures) ` +
+        `but cannot sign, decrypt, or write.`,
+    );
+    this.name = "TrackedIdentityError";
+  }
+}
+
+/** True if any of the four sealed seed files is missing on disk. */
+export function isTrackedIdentity(handle: string): boolean {
+  const dir = identityDir(handle);
+  if (!existsSync(dir)) return false; // absent, not tracked
+  const required = ["root", ...SPHERE_FRAGMENTS] as const;
+  return required.some((r) => !existsSync(join(dir, `${r}.sealed.json`)));
+}
+
+/**
+ * Public, read-only view of an identity, derived entirely from `did.json`.
+ * Anyone who has downloaded the identity's DID document can reconstruct this.
+ */
+export interface IdentityMetadata {
+  handle: string;
+  displayName: string;
+  did: string;
+  tracked: boolean;
+  sphereDids: Record<Sphere, string>;
+  /** Ed25519 public key per sphere, multibase-encoded. */
+  sphereKeys: Record<Sphere, string>;
+  didDocument: DidDocument;
+}
+
+/**
+ * Load an identity's public metadata (did.json only). Works for both owned and
+ * tracked identities. Throws only if `did.json` is missing.
+ */
+export function loadIdentityMetadata(handle: string): IdentityMetadata {
+  const dir = identityDir(handle);
+  if (!existsSync(dir)) throw new Error(`Identity not found: ${handle}`);
+
+  const didPath = join(dir, "did.json");
+  if (!existsSync(didPath)) {
+    throw new Error(
+      `identity "${handle}" has no did.json — nothing to load. The directory ` +
+        `exists at ${dir} but is empty or corrupted.`,
+    );
+  }
+  const didDoc = readJson<DidDocument>(didPath);
+  const displayName = didDoc.aithos?.display_name ?? handle;
+
+  const sphereKey = (sphere: Sphere): string => {
+    const vm = didDoc.verificationMethod?.find((v) => v.id.endsWith(`#${sphere}`));
+    if (!vm) throw new Error(`did.json for ${handle} has no verificationMethod for sphere ${sphere}`);
+    return vm.publicKeyMultibase;
+  };
+  const sphereDid = (sphere: Sphere): string => {
+    const vm = didDoc.verificationMethod?.find((v) => v.id.endsWith(`#${sphere}`));
+    if (!vm) throw new Error(`did.json for ${handle} has no verificationMethod for sphere ${sphere}`);
+    return vm.id;
+  };
+
+  return {
+    handle,
+    displayName,
+    did: didDoc.id,
+    tracked: isTrackedIdentity(handle),
+    sphereDids: {
+      public: sphereDid("public"),
+      circle: sphereDid("circle"),
+      self: sphereDid("self"),
+    },
+    sphereKeys: {
+      public: sphereKey("public"),
+      circle: sphereKey("circle"),
+      self: sphereKey("self"),
+    },
+    didDocument: didDoc,
+  };
+}
+
 export function loadIdentity(handle: string): Identity {
   const dir = identityDir(handle);
   if (!existsSync(dir)) throw new Error(`Identity not found: ${handle}`);
+
+  // Detect tracked identities upfront and surface a friendly error instead of
+  // a raw ENOENT from deep inside readJson.
+  const required = ["root", ...SPHERE_FRAGMENTS] as const;
+  const missing = required
+    .filter((r) => !existsSync(join(dir, `${r}.sealed.json`)))
+    .map((r) => `${r}.sealed.json`);
+  if (missing.length > 0) throw new TrackedIdentityError(handle, missing);
 
   const loadSeed = (role: "root" | Sphere): KeyPair => {
     const stored = readJson<StoredSeed>(join(dir, `${role}.sealed.json`));

@@ -8,7 +8,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { loadIdentity } from "../identity.js";
+import { loadIdentity, isTrackedIdentity } from "../identity.js";
 import { ethosDir, ethosZoneFile, loadZoneDoc, readManifest } from "../ethos.js";
 import type { Sphere } from "../did.js";
 import { loadConfig } from "../storage.js";
@@ -30,12 +30,15 @@ export function runEthosShow(opts: EthosShowOpts): void {
 
   const manifest = readManifest(handle);
 
+  const tracked = isTrackedIdentity(handle);
+
   if (!opts.zone && !opts.section) {
     if (opts.json) {
-      console.log(JSON.stringify(manifest, null, 2));
+      console.log(JSON.stringify({ ...manifest, tracked }, null, 2));
       return;
     }
-    console.log(`[handle=${handle}] Ethos`);
+    const trackedSuffix = tracked ? " [tracked]" : "";
+    console.log(`[handle=${handle}]${trackedSuffix} Ethos`);
     console.log(`  DID:          ${manifest.subject_did}`);
     console.log(`  Edition:      ${manifest.edition.version} (height=${manifest.edition.height})`);
     console.log(`  Created:      ${manifest.edition.created_at}`);
@@ -44,14 +47,25 @@ export function runEthosShow(opts: EthosShowOpts): void {
     for (const z of ["public", "circle", "self"] as const) {
       const zm = manifest.zones[z];
       const enc = zm.encrypted ? "encrypted" : "clear";
-      console.log(`  ${z.padEnd(7)} ${enc} · ${zm.section_titles.length} section(s)`);
+      const lock = tracked && zm.encrypted ? " 🔒 no key" : "";
+      console.log(
+        `  ${z.padEnd(7)} ${enc} · ${zm.section_titles.length} section(s)${lock}`,
+      );
       for (const t of zm.section_titles) console.log(`    - ${t}`);
     }
     return;
   }
 
   const zone = ensureZone(opts.zone ?? "public");
-  const identity = loadIdentity(handle);
+  // Public zone is readable without any sphere key; circle/self require the
+  // subject's sphere secret (present only on owned identities).
+  if (tracked && zone !== "public") {
+    throw new Error(
+      `cannot read ${zone} zone of "${handle}": identity is tracked-only (no sphere key on disk). ` +
+        `Only the public zone is readable.`,
+    );
+  }
+  const identity = tracked ? undefined : loadIdentity(handle);
   const doc = loadZoneDoc(handle, zone, identity, manifest);
 
   if (opts.section) {

@@ -1077,8 +1077,18 @@ export function verifyEthos(
   // Check 5 + 7: zone integrity + section chain
   for (const z of SPHERE_FRAGMENTS) {
     const zm = manifest.zones[z];
-    const doc = safeLoadZone(handle, z, identity, manifest, errors);
-    if (!doc) continue;
+    const loaded = safeLoadZone(handle, z, identity, manifest, errors);
+    if (!loaded.doc) continue;
+    if (loaded.skipped) {
+      // Encrypted zone with no key available — verify what we can from the
+      // public data (ciphertext hash, if we want later) but skip everything
+      // that requires plaintext. Record it as a warning, not an error.
+      warnings.push(
+        `zone ${z}: skipped content checks (encrypted, no sphere key available) — manifest declares ${zm.section_titles.length} section(s)`,
+      );
+      continue;
+    }
+    const doc = loaded.doc;
 
     // 5: plaintext hash
     const md = renderZoneMarkdownFromDoc(z, doc, manifest);
@@ -1157,19 +1167,21 @@ function safeLoadZone(
   identity: Identity | null,
   manifest: Manifest,
   errors: string[],
-): ZoneDoc | null {
+): { doc: ZoneDoc | null; skipped: boolean } {
   try {
     const zm = manifest.zones[zone];
     if (zm.encrypted && !identity) {
-      // Cannot access encrypted zone without the key — not an error per se,
-      // but we cannot verify its content chain. Record a warning via `errors`
-      // is wrong; we'll surface silently-skipped zones in the caller.
-      return { sections: [] };
+      // Cannot decrypt — the caller will note this as a warning and skip the
+      // content-dependent checks for this zone.
+      return { doc: { sections: [] }, skipped: true };
     }
-    return loadZoneDoc(handle, zone, identity ?? undefined, manifest);
+    return {
+      doc: loadZoneDoc(handle, zone, identity ?? undefined, manifest),
+      skipped: false,
+    };
   } catch (e) {
     errors.push(`zone ${zone}: failed to load (${(e as Error).message})`);
-    return null;
+    return { doc: null, skipped: false };
   }
 }
 

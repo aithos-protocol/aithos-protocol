@@ -13,6 +13,7 @@ import {
   identityDir,
   loadConfig,
 } from "../storage.js";
+import { isTrackedIdentity } from "../identity.js";
 
 export type ListKind = "identities" | "mandates" | "revocations";
 
@@ -26,6 +27,7 @@ export function runList(kind: ListKind, json = false): void {
           ids.map((h) => ({
             handle: h,
             default: h === config.default_handle,
+            tracked: isTrackedIdentity(h),
             did: tryReadDid(h),
             path: identityDir(h),
           })),
@@ -42,7 +44,8 @@ export function runList(kind: ListKind, json = false): void {
     for (const h of ids) {
       const marker = h === config.default_handle ? "* " : "  ";
       const did = tryReadDid(h) ?? "(no did.json)";
-      console.log(`${marker}${h.padEnd(20)} ${did}`);
+      const trackedTag = isTrackedIdentity(h) ? "  [tracked]" : "";
+      console.log(`${marker}${h.padEnd(20)} ${did}${trackedTag}`);
     }
     return;
   }

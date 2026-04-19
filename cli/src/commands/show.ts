@@ -1,11 +1,10 @@
 /**
  * `aithos show [handle]` — print identity info. If no handle is given, shows
- * the current default.
+ * the current default. Works for both owned and tracked identities — tracked
+ * ones are flagged in the header.
  */
 
-import { join } from "node:path";
-import { readFileSync } from "node:fs";
-import { loadIdentity, rootDid } from "../identity.js";
+import { loadIdentityMetadata } from "../identity.js";
 import { identityDir, loadConfig, listIdentities } from "../storage.js";
 
 export interface ShowOpts {
@@ -31,17 +30,17 @@ export function runShow(opts: ShowOpts): void {
     return;
   }
 
-  const id = loadIdentity(handle);
-  const didJson = readFileSync(join(identityDir(handle), "did.json"), "utf8");
-  const didDoc = JSON.parse(didJson);
+  const meta = loadIdentityMetadata(handle);
+  const didDoc = meta.didDocument;
 
   if (opts.json) {
     console.log(
       JSON.stringify(
         {
-          handle: id.handle,
-          display_name: id.displayName,
-          did: rootDid(id),
+          handle: meta.handle,
+          display_name: meta.displayName,
+          did: meta.did,
+          tracked: meta.tracked,
           did_document: didDoc,
           storage: identityDir(handle),
         },
@@ -52,10 +51,20 @@ export function runShow(opts: ShowOpts): void {
     return;
   }
 
-  console.log(`Handle:         ${id.handle}`);
-  console.log(`Display name:   ${id.displayName}`);
-  console.log(`DID:            ${rootDid(id)}`);
+  const trackedSuffix = meta.tracked ? "  [tracked — public data only]" : "";
+  console.log(`Handle:         ${meta.handle}${trackedSuffix}`);
+  console.log(`Display name:   ${meta.displayName}`);
+  console.log(`DID:            ${meta.did}`);
   console.log(`Storage:        ${identityDir(handle)}`);
+  if (meta.tracked) {
+    console.log();
+    console.log(
+      "This identity has no private sphere keys on disk. You can read its public",
+    );
+    console.log(
+      "zone and verify signatures, but cannot decrypt circle/self or sign for it.",
+    );
+  }
   console.log();
   console.log("Verification methods:");
   for (const vm of didDoc.verificationMethod ?? []) {

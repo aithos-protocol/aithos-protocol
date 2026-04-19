@@ -103,6 +103,38 @@ Run `aithos <cmd> --help` for per-command flags.
 
 `AITHOS_HOME` overrides `~/.aithos`. Every JSON file is written with mode `0600`; directories with `0700`.
 
+## Tracked identities (read-only)
+
+An identity directory that contains `did.json` and an `ethos/` folder but **no** `*.sealed.json` files is a **tracked** identity. You hold someone else's public material — enough to read their public zone and verify every signature they ever emitted — but you hold none of their private sphere keys, so you cannot decrypt the encrypted zones, sign mandates on their behalf, or append revisions to their ethos. This is the intended mode for subscribing to someone's published ethos.
+
+The CLI and the MCP server both auto-detect this state via `isTrackedIdentity(handle)` and downgrade gracefully rather than crashing when a sealed-seed file is missing:
+
+```
+$ aithos list identities
+HANDLE       DID                                                                 DEFAULT
+alice        did:aithos:z6Mki3B3WV4g42PpB6NfPfqFDNufSm2KxPAMraouw9U1FJjV  [tracked]
+
+$ aithos show alice
+Handle:         alice  [tracked — public data only]
+…
+
+$ aithos ethos list --handle alice
+[handle=alice] [tracked] Ethos sections
+ZONE    │ ID               │ REV  │ UPDATED                  │ TITLE
+────────┼──────────────────┼──────┼──────────────────────────┼─────
+public  │ sec_9ae63416bf2a │ 1    │ 2026-04-19T11:11:10.864Z │ Public Bio
+
+  (circle: encrypted — no sphere key (identity is tracked-only))
+  (self: encrypted — no sphere key (identity is tracked-only))
+
+$ aithos ethos verify --handle alice
+[handle=alice] [tracked — public-only verify] ethos: OK
+  warning: zone circle: skipped content checks (encrypted, no sphere key available) — manifest declares 1 section(s)
+  warning: zone self: skipped content checks (encrypted, no sphere key available) — manifest declares 1 section(s)
+```
+
+Write operations (`ethos add-section`, `ethos add-revision`, `grant`, `rotate`, `revoke`, `sign-action`) refuse cleanly with a `TrackedIdentityError` that lists exactly which sealed seed files are missing. The encryption boundary is enforced by the protocol, not by the CLI: even if you manipulate the on-disk state, you cannot read circle/self ciphertext without the sphere's X25519 private key.
+
 ## Write mandates
 
 `ethos.write.{public,circle,self}` scopes authorize a **delegate key** — a separate Ed25519 keypair generated with `aithos delegate-key` — to append revisions to the named zone on the subject's behalf. The sphere key never leaves the primary device; it signs the mandate once, and the delegate key does the day-to-day signing. Revoking the mandate with the sphere key terminates the delegate's authority. Past revisions remain in the chain (append-only), but the subject MAY publish a redaction revision naming them by hash if they wish to repudiate.
