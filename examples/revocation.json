@@ -1,0 +1,14 @@
+{
+  "_comment": "Example: revocation of the write mandate above, triggered because the phone was lost. Signed by the same sphere key (#circle) that issued the mandate. Effect is forward-only: revisions with at < revoked_at remain valid.",
+  "aithos-revocation": "0.1.0",
+  "mandate_id": "mandate_01JGD9WF37ABCDXYZ1234567",
+  "issuer": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9",
+  "issued_by_key": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9#circle",
+  "revoked_at": "2026-05-03T18:42:00Z",
+  "reason": "device_lost",
+  "signature": {
+    "alg": "ed25519",
+    "key": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9#circle",
+    "value": "<base64url-of-64-byte-ed25519-signature>"
+  }
+}

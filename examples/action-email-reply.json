@@ -1,0 +1,28 @@
+{
+  "_comment": "Example: an action artifact emitted by the Gmail agent after drafting and sending a non-binding reply. Signed by the agent's own key. Since email.reply is not in require_counter_sign, no counter_signature is required. action.content_hash commits to the email body without including it.",
+  "aithos-action": "0.1.0",
+  "id": "action_01JG5YQ3K8BPDRABCD123456",
+  "mandate_id": "mandate_01JG4X7RABCDXYZ123456789",
+  "issued_at": "2026-04-19T14:22:11Z",
+  "actor": {
+    "id": "urn:aithos:agent:gmail-agent@macbook-mathieu",
+    "pubkey": "z6MkAGENTKEYEd25519Multibase0000000000000000000000000"
+  },
+  "action": {
+    "verb": "email.reply",
+    "target": {
+      "kind": "email",
+      "message_id": "<CABc1234@mail.gmail.com>",
+      "thread_id": "thread-987",
+      "to": ["alice@acme.com"]
+    },
+    "content_hash": "sha256:f3a8c9d1e2b4a7f0c6d5e8b3a1f9c2d6e4b7a0f5c3d1e8b6a4f2c0d5e9b7a3f1",
+    "summary": "Confirmed availability for Tuesday afternoon at 14:00, agreed to the proposed agenda."
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key": "z6MkAGENTKEYEd25519Multibase0000000000000000000000000",
+    "value": "<base64url-of-64-byte-ed25519-signature>"
+  },
+  "counter_signature": null
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@aithos/cli",
+  "version": "0.1.0",
+  "description": "Reference CLI for the Aithos protocol: create an Aithos identity, grant and revoke mandates, sign actions.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "type": "module",
+  "bin": {
+    "aithos": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
+    "dev": "tsx src/index.ts",
+    "check-types": "tsc --noEmit",
+    "test": "node --test dist/*.test.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^2.1.0",
+    "@noble/hashes": "^1.4.0",
+    "@scure/base": "^1.1.6",
+    "commander": "^12.1.0",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.11.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

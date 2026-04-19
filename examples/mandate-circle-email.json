@@ -1,0 +1,27 @@
+{
+  "_comment": "Example: a 7-day mandate for a personal Gmail agent. The agent may read the public and circle zones and post non-binding email replies under the subject's circle voice. Counter-signing is required for any binding-class email (email.send_binding), which is not granted here.",
+  "aithos-mandate": "0.1.0",
+  "id": "mandate_01JG4X7RABCDXYZ123456789",
+  "issuer": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9",
+  "issued_by_key": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9#circle",
+  "grantee": {
+    "id": "urn:aithos:agent:gmail-agent@macbook-mathieu",
+    "label": "Personal Gmail agent (local install on macbook-mathieu)"
+  },
+  "actor_sphere": "circle",
+  "scopes": ["ethos.read.public", "ethos.read.circle", "email.reply"],
+  "constraints": {
+    "domains": ["*"],
+    "rate_limit": { "replies_per_hour": 20 },
+    "require_counter_sign": ["email.send_binding"]
+  },
+  "not_before": "2026-04-19T00:00:00Z",
+  "not_after": "2026-04-26T00:00:00Z",
+  "issued_at": "2026-04-19T08:14:23Z",
+  "nonce": "rNlx4L9k3qBp",
+  "signature": {
+    "alg": "ed25519",
+    "key": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9#circle",
+    "value": "<base64url-of-64-byte-ed25519-signature>"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "_comment": "Example: a 90-day write mandate for a secondary device (a phone) to append revisions to the circle zone. The delegate key is bound via grantee.pubkey. The sphere key stays offline on the primary device. Revocation with --reason device_lost terminates the delegate's authority immediately; past revisions remain in the chain.",
+  "aithos-mandate": "0.1.0",
+  "id": "mandate_01JGD9WF37ABCDXYZ1234567",
+  "issuer": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9",
+  "issued_by_key": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9#circle",
+  "grantee": {
+    "id": "urn:aithos:agent:phone@pixel",
+    "label": "Mathieu's phone (Pixel 8)",
+    "pubkey": "z6MkvDELEGATEkeyEd25519Multibase0000000000000000000000"
+  },
+  "actor_sphere": "circle",
+  "scopes": ["ethos.read.public", "ethos.read.circle", "ethos.write.circle"],
+  "constraints": {
+    "sections": ["sec_voice", "sec_current_projects", "sec_availability"],
+    "max_revisions_per_day": 10,
+    "max_body_bytes": 4096
+  },
+  "not_before": "2026-04-19T00:00:00Z",
+  "not_after": "2026-07-18T00:00:00Z",
+  "issued_at": "2026-04-19T08:14:23Z",
+  "nonce": "k2Wx8Q1m",
+  "signature": {
+    "alg": "ed25519",
+    "key": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9#circle",
+    "value": "<base64url-of-64-byte-ed25519-signature>"
+  }
+}
