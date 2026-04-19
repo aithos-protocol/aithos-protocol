@@ -360,6 +360,20 @@ export function loadRevocation(path: string): Revocation {
   return readJson<Revocation>(path);
 }
 
+/**
+ * Return the local revocation for a mandate id, or null if none is on disk.
+ *
+ * The expected on-disk name is `revocation_<ULID>.json` in `revocationsDir()`,
+ * where `<ULID>` is the mandate id with its `mandate_` prefix stripped — this
+ * matches what `writeRevocation` produces.
+ */
+export function findRevocation(mandateId: string): Revocation | null {
+  const ulidPart = mandateId.replace(/^mandate_/, "");
+  const path = join(revocationsDir(), `revocation_${ulidPart}.json`);
+  if (!existsSync(path)) return null;
+  return readJson<Revocation>(path);
+}
+
 export function verifyRevocation(
   rev: Revocation,
   didDoc: DidDocument,

@@ -8,6 +8,34 @@
   "bin": {
     "aithos": "./dist/index.js"
   },
+  "main": "./dist/lib.js",
+  "types": "./dist/lib.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/lib.d.ts",
+      "import": "./dist/lib.js"
+    },
+    "./ethos": {
+      "types": "./dist/ethos.d.ts",
+      "import": "./dist/ethos.js"
+    },
+    "./identity": {
+      "types": "./dist/identity.d.ts",
+      "import": "./dist/identity.js"
+    },
+    "./mandate": {
+      "types": "./dist/mandate.d.ts",
+      "import": "./dist/mandate.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
+    },
+    "./did": {
+      "types": "./dist/did.d.ts",
+      "import": "./dist/did.js"
+    }
+  },
   "files": [
     "dist",
     "README.md"
@@ -20,9 +48,15 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@noble/curves": "^2.2.0",
     "@noble/ed25519": "^2.1.0",
     "@noble/hashes": "^1.4.0",
     "@scure/base": "^1.1.6",
+    "@stablelib/hkdf": "^2.0.1",
+    "@stablelib/sha256": "^2.0.1",
+    "@stablelib/xchacha20poly1305": "^2.0.1",
+    "@types/adm-zip": "^0.5.8",
+    "adm-zip": "^0.5.17",
     "commander": "^12.1.0",
     "ulid": "^2.3.0"
   },

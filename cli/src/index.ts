@@ -28,6 +28,13 @@ import { runVerify } from "./commands/verify.js";
 import { runSignAction } from "./commands/sign-action.js";
 import { runDelegateKey } from "./commands/delegate-key.js";
 import { runRotate } from "./commands/rotate.js";
+import { runEthosInit } from "./commands/ethos-init.js";
+import { runEthosAddSection } from "./commands/ethos-add-section.js";
+import { runEthosAddRevision } from "./commands/ethos-add-revision.js";
+import { runEthosShow } from "./commands/ethos-show.js";
+import { runEthosList } from "./commands/ethos-list.js";
+import { runEthosVerify } from "./commands/ethos-verify.js";
+import { runEthosPack, runEthosUnpack } from "./commands/ethos-pack.js";
 
 const program = new Command();
 
@@ -115,6 +122,87 @@ program
   .option("--force", "Overwrite an existing keyfile")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runDelegateKey(opts)));
+
+const ethos = program.command("ethos").description("Manage the live ethos document (public/circle/self)");
+
+ethos
+  .command("init")
+  .description("Create the ethos/ layout and the first edition (empty zones)")
+  .option("--handle <h>", "Identity handle (defaults to the configured default)")
+  .option("--force", "Reset an existing ethos")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosInit(opts)));
+
+ethos
+  .command("add-section")
+  .description("Add a new section to a zone, with an initial revision")
+  .requiredOption("--zone <zone>", "public | circle | self")
+  .requiredOption("--title <title>", "Section title")
+  .option("--body <markdown>", "Initial revision body (inline)")
+  .option("--body-file <path>", "Read initial body from file")
+  .option("--tags <list>", "Comma-separated tag list")
+  .option("--mandate <id>", "Write mandate authorizing a delegate key")
+  .option("--agent-key <path>", "Agent keyfile (required with --mandate)")
+  .option("--handle <h>", "Identity handle")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosAddSection(opts)));
+
+ethos
+  .command("add-revision")
+  .description("Append a revision to an existing section (append-only)")
+  .requiredOption("--zone <zone>", "public | circle | self")
+  .requiredOption("--section <id>", "Section id (sec_<hex>)")
+  .option("--body <markdown>", "Revision body (inline)")
+  .option("--body-file <path>", "Read body from file")
+  .option("--mandate <id>", "Write mandate authorizing a delegate key")
+  .option("--agent-key <path>", "Agent keyfile (required with --mandate)")
+  .option("--handle <h>", "Identity handle")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosAddRevision({ zone: opts.zone, sectionId: opts.section, body: opts.body, bodyFile: opts.bodyFile, mandate: opts.mandate, agentKey: opts.agentKey, handle: opts.handle, json: opts.json })));
+
+ethos
+  .command("show")
+  .description("Show manifest summary, or a zone/section's content")
+  .option("--zone <zone>", "public | circle | self")
+  .option("--section <id>", "Section id")
+  .option("--revisions", "With --section, print every revision instead of the current body")
+  .option("--handle <h>", "Identity handle")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosShow(opts)));
+
+ethos
+  .command("list")
+  .description("List sections across zones (or one zone with --zone)")
+  .argument("[kind]", "Only 'sections' is supported in v0.1.0", "sections")
+  .option("--zone <zone>", "Restrict to one zone")
+  .option("--handle <h>", "Identity handle")
+  .option("--json", "Output JSON")
+  .action((_kind, opts) => wrap(() => runEthosList(opts)));
+
+ethos
+  .command("verify")
+  .description("Full integrity check of the ethos (chains, signatures, manifest, edition link)")
+  .option("--handle <h>", "Identity handle")
+  .option("--no-decrypt", "Skip decrypting circle/self (verifies public + manifest only)")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosVerify(opts)));
+
+ethos
+  .command("pack")
+  .description("Pack the live ethos/ directory into a .ethos bundle (zip)")
+  .option("--out <path>", "Output .ethos path (default: cwd / <handle>-<version>.ethos)")
+  .option("--handle <h>", "Identity handle")
+  .option("--no-readme", "Do not include the README.txt")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosPack(opts)));
+
+ethos
+  .command("unpack")
+  .description("Unpack a .ethos bundle into a directory")
+  .argument("<path>", "Path to the .ethos bundle")
+  .requiredOption("--out <dir>", "Output directory")
+  .option("--json", "Output JSON")
+  .action((path, opts) => wrap(() => runEthosUnpack({ path, out: opts.out, json: opts.json })));
 
 program
   .command("sign-action")
