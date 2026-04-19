@@ -68,7 +68,7 @@ import {
   x25519PublicKeyToMultibase,
 } from "./did.js";
 import { ensureDir, identityDir, readJson, writeJson } from "./storage.js";
-import { loadMandate } from "./mandate.js";
+import { loadMandate, findRevocation } from "./mandate.js";
 
 /* -------------------------------------------------------------------------- */
 /*  Path helpers                                                              */
@@ -1099,8 +1099,9 @@ export function verifyEthos(
 
     // section hash chains
     for (const sec of doc.sections) {
-      const errs = verifySectionChain(sec, z, didDoc, manifest);
-      for (const e of errs) errors.push(`zone ${z} section ${sec.id}: ${e}`);
+      const res = verifySectionChain(sec, z, didDoc, manifest);
+      for (const e of res.errors) errors.push(`zone ${z} section ${sec.id}: ${e}`);
+      for (const w of res.warnings) warnings.push(`zone ${z} section ${sec.id}: ${w}`);
     }
 
     // signatures/<sec>.json agreement
@@ -1186,10 +1187,11 @@ function verifySectionChain(
   zone: Sphere,
   didDoc: DidDocument,
   manifest: Manifest,
-): string[] {
+): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const revs = section.revisions;
-  if (revs.length === 0) return ["section has no revisions"];
+  if (revs.length === 0) return { errors: ["section has no revisions"], warnings };
 
   const expectedSphereKey = `${didDoc.id}#${zone}`;
 
@@ -1243,7 +1245,57 @@ function verifySectionChain(
     if (!ed.verify(sig, bytes, pk)) {
       errors.push(`rev ${r.revision}: signature failed to verify`);
     }
+
+    // R8 — Prospective-revocation invariant (spec §3.8 check 7.5).
+    //
+    // Revocation does NOT retroactively invalidate past revisions: a revision
+    // signed while the mandate was still valid remains valid forever (the
+    // hash-chain is append-only). But a revision whose `at` is ≥ the
+    // mandate's revoked_at means the writer either ignored the revocation or
+    // forged a timestamp — that breaks the protocol and IS an error.
+    //
+    // Not-before / not-after are ALSO append-only invariants here: a
+    // delegated signature outside the mandate's validity window is invalid,
+    // period.
+    if (r.authorized_by) {
+      try {
+        const m = loadMandate(r.authorized_by);
+        const atMs = new Date(r.at).getTime();
+        const nbMs = new Date(m.not_before).getTime();
+        const naMs = new Date(m.not_after).getTime();
+        if (atMs < nbMs) {
+          errors.push(
+            `rev ${r.revision}: signed at ${r.at} before mandate ${r.authorized_by} not_before=${m.not_before}`,
+          );
+        }
+        if (atMs >= naMs) {
+          errors.push(
+            `rev ${r.revision}: signed at ${r.at} after mandate ${r.authorized_by} not_after=${m.not_after}`,
+          );
+        }
+        const rev = findRevocation(r.authorized_by);
+        if (rev) {
+          const revokedMs = new Date(rev.revoked_at).getTime();
+          if (atMs >= revokedMs) {
+            errors.push(
+              `rev ${r.revision}: signed at ${r.at} after mandate ${r.authorized_by} was revoked at ${rev.revoked_at} (reason: ${rev.reason})`,
+            );
+          } else {
+            warnings.push(
+              `rev ${r.revision}: signed by mandate ${r.authorized_by} which has since been revoked at ${rev.revoked_at} (reason: ${rev.reason}). Revision remains valid (prospective revocation).`,
+            );
+          }
+        }
+      } catch (e) {
+        // Mandate file missing locally. Don't fail verification — the subject
+        // may have pruned their mandate archive or this is an imported bundle.
+        // Flag as a warning so auditors see it.
+        warnings.push(
+          `rev ${r.revision}: authorized_by=${r.authorized_by} but mandate file not found locally — cannot cross-check validity window or revocation status (${(e as Error).message})`,
+        );
+      }
+    }
   }
 
-  return errors;
+  return { errors, warnings };
 }

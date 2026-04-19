@@ -75,7 +75,7 @@ export function runEthosPack(opts: EthosPackOpts): void {
     console.log(JSON.stringify({ bundle: outPath, bundle_id: manifest.bundle_id }, null, 2));
     return;
   }
-  console.log(`Packed ${handle} ethos to ${outPath}`);
+  console.log(`[handle=${handle}] Packed ethos to ${outPath}`);
   console.log(`  bundle_id: ${manifest.bundle_id}`);
 }
 

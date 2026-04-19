@@ -1,6 +1,11 @@
 /**
  * `aithos ethos list sections` — list all sections of a zone with their id,
  * title, current revision, and last-updated timestamp.
+ *
+ * Output is a properly padded table with explicit column separators so that
+ * IDs and revision numbers cannot visually collide (R3). A trailing
+ * `[delegated]` marker is appended to rows whose latest revision was signed
+ * via a write-mandate rather than directly by the sphere key (R7).
  */
 
 import { existsSync } from "node:fs";
@@ -15,6 +20,16 @@ export interface EthosListOpts {
   json?: boolean;
 }
 
+interface Row {
+  zone: Sphere;
+  id: string;
+  title: string;
+  revision: number;
+  at: string;
+  delegated: boolean;
+  mandateId?: string;
+}
+
 export function runEthosList(opts: EthosListOpts): void {
   const handle = opts.handle ?? loadConfig().default_handle;
   if (!handle) throw new Error("No identity handle. Pass --handle <h>.");
@@ -27,30 +42,65 @@ export function runEthosList(opts: EthosListOpts): void {
 
   const zones: Sphere[] = opts.zone ? [ensureZone(opts.zone)] : ["public", "circle", "self"];
 
-  const out: Array<{ zone: Sphere; id: string; title: string; revision: number; at: string }> = [];
+  const rows: Row[] = [];
   for (const z of zones) {
     const doc = loadZoneDoc(handle, z, identity, manifest);
     for (const s of doc.sections) {
       const last = s.revisions[s.revisions.length - 1];
-      out.push({ zone: z, id: s.id, title: s.title, revision: last.revision, at: last.at });
+      const delegated = !!last.authorized_by;
+      rows.push({
+        zone: z,
+        id: s.id,
+        title: s.title,
+        revision: last.revision,
+        at: last.at,
+        delegated,
+        mandateId: last.authorized_by,
+      });
     }
   }
 
   if (opts.json) {
-    console.log(JSON.stringify(out, null, 2));
+    console.log(JSON.stringify(rows, null, 2));
     return;
   }
 
-  if (out.length === 0) {
+  console.log(`[handle=${handle}] Ethos sections` + (opts.zone ? ` (zone=${opts.zone})` : ""));
+
+  if (rows.length === 0) {
     console.log("(no sections)");
     return;
   }
 
-  const w = (s: string, n: number) => s.padEnd(n);
-  console.log(w("ZONE", 8) + w("ID", 14) + w("REV", 5) + w("UPDATED", 22) + "TITLE");
-  for (const row of out) {
+  // Column widths. TITLE is unbounded (last column).
+  const W_ZONE = 7;   // public | circle | self
+  const W_ID = 16;    // sec_<12hex>
+  const W_REV = 4;    // rev number
+  const W_AT = 24;    // ISO 8601 with ms, e.g. 2026-04-19T07:42:40.863Z
+
+  const pad = (s: string, n: number) => s.padEnd(n);
+  const sep = " │ ";
+
+  const header = [pad("ZONE", W_ZONE), pad("ID", W_ID), pad("REV", W_REV), pad("UPDATED", W_AT), "TITLE"].join(sep);
+  const rule =
+    "─".repeat(W_ZONE) + "─┼─" +
+    "─".repeat(W_ID)   + "─┼─" +
+    "─".repeat(W_REV)  + "─┼─" +
+    "─".repeat(W_AT)   + "─┼─" +
+    "─".repeat(5);
+
+  console.log(header);
+  console.log(rule);
+  for (const r of rows) {
+    const titleCell = r.delegated ? `${r.title}  [delegated: ${r.mandateId}]` : r.title;
     console.log(
-      w(row.zone, 8) + w(row.id, 14) + w(String(row.revision), 5) + w(row.at, 22) + row.title,
+      [
+        pad(r.zone, W_ZONE),
+        pad(r.id, W_ID),
+        pad(String(r.revision), W_REV),
+        pad(r.at, W_AT),
+        titleCell,
+      ].join(sep),
     );
   }
 }

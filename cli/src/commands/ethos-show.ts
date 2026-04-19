@@ -35,7 +35,7 @@ export function runEthosShow(opts: EthosShowOpts): void {
       console.log(JSON.stringify(manifest, null, 2));
       return;
     }
-    console.log(`Ethos of "${handle}"`);
+    console.log(`[handle=${handle}] Ethos`);
     console.log(`  DID:          ${manifest.subject_did}`);
     console.log(`  Edition:      ${manifest.edition.version} (height=${manifest.edition.height})`);
     console.log(`  Created:      ${manifest.edition.created_at}`);
@@ -61,14 +61,23 @@ export function runEthosShow(opts: EthosShowOpts): void {
       console.log(JSON.stringify(sec, null, 2));
       return;
     }
-    console.log(`# ${sec.title} (${sec.id}) — zone: ${zone}`);
+    console.log(`[handle=${handle}] # ${sec.title} (${sec.id}) — zone: ${zone}`);
     if (opts.revisions) {
       for (const r of sec.revisions) {
-        console.log(`\n<!-- rev ${r.revision} at ${r.at} hash ${r.hash} -->`);
+        const signedBy = r.authorized_by
+          ? `delegated via ${r.authorized_by} (key ${r.signature.key})`
+          : `sphere-key (${zone})`;
+        console.log(
+          `\n<!-- rev ${r.revision} at ${r.at} | signed_by: ${signedBy} | hash ${r.hash} -->`,
+        );
         console.log(r.body);
       }
     } else {
       const current = sec.revisions[sec.revisions.length - 1];
+      const signedBy = current.authorized_by
+        ? `delegated via ${current.authorized_by}`
+        : `sphere-key`;
+      console.log(`<!-- current: rev ${current.revision} · signed_by: ${signedBy} -->`);
       console.log(current.body);
     }
     return;

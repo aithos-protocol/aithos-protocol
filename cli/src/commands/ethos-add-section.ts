@@ -54,7 +54,7 @@ export function runEthosAddSection(opts: EthosAddSectionOpts): void {
     return;
   }
 
-  console.log(`Added section to zone ${zone}`);
+  console.log(`[handle=${handle}] Added section to zone ${zone}`);
   console.log(`  id:           ${section.id}`);
   console.log(`  title:        ${section.title}`);
   console.log(`  rev:          1`);

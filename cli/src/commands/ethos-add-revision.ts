@@ -49,7 +49,7 @@ export function runEthosAddRevision(opts: EthosAddRevisionOpts): void {
     return;
   }
 
-  console.log(`Appended revision ${revision.revision} to ${opts.sectionId} (${zone})`);
+  console.log(`[handle=${handle}] Appended revision ${revision.revision} to ${opts.sectionId} (${zone})`);
   console.log(`  at:           ${revision.at}`);
   console.log(`  prev_hash:    ${revision.prev_hash}`);
   console.log(`  hash:         ${revision.hash}`);

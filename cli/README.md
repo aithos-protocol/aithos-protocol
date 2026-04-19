@@ -24,7 +24,9 @@ node dist/index.js <command> …
 ## The thirty-second tour
 
 ```bash
-# 1. Create an identity (root + three sphere keys + signed DID document).
+# 1. Create an identity (root + three sphere keys + signed DID document)
+#    AND its live ethos in one step. Pass --no-ethos for headless/service
+#    identities that will only sign mandates.
 aithos init --handle mathieu --display-name "Mathieu Colla"
 
 # 2. Inspect.
@@ -67,8 +69,9 @@ aithos rotate --sphere circle --reason key_compromise --yes
 
 | Command | Purpose |
 |---|---|
-| `init` | Create a new Aithos identity and its DID document. |
+| `init` | Create a new Aithos identity **and** initialize its ethos. Pass `--no-ethos` to skip the ethos init (headless/service identities). |
 | `show` | Print identity metadata (DID, sphere keys, X25519 keys). |
+| `show-mandate <id>` | Pretty-print a mandate with derived status (`active` / `expired` / `revoked`). |
 | `list <kind>` | List local identities, mandates, or revocations. |
 | `grant` | Issue a signed mandate. |
 | `delegate-key` | Generate a fresh Ed25519 keypair for a write mandate's delegate. |
@@ -76,6 +79,7 @@ aithos rotate --sphere circle --reason key_compromise --yes
 | `rotate` | Rotate a sphere key — the kill-switch. Invalidates every mandate signed by the old key, including any you could not enumerate. |
 | `verify` | Verify a mandate, revocation, or action artifact. |
 | `sign-action` | Emit or counter-sign an action artifact (agent-side / subject-side). |
+| `ethos <sub>` | Manage the live ethos document — `init` (only needed after `init --no-ethos` or to reset), `add-section`, `add-revision`, `show`, `list`, `verify`, `pack`, `unpack`. |
 
 Run `aithos <cmd> --help` for per-command flags.
 
@@ -104,6 +108,12 @@ Run `aithos <cmd> --help` for per-command flags.
 `ethos.write.{public,circle,self}` scopes authorize a **delegate key** — a separate Ed25519 keypair generated with `aithos delegate-key` — to append revisions to the named zone on the subject's behalf. The sphere key never leaves the primary device; it signs the mandate once, and the delegate key does the day-to-day signing. Revoking the mandate with the sphere key terminates the delegate's authority. Past revisions remain in the chain (append-only), but the subject MAY publish a redaction revision naming them by hash if they wish to repudiate.
 
 See [spec §4.5.4](../spec/04-mandates.md#454-write-mandate-delegated-authoring) and [§2.5.4](../spec/02-ethos.md#254-revisions--the-per-section-hash-chain) for the full protocol semantics.
+
+### Revocation is prospective
+
+Revoking a mandate terminates its authority going forward. Revisions that were signed *while the mandate was still valid* remain valid forever — the hash chain is append-only, and the integrity check treats those revisions as sound. `ethos verify` will emit an informational **warning** identifying revisions signed by a since-revoked mandate, but will not mark the ethos as failed. Conversely, a revision whose timestamp falls **on or after** the revocation timestamp — or outside the mandate's `not_before`/`not_after` window — is rejected by both the write path and `ethos verify`, because it violates the protocol invariant.
+
+If a subject wants to repudiate what a revoked mandate wrote, they publish a follow-up redaction revision signed by their sphere key. The history is never rewritten.
 
 ## Security note (v0.1.0)
 

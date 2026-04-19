@@ -42,12 +42,12 @@ export function runEthosVerify(opts: EthosVerifyOpts): void {
   }
 
   if (result.ok) {
-    console.log(`ethos: OK (${handle})`);
+    console.log(`[handle=${handle}] ethos: OK`);
     for (const w of result.warnings) console.log(`  warning: ${w}`);
     return;
   }
 
-  console.log(`ethos: FAILED (${handle})`);
+  console.log(`[handle=${handle}] ethos: FAILED`);
   for (const e of result.errors) console.log(`  - ${e}`);
   for (const w of result.warnings) console.log(`  warning: ${w}`);
   process.exit(1);

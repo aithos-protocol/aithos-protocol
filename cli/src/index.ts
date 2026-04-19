@@ -21,6 +21,7 @@
 import { Command } from "commander";
 import { runInit } from "./commands/init.js";
 import { runShow } from "./commands/show.js";
+import { runShowMandate } from "./commands/show-mandate.js";
 import { runList, type ListKind } from "./commands/list.js";
 import { runGrant } from "./commands/grant.js";
 import { runRevoke } from "./commands/revoke.js";
@@ -45,10 +46,16 @@ program
 
 program
   .command("init")
-  .description("Create a new Aithos identity (root + three sphere keys)")
+  .description(
+    "Create a new Aithos identity (root + three sphere keys) and initialize its ethos",
+  )
   .requiredOption("--handle <handle>", "Identity handle (a-z, 0-9, _, -)")
   .option("--display-name <name>", "Human-readable display name")
   .option("--force", "Overwrite an existing identity with the same handle")
+  .option(
+    "--no-ethos",
+    "Skip ethos initialization (headless/service identities that only sign mandates)",
+  )
   .action((o) => wrap(() => runInit(o)));
 
 program
@@ -57,6 +64,15 @@ program
   .argument("[handle]", "Identity handle; defaults to the configured default")
   .option("--json", "Output JSON")
   .action((handle, opts) => wrap(() => runShow({ handle, json: opts.json })));
+
+program
+  .command("show-mandate")
+  .description(
+    "Pretty-print a mandate with its derived status (active | expired | revoked)",
+  )
+  .argument("<id>", "Mandate id (mandate_<ULID>)")
+  .option("--json", "Output JSON")
+  .action((id, opts) => wrap(() => runShowMandate({ id, json: opts.json })));
 
 program
   .command("list")
@@ -127,7 +143,11 @@ const ethos = program.command("ethos").description("Manage the live ethos docume
 
 ethos
   .command("init")
-  .description("Create the ethos/ layout and the first edition (empty zones)")
+  .description(
+    "Initialize (or re-initialize with --force) the ethos layout for an existing identity. " +
+      "Normally unnecessary — `aithos init` already does this. Use when attaching an ethos " +
+      "to an identity that was created with --no-ethos, or to reset a corrupted ethos.",
+  )
   .option("--handle <h>", "Identity handle (defaults to the configured default)")
   .option("--force", "Reset an existing ethos")
   .option("--json", "Output JSON")
