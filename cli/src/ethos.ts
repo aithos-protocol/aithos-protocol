@@ -1194,7 +1194,7 @@ function renderZoneMarkdownFromDoc(zone: Sphere, doc: ZoneDoc, m: Manifest): str
   });
 }
 
-function verifySectionChain(
+export function verifySectionChain(
   section: Section,
   zone: Sphere,
   didDoc: DidDocument,

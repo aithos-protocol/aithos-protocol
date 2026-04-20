@@ -201,8 +201,9 @@ ethos
 
 ethos
   .command("verify")
-  .description("Full integrity check of the ethos (chains, signatures, manifest, edition link)")
-  .option("--handle <h>", "Identity handle")
+  .description("Verify an ethos: --handle for installed identity, --path for a bundle/dir")
+  .option("--handle <h>", "Verify the installed identity in the keystore")
+  .option("--path <p>", "Verify a bundle path (directory or .ethos zip) statelessly")
   .option("--no-decrypt", "Skip decrypting circle/self (verifies public + manifest only)")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runEthosVerify(opts)));
