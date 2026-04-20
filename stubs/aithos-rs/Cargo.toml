@@ -1,0 +1,25 @@
+[package]
+name = "aithos"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.70"
+authors = ["Mathieu Colla <mathieu.colla.pro@gmail.com>"]
+license = "Apache-2.0"
+description = "Placeholder for the Rust reference implementation of the Aithos protocol (a protocol for the digital embodiment of persons)."
+homepage = "https://github.com/aithos-protocol/aithos-protocol"
+repository = "https://github.com/aithos-protocol/aithos-protocol"
+documentation = "https://github.com/aithos-protocol/aithos-protocol/blob/main/SPEC.md"
+readme = "README.md"
+keywords = ["aithos", "did", "identity", "mandate", "ed25519"]
+categories = ["cryptography", "authentication"]
+include = [
+    "src/**/*",
+    "birth/**/*",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+]
+
+[lib]
+name = "aithos"
+path = "src/lib.rs"

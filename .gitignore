@@ -8,4 +8,11 @@ dist/
 
 # scratch
 /tmp/
+
+# user-generated ethos bundles are local; the ceremonial birth bundle is checked in.
 *.ethos
+!birth/aithos-birth.ethos
+!cli/birth/aithos-birth.ethos
+!stubs/aithos-py/birth/aithos-birth.ethos
+!stubs/aithos-rs/birth/aithos-birth.ethos
+!stubs/aithos-go/birth/aithos-birth.ethos

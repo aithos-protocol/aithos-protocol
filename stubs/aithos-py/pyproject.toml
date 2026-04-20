@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aithos"
+version = "0.0.1"
+description = "Placeholder for the Python reference implementation of the Aithos protocol (https://github.com/aithos-protocol)."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Mathieu Colla", email = "mathieu.colla.pro@gmail.com" },
+]
+keywords = ["aithos", "did", "identity", "mandate", "ed25519", "ethos"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security :: Cryptography",
+    "Typing :: Typed",
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/aithos-protocol/aithos-protocol"
+Specification = "https://github.com/aithos-protocol/aithos-protocol/blob/main/SPEC.md"
+Whitepaper = "https://github.com/aithos-protocol/aithos-protocol/blob/main/WHITEPAPER.md"
+Issues = "https://github.com/aithos-protocol/aithos-protocol/issues"
+Reference-CLI = "https://github.com/aithos-protocol/aithos-protocol/tree/main/cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aithos"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"birth" = "aithos/birth"

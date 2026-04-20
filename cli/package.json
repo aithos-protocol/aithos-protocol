@@ -1,9 +1,29 @@
 {
-  "name": "@aithos/cli",
+  "name": "aithos",
   "version": "0.1.0",
   "description": "Reference CLI for the Aithos protocol: create an Aithos identity, grant and revoke mandates, sign actions.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aithos-protocol/aithos-protocol.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/aithos-protocol/aithos-protocol/issues"
+  },
+  "keywords": [
+    "aithos",
+    "did",
+    "identity",
+    "ethos",
+    "mandate",
+    "ed25519",
+    "self-sovereign",
+    "ai-agent",
+    "protocol"
+  ],
   "type": "module",
   "bin": {
     "aithos": "./dist/index.js"
@@ -38,7 +58,10 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "birth",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/index.js",

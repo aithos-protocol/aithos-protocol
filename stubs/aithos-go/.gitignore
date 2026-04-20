@@ -1,0 +1,9 @@
+# Go build artifacts
+*.exe
+*.test
+*.out
+coverage.txt
+
+# Editors
+.vscode/
+.idea/

@@ -1,0 +1,40 @@
+{
+  "name": "aithos-mcp",
+  "version": "0.0.1",
+  "description": "Placeholder for an MCP server for the Aithos protocol. The reference CLI lives at `aithos`; the official MCP server will ship as `@aithos/mcp`.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aithos-protocol/aithos-protocol.git",
+    "directory": "stubs/aithos-mcp-npm"
+  },
+  "bugs": {
+    "url": "https://github.com/aithos-protocol/aithos-protocol/issues"
+  },
+  "keywords": [
+    "aithos",
+    "aithos-mcp",
+    "mcp",
+    "model-context-protocol",
+    "placeholder",
+    "redirect"
+  ],
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "aithos": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

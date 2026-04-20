@@ -1,0 +1,38 @@
+{
+  "name": "aithos-protocol",
+  "version": "0.0.1",
+  "description": "Placeholder that redirects to the `aithos` package — the reference CLI and SDK for the Aithos protocol.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aithos-protocol/aithos-protocol.git",
+    "directory": "stubs/aithos-protocol-npm"
+  },
+  "bugs": {
+    "url": "https://github.com/aithos-protocol/aithos-protocol/issues"
+  },
+  "keywords": [
+    "aithos",
+    "aithos-protocol",
+    "placeholder",
+    "redirect"
+  ],
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "aithos": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

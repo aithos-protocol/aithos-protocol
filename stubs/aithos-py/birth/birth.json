@@ -1,0 +1,44 @@
+{
+  "aithos": "0.1.0",
+  "kind": "aithos-birth",
+  "protocol_version": "0.1.0",
+  "birth_date": "2026-04-19",
+  "editor": {
+    "name": "Mathieu Colla",
+    "email": "mathieu.colla.pro@gmail.com"
+  },
+  "license": "Apache-2.0",
+  "ceremonial_identity": {
+    "did": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+    "note": "A single-use founding identity. Its only purpose was to sign the first ethos bundle of the protocol. After this declaration it holds no ongoing authority and issues no mandates."
+  },
+  "artifacts": {
+    "declaration": {
+      "path": "birth-declaration.md",
+      "sha256": "ac1d0f76f7aecfc3fc8c49abfe714d3898bb89780c1f5c6efdf82721eee6f63d"
+    },
+    "ethos_bundle": {
+      "path": "aithos-birth.ethos",
+      "sha256": "73ce24c1f8d1a8ecbad5c147ace9f7b4cfe58c829f923e7df7d9ddf17510323e",
+      "bundle_id": "urn:aithos:aithos:2026.04.19-2",
+      "note": "A signed .ethos bundle (zip) conforming to spec §3. Its public zone contains the Birth Declaration signed by the ceremonial identity's #public sphere key."
+    },
+    "did_document": {
+      "path": "did.json",
+      "note": "Full DID document for the ceremonial identity, as produced by `aithos show aithos --json`."
+    }
+  },
+  "name_reservations": {
+    "npm": "aithos",
+    "pypi": "aithos",
+    "crates_io": "aithos",
+    "github": "aithos-protocol",
+    "note": "Reference implementation placeholder packages published on 2026-04-19. Registry publication timestamps are the canonical public record; this JSON is the protocol-native record of the same event."
+  },
+  "repository": "https://github.com/aithos-protocol/aithos-protocol",
+  "specification": {
+    "version": "0.1.0",
+    "status": "draft",
+    "versioning_policy": "Breaking changes permitted on any minor-version bump until 1.0.0. Strict semantic versioning applies from 1.0.0 onward."
+  }
+}

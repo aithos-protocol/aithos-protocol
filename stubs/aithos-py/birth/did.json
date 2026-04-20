@@ -1,0 +1,67 @@
+{
+  "handle": "aithos",
+  "display_name": "Aithos Protocol",
+  "did": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+  "tracked": false,
+  "did_document": {
+    "@context": [
+      "https://www.w3.org/ns/did/v1",
+      "https://aithos.dev/spec/v0.1"
+    ],
+    "id": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+    "verificationMethod": [
+      {
+        "id": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA#public",
+        "type": "Ed25519VerificationKey2020",
+        "controller": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+        "publicKeyMultibase": "z6Mkgj2JKYrAhU1q7JgpkGW64EiqhjeqwbKk1W1U6qNXBmRt"
+      },
+      {
+        "id": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA#circle",
+        "type": "Ed25519VerificationKey2020",
+        "controller": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+        "publicKeyMultibase": "z6MkeaZvBfN4JK5HNkmNVSSE5FabE6da43eTDf9WSpJWrTAP"
+      },
+      {
+        "id": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA#self",
+        "type": "Ed25519VerificationKey2020",
+        "controller": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+        "publicKeyMultibase": "z6MkfH7tp4rakixgqP6m5h5ei3RjDGfL89E5vFSR3gRucaFm"
+      }
+    ],
+    "keyAgreement": [
+      {
+        "id": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA#public-kex",
+        "type": "X25519KeyAgreementKey2020",
+        "controller": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+        "publicKeyMultibase": "z6LSgR8J9LNGWkp3vG4H5xg4NpdPSQZn4qELzFSkn3oUGyiY"
+      },
+      {
+        "id": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA#circle-kex",
+        "type": "X25519KeyAgreementKey2020",
+        "controller": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+        "publicKeyMultibase": "z6LSeRpU5dP5w8b7U395zqLJT6FSLGjyNv1yh2uGVwjRPcxx"
+      },
+      {
+        "id": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA#self-kex",
+        "type": "X25519KeyAgreementKey2020",
+        "controller": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA",
+        "publicKeyMultibase": "z6LSq4mRuAeD8bd41ry6aUQE8HMThMmKLyAyVkDEjpp6cHcr"
+      }
+    ],
+    "aithos": {
+      "version": "0.1.0",
+      "display_name": "Aithos Protocol",
+      "created_at": "2026-04-19T14:15:45.634Z",
+      "rotated": []
+    },
+    "proof": {
+      "type": "Ed25519Signature2020",
+      "created": "2026-04-19T14:15:45.634Z",
+      "verificationMethod": "did:aithos:z6Mkeu1UTXwL4djF9JmH5idEAF5t7g3bHjvJTBGeWqX5qPpA#root",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "VP8dwkj5yocl6RQb-1uyyMXL9xo14yPUZhjDuhxIZEafS3G3t2lkI2ZAP-P3nQb1WCsG3e17_1pk06JhVn7_DQ"
+    }
+  },
+  "storage": "/sessions/gallant-magical-wright/ceremonial-home/identities/aithos"
+}
