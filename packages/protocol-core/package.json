@@ -1,0 +1,93 @@
+{
+  "name": "@aithos/protocol-core",
+  "version": "0.1.2",
+  "description": "Aithos protocol — reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aithos-protocol/aithos-protocol.git",
+    "directory": "packages/protocol-core"
+  },
+  "bugs": {
+    "url": "https://github.com/aithos-protocol/aithos-protocol/issues"
+  },
+  "keywords": [
+    "aithos",
+    "did",
+    "identity",
+    "ethos",
+    "mandate",
+    "ed25519",
+    "self-sovereign",
+    "ai-agent",
+    "protocol"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./bundle": {
+      "types": "./dist/bundle.d.ts",
+      "import": "./dist/bundle.js"
+    },
+    "./canonical": {
+      "types": "./dist/canonical.d.ts",
+      "import": "./dist/canonical.js"
+    },
+    "./did": {
+      "types": "./dist/did.d.ts",
+      "import": "./dist/did.js"
+    },
+    "./ethos": {
+      "types": "./dist/ethos.d.ts",
+      "import": "./dist/ethos.js"
+    },
+    "./identity": {
+      "types": "./dist/identity.d.ts",
+      "import": "./dist/identity.js"
+    },
+    "./mandate": {
+      "types": "./dist/mandate.d.ts",
+      "import": "./dist/mandate.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check-types": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@noble/ed25519": "^2.1.0",
+    "@noble/hashes": "^1.4.0",
+    "@scure/base": "^1.1.6",
+    "@stablelib/hkdf": "^2.0.1",
+    "@stablelib/sha256": "^2.0.1",
+    "@stablelib/xchacha20poly1305": "^2.0.1",
+    "@types/adm-zip": "^0.5.8",
+    "adm-zip": "^0.5.17",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

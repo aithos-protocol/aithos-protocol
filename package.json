@@ -1,0 +1,20 @@
+{
+  "name": "aithos-protocol-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Aithos protocol monorepo: protocol-core library, CLI, and MCP server.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@aithos/protocol-core && npm run build --workspace=aithos && npm run build --workspace=@aithos/mcp",
+    "check-types": "npm run check-types --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
