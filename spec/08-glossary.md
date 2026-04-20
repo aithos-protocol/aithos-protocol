@@ -156,6 +156,6 @@ A canonical list of terms. Alphabetical.
 
 ---
 
-End of the specification.
+---
 
-Proceed to the [CLI reference](../cli/README.md) for the reference implementation, or back to [SPEC.md](../SPEC.md) for the index.
+Next: [chapter 9 — Local store](./09-local-store.md).

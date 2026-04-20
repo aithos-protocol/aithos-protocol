@@ -25,6 +25,7 @@ import { runShowMandate } from "./commands/show-mandate.js";
 import { runList, type ListKind } from "./commands/list.js";
 import { runGrant } from "./commands/grant.js";
 import { runRevoke } from "./commands/revoke.js";
+import { runMandateAdd } from "./commands/mandate-add.js";
 import { runVerify } from "./commands/verify.js";
 import { runSignAction } from "./commands/sign-action.js";
 import { runDelegateKey } from "./commands/delegate-key.js";
@@ -36,6 +37,7 @@ import { runEthosShow } from "./commands/ethos-show.js";
 import { runEthosList } from "./commands/ethos-list.js";
 import { runEthosVerify } from "./commands/ethos-verify.js";
 import { runEthosPack, runEthosUnpack } from "./commands/ethos-pack.js";
+import { runEthosInstall } from "./commands/ethos-install.js";
 
 const program = new Command();
 
@@ -110,6 +112,30 @@ program
   .option("--handle <h>", "Issuing identity")
   .option("--json", "Output JSON")
   .action((mandateId, opts) => wrap(() => runRevoke({ mandateId, ...opts })));
+
+const mandate = program
+  .command("mandate")
+  .description("Manage mandates received from other identities");
+
+mandate
+  .command("add")
+  .description("Import a mandate received out-of-band into the local keystore")
+  .argument("<path>", "Path to a JSON mandate document")
+  .option("--did <path>", "Issuer's DID document (auto-discovered if the issuer is installed locally)")
+  .option("--allow-expired", "Add the mandate even if it is outside its validity window")
+  .option("--force", "Overwrite an existing mandate at the same id")
+  .option("--json", "Output JSON")
+  .action((path, opts) =>
+    wrap(() =>
+      runMandateAdd({
+        path,
+        did: opts.did,
+        allowExpired: opts.allowExpired,
+        force: opts.force,
+        json: opts.json,
+      }),
+    ),
+  );
 
 program
   .command("verify")
@@ -201,8 +227,9 @@ ethos
 
 ethos
   .command("verify")
-  .description("Full integrity check of the ethos (chains, signatures, manifest, edition link)")
-  .option("--handle <h>", "Identity handle")
+  .description("Verify an ethos: --handle for installed identity, --path for a bundle/dir")
+  .option("--handle <h>", "Verify the installed identity in the keystore")
+  .option("--path <p>", "Verify a bundle path (directory or .ethos zip) statelessly")
   .option("--no-decrypt", "Skip decrypting circle/self (verifies public + manifest only)")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runEthosVerify(opts)));
@@ -223,6 +250,26 @@ ethos
   .requiredOption("--out <dir>", "Output directory")
   .option("--json", "Output JSON")
   .action((path, opts) => wrap(() => runEthosUnpack({ path, out: opts.out, json: opts.json })));
+
+ethos
+  .command("install")
+  .description("Install a .ethos bundle into the keystore as a tracked identity")
+  .argument("<path>", "Path to the .ethos bundle (file or directory)")
+  .option("--as <handle>", "Install under this handle instead of the manifest's subject_handle")
+  .option("--force", "Overwrite an existing tracked identity at the same handle")
+  .option("--set-default", "Set this identity as the keystore default")
+  .option("--json", "Output JSON")
+  .action((path, opts) =>
+    wrap(() =>
+      runEthosInstall({
+        path,
+        as: opts.as,
+        force: opts.force,
+        setDefault: opts.setDefault,
+        json: opts.json,
+      }),
+    ),
+  );
 
 program
   .command("sign-action")

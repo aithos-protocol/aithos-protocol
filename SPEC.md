@@ -11,7 +11,7 @@ This is the normative specification of the Aithos protocol. For the motivation a
 
 ## Document map
 
-The spec is broken into eight self-contained chapters, roughly layered from the cryptographic floor up to the application ceiling.
+The spec is broken into self-contained chapters, roughly layered from the cryptographic floor up to the application ceiling. Chapters 0–7 are wire-format and protocol semantics; chapter 9 describes the local CLI store and the owned-vs-tracked distinction.
 
 | # | Chapter | What it covers |
 |---|---|---|
@@ -24,6 +24,7 @@ The spec is broken into eight self-contained chapters, roughly layered from the 
 | 6 | [Transport](./spec/06-transport.md) | MCP bridge (normative), HTTP API (normative) |
 | 7 | [Threat model](./spec/07-threat-model.md) | Adversaries, tradeoffs, known leaks |
 | 8 | [Glossary](./spec/08-glossary.md) | Every defined term in one place |
+| 9 | [Local store](./spec/09-local-store.md) | Owned vs tracked identities, install, stateless verify, mandate intake, capability resolution |
 
 ## Conformance in one paragraph
 

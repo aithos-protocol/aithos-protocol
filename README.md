@@ -68,7 +68,8 @@ Aithos-protocol/
 │   ├── 05-signing.md      # canonical form, signature format, action artifacts
 │   ├── 06-transport.md    # MCP + HTTP
 │   ├── 07-threat-model.md
-│   └── 08-glossary.md
+│   ├── 08-glossary.md
+│   └── 09-local-store.md  # owned vs tracked, install, verify --path, mandate add
 ├── cli/                   # reference CLI (Node.js, TypeScript)
 │   ├── README.md
 │   ├── package.json
