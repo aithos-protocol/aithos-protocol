@@ -85,7 +85,19 @@ The existing `ethos verify --handle <h>` operates on an installed identity. This
 
 Step 9 (inter-edition link verification against a predecessor) is **not** performed by `verify --path` because the predecessor lives in the keystore, not the bundle. Verifiers that want edition-chain walking after install can use `verify --handle <h>` once the bundle is installed.
 
-Because no decryption keys are available in the stateless form, the command implicitly operates as `--no-decrypt`: it validates the public zone fully (signatures, hash chain), and for encrypted zones it validates the signature over the ciphertext and the wrap manifest structure, but does not decrypt. Explicit `--no-decrypt` is accepted and has the same effect.
+Scope of stateless verification. The zone signatures of §3.3.1 and the section chain signatures of §2.5.4.2 are computed over **plaintext**. Without a key to decrypt `circle.md.enc` / `self.md.enc`, a stateless verifier cannot verify those signatures. `verify --path` performs the checks that do not require plaintext:
+
+- §3.8 check 1 — ZIP extracts, required entries present, forbidden entries absent.
+- §3.8 check 2 — manifest parses and validates against the schema.
+- §3.8 check 3 — `did.json` root signature verifies.
+- §3.8 check 4 — `sha256_of_did_json` matches the bundle's `did.json` bytes.
+- §3.8 check 6 — `integrity.manifest_signature` verifies against the subject's `#public` sphere key. This is the subject's cryptographic commitment to the manifest — including each encrypted zone's `sha256_of_plaintext`, section titles, and wraps. A valid manifest signature means every value in the manifest was endorsed by the subject; it does not prove that the ciphertext decrypts to a plaintext whose hash equals that commitment.
+- §3.8 check 8 — edition self-consistency.
+- §3.8 check 5 and check 7 — **fully** for the `public` zone (plaintext available); **not** for encrypted zones.
+
+For encrypted zones, the stateless report enumerates each zone's declared `section_titles` and wrap recipients, marks content checks as `skipped (encrypted; no decryption key)`, and records the manifest signature as the anchor of trust for those zones' declarations.
+
+Explicit `--no-decrypt` is accepted as a no-op: stateless verify is always no-decrypt.
 
 Exit codes:
 
