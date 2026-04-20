@@ -7,16 +7,18 @@ agent (Claude Code, Claude Desktop, custom hosts, …) over either:
 - **HTTP** (Streamable HTTP, `POST /mcp` + SSE fallback) — for daemonized /
   remote deployments
 
-The server is a thin wrapper around the CLI's primitives (`@aithos/cli/ethos`,
-`@aithos/cli/identity`, `@aithos/cli/mandate`) — so its behaviour is byte-for-byte
-identical to the `aithos` command-line tool. It reads from `$AITHOS_HOME` (default
-`~/.aithos/`), exactly like the CLI.
+The server is a thin wrapper around `@aithos/protocol-core` — the same library
+the `aithos` CLI is built on — so its behaviour is byte-for-byte identical to
+the command-line tool. It reads from `$AITHOS_HOME` (default `~/.aithos/`),
+exactly like the CLI.
 
 ## Install / build
 
+From the repo root (npm workspaces):
+
 ```sh
-cd cli && npm install && npm run build
-cd ../mcp && npm install && npm run build
+npm install
+npm run build
 ```
 
 This produces `mcp/dist/bin.js`, exposed as the `aithos-mcp` binary.
