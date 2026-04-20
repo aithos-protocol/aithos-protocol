@@ -25,6 +25,7 @@ import { runShowMandate } from "./commands/show-mandate.js";
 import { runList, type ListKind } from "./commands/list.js";
 import { runGrant } from "./commands/grant.js";
 import { runRevoke } from "./commands/revoke.js";
+import { runMandateAdd } from "./commands/mandate-add.js";
 import { runVerify } from "./commands/verify.js";
 import { runSignAction } from "./commands/sign-action.js";
 import { runDelegateKey } from "./commands/delegate-key.js";
@@ -111,6 +112,30 @@ program
   .option("--handle <h>", "Issuing identity")
   .option("--json", "Output JSON")
   .action((mandateId, opts) => wrap(() => runRevoke({ mandateId, ...opts })));
+
+const mandate = program
+  .command("mandate")
+  .description("Manage mandates received from other identities");
+
+mandate
+  .command("add")
+  .description("Import a mandate received out-of-band into the local keystore")
+  .argument("<path>", "Path to a JSON mandate document")
+  .option("--did <path>", "Issuer's DID document (auto-discovered if the issuer is installed locally)")
+  .option("--allow-expired", "Add the mandate even if it is outside its validity window")
+  .option("--force", "Overwrite an existing mandate at the same id")
+  .option("--json", "Output JSON")
+  .action((path, opts) =>
+    wrap(() =>
+      runMandateAdd({
+        path,
+        did: opts.did,
+        allowExpired: opts.allowExpired,
+        force: opts.force,
+        json: opts.json,
+      }),
+    ),
+  );
 
 program
   .command("verify")
