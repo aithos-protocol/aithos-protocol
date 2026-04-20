@@ -36,6 +36,7 @@ import { runEthosShow } from "./commands/ethos-show.js";
 import { runEthosList } from "./commands/ethos-list.js";
 import { runEthosVerify } from "./commands/ethos-verify.js";
 import { runEthosPack, runEthosUnpack } from "./commands/ethos-pack.js";
+import { runEthosInstall } from "./commands/ethos-install.js";
 
 const program = new Command();
 
@@ -224,6 +225,26 @@ ethos
   .requiredOption("--out <dir>", "Output directory")
   .option("--json", "Output JSON")
   .action((path, opts) => wrap(() => runEthosUnpack({ path, out: opts.out, json: opts.json })));
+
+ethos
+  .command("install")
+  .description("Install a .ethos bundle into the keystore as a tracked identity")
+  .argument("<path>", "Path to the .ethos bundle (file or directory)")
+  .option("--as <handle>", "Install under this handle instead of the manifest's subject_handle")
+  .option("--force", "Overwrite an existing tracked identity at the same handle")
+  .option("--set-default", "Set this identity as the keystore default")
+  .option("--json", "Output JSON")
+  .action((path, opts) =>
+    wrap(() =>
+      runEthosInstall({
+        path,
+        as: opts.as,
+        force: opts.force,
+        setDefault: opts.setDefault,
+        json: opts.json,
+      }),
+    ),
+  );
 
 program
   .command("sign-action")
