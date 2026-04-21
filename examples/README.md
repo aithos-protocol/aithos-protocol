@@ -22,3 +22,10 @@ node dist/index.js grant urn:aithos:agent:demo@localhost \
   --json \
   > signed-mandate.json
 ```
+
+## Scripts
+
+| Script | What it does |
+|---|---|
+| `smoke-test.sh` | End-to-end CLI walkthrough for the v0.1.0 happy/unhappy paths (init → add-section × 3 → add-revision → verify → tamper → verify fails → restore → pack/unpack). |
+| `gamma-smoke-test.sh` | End-to-end walkthrough for the gamma deep-memory log: reproduces the `spec/drafts/gamma-deep-memory.md §D.7` worked example (init → add self → gamma show → delete with reason → self is empty but gamma keeps both entries → tamper with the encrypted log → gamma verify fails → restore → pass). Run after `npm run build` from the repo root. |
