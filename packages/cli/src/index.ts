@@ -32,6 +32,7 @@ import { runDelegateKey } from "./commands/delegate-key.js";
 import { runRotate } from "./commands/rotate.js";
 import { runEthosInit } from "./commands/ethos-init.js";
 import { runEthosAddSection } from "./commands/ethos-add-section.js";
+import { runEthosDeleteSection } from "./commands/ethos-delete-section.js";
 import { runEthosAddRevision } from "./commands/ethos-add-revision.js";
 import { runEthosShow } from "./commands/ethos-show.js";
 import { runEthosList } from "./commands/ethos-list.js";
@@ -192,6 +193,21 @@ ethos
   .option("--handle <h>", "Identity handle")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runEthosAddSection(opts)));
+
+ethos
+  .command("delete-section")
+  .description(
+    "Remove a section from its zone. The live doc forgets it; the gamma " +
+      "deep-memory log retains both the original add and a signed delete entry.",
+  )
+  .requiredOption("--zone <zone>", "public | circle | self")
+  .requiredOption("--section <id>", "Section id (sec_<hex>)")
+  .option("--reason <text>", "Free-text audit reason, stored in the gamma entry")
+  .option("--mandate <id>", "Write mandate authorizing a delegate key")
+  .option("--agent-key <path>", "Agent keyfile (required with --mandate)")
+  .option("--handle <h>", "Identity handle")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosDeleteSection({ zone: opts.zone, section: opts.section, reason: opts.reason, mandate: opts.mandate, agentKey: opts.agentKey, handle: opts.handle, json: opts.json })));
 
 ethos
   .command("add-revision")

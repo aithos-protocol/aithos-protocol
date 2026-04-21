@@ -37,6 +37,7 @@ import {
   readdirSync,
   chmodSync,
   copyFileSync,
+  unlinkSync,
 } from "node:fs";
 import * as ed from "@noble/ed25519";
 import { sha256 as sha256fn } from "@noble/hashes/sha256";
@@ -74,6 +75,7 @@ import {
   buildGammaEntry,
   delegateGammaSigner,
   gammaHead,
+  latestGammaForSection,
   readGammaLog,
   sphereGammaSigner,
   type GammaEntry,
@@ -1071,6 +1073,94 @@ export function addRevision(args: AddRevisionArgs): { revision: Revision; manife
 
   const manifest = persistEdition(args.handle, args.identity, zones);
   return { revision: rev, manifest };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Section deletion                                                          */
+/* -------------------------------------------------------------------------- */
+
+export interface DeleteSectionArgs {
+  handle: string;
+  identity: Identity;
+  zone: Sphere;
+  sectionId: string;
+  /** Free-text reason; stored in the gamma entry payload for audit. */
+  reason?: string;
+  /** Delegate signer (same shape as addSection.delegate). */
+  delegate?: {
+    mandateId: string;
+    keySeed: Uint8Array;
+    keyMultibase: string;
+  };
+  at?: Date;
+}
+
+/**
+ * Remove a section from its zone AND record the removal as a `section.delete`
+ * entry in the gamma log.
+ *
+ * After this call:
+ *   - the current edition no longer contains the section (pack/install sees
+ *     it as if it never existed in the live doc),
+ *   - the signatures/<section_id>.json file is deleted,
+ *   - the gamma log retains the original `section.add` entry AND a new
+ *     `section.delete` entry, both signed and hash-chained,
+ *   - `manifest.gamma.head` is updated to the new delete entry's hash.
+ *
+ * Past editions archived under `ethos/history/` are unchanged — they still
+ * reference the section by its titles and by the prior `gamma.head`, so the
+ * edition chain remains byte-identical to what it was when that manifest was
+ * signed.
+ */
+export function deleteSection(
+  args: DeleteSectionArgs,
+): { manifest: Manifest; gammaEntry: GammaEntry; deletedTitle: string } {
+  const zones = loadAllZones(args.handle, args.identity);
+  const zone = zones[args.zone];
+  const idx = zone.sections.findIndex((s) => s.id === args.sectionId);
+  if (idx < 0) {
+    throw new Error(`Section ${args.sectionId} not found in zone ${args.zone}`);
+  }
+  const deleted = zone.sections[idx];
+  zone.sections.splice(idx, 1);
+
+  // Remove the side signatures file (best-effort: ignore if already gone).
+  const sigPath = join(ethosSignaturesDir(args.handle), `${args.sectionId}.json`);
+  try {
+    if (existsSync(sigPath)) unlinkSync(sigPath);
+  } catch {
+    /* ignore — filesystem quirk, will be overwritten on next edition */
+  }
+
+  // Build the gamma entry. `prev_section_gamma` points at the most recent
+  // gamma entry for this section (usually its own add, but could be a prior
+  // modify). This lets per-section walks skip the global chain.
+  const at = args.at ?? new Date();
+  const existingLog = readGammaLog(args.handle, args.identity);
+  const priorOnSection = latestGammaForSection(existingLog, args.sectionId);
+
+  const gammaSigner: GammaSigner = args.delegate
+    ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
+    : sphereGammaSigner(args.identity, args.zone);
+
+  const prevGammaHash = gammaHead(args.handle, args.identity);
+  const gammaEntry = buildGammaEntry({
+    subjectDid: rootDid(args.identity),
+    zone: args.zone,
+    op: "section.delete",
+    target: { section_id: args.sectionId },
+    payload: {
+      ...(args.reason ? { reason: args.reason } : {}),
+    },
+    prevGammaHash,
+    ...(priorOnSection ? { prevSectionGamma: priorOnSection.id } : {}),
+    signer: gammaSigner,
+    at,
+  });
+  appendGammaEntry(args.handle, args.identity, gammaEntry);
+
+  const manifest = persistEdition(args.handle, args.identity, zones, { now: at });
+  return { manifest, gammaEntry, deletedTitle: deleted.title };
 }
 
 function buildRevision(params: {
