@@ -65,6 +65,54 @@ export function edSeedToX25519Secret(seed: Uint8Array): Uint8Array {
   return sk;
 }
 
+/**
+ * Ed25519 PUBLIC key → X25519 public key (Edwards → Montgomery).
+ *
+ * Needed when we only have the delegate's Ed25519 pubkey (the thing stored in
+ * `mandate.grantee.pubkey`) and must derive the X25519 key used to wrap zone /
+ * gamma DEKs for them. Symmetric invariant with the seed-based path:
+ *
+ *     x25519PublicFromSecret(edSeedToX25519Secret(seed))
+ *     === ed25519PubToX25519Pub(ed.getPublicKey(seed))
+ *
+ * The formula is RFC 7748 §4.1 applied to the decoded Edwards y-coordinate:
+ *
+ *     u = (1 + y) / (1 - y)   (mod p)
+ *
+ * where p = 2^255 - 19 and y is the field element encoded in the lower 255
+ * bits of the 32-byte Ed25519 public key (the top bit is the sign of x and is
+ * discarded for this conversion).
+ */
+export function ed25519PubToX25519Pub(edPub: Uint8Array): Uint8Array {
+  if (edPub.length !== 32) {
+    throw new Error(`ed25519PubToX25519Pub: expected 32-byte key, got ${edPub.length}`);
+  }
+  const P = 2n ** 255n - 19n;
+
+  // Decode y from the little-endian bytes, masking off the sign-of-x bit.
+  let y = 0n;
+  for (let i = 31; i >= 0; i--) {
+    const b = i === 31 ? edPub[i] & 0x7f : edPub[i];
+    y = (y << 8n) | BigInt(b);
+  }
+
+  // u = (1 + y) * (1 - y)^{-1} mod p. Compute the inverse via Fermat: a^{p-2}.
+  const one = 1n;
+  const num = (one + y) % P;
+  const denom = (P + one - (y % P)) % P; // (1 - y) mod p, kept non-negative
+  const denomInv = modPow(denom, P - 2n, P);
+  const u = (num * denomInv) % P;
+
+  // Encode u as little-endian 32 bytes.
+  const out = new Uint8Array(32);
+  let x = u;
+  for (let i = 0; i < 32; i++) {
+    out[i] = Number(x & 0xffn);
+    x >>= 8n;
+  }
+  return out;
+}
+
 /** X25519 public key from a clamped scalar, using @noble/ed25519 internals. */
 export function x25519PublicFromSecret(sk: Uint8Array): Uint8Array {
   // @noble/ed25519 ships an x25519 subroutine via ed.etc — we recompute using

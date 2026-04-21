@@ -51,8 +51,21 @@ export interface MandateConstraints {
   require_counter_sign?: string[];
 }
 
+/**
+ * Mandate envelope versions understood by this library.
+ *
+ * `0.1.0` — pre-delegate-E2E format shipped in v0.1.x / v0.2.0.
+ * `0.2.1` — adds forbidden-scope enforcement (mandate.issue, mandate.revoke,
+ *           identity.rotate-keys, identity.destroy) and the explicit
+ *           `ethos.read.{public,circle,self}` scope family.
+ *
+ * New mandates are minted at the latest version; the verifier accepts both.
+ */
+export const MANDATE_VERSION_CURRENT = "0.2.1" as const;
+export type MandateVersion = "0.1.0" | "0.2.1";
+
 export interface Mandate {
-  "aithos-mandate": "0.1.0";
+  "aithos-mandate": MandateVersion;
   id: string;
   issuer: string;
   issued_by_key: string;
@@ -158,7 +171,7 @@ export function createMandate(args: CreateMandateArgs): Mandate {
   const nonce = base64url(randomBytes(9)); // 72 bits of entropy
 
   const unsigned: Mandate = {
-    "aithos-mandate": "0.1.0",
+    "aithos-mandate": MANDATE_VERSION_CURRENT,
     id: `mandate_${ulid()}`,
     issuer: rootDid(args.issuer),
     issued_by_key: sphereDidUrl(args.issuer, args.actorSphere),
@@ -186,7 +199,33 @@ export function createMandate(args: CreateMandateArgs): Mandate {
   return unsigned;
 }
 
+/**
+ * Scopes a mandate may NEVER carry, regardless of signing sphere.
+ *
+ * These cover operations whose cryptographic root must remain with the
+ * subject: issuing further mandates, revoking them, rotating identity keys,
+ * and destroying the identity. Even the `self` sphere (which is otherwise a
+ * superset) cannot delegate them — a delegate that could issue new mandates
+ * would be indistinguishable from the subject.
+ */
+export const FORBIDDEN_SCOPES: ReadonlySet<string> = new Set([
+  "mandate.issue",
+  "mandate.revoke",
+  "identity.rotate-keys",
+  "identity.destroy",
+]);
+
 function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
+  // Hard-ban of scopes no mandate may ever carry (v0.2.1).
+  for (const s of scopes) {
+    if (FORBIDDEN_SCOPES.has(s)) {
+      throw new Error(
+        `Scope "${s}" is forbidden and cannot be granted by a mandate. ` +
+          `This operation must be performed directly by the subject with their root/sphere keys.`,
+      );
+    }
+  }
+
   // Write scopes must match the signing sphere.
   for (const s of scopes) {
     if (s === "ethos.write.public" && sphere !== "public") {
@@ -226,7 +265,7 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
       }
     }
   }
-  // self: permitted everywhere
+  // self: permitted everywhere (minus the FORBIDDEN_SCOPES check above)
 }
 
 /** Identify whether any of the given scopes is a write scope. */
@@ -267,8 +306,23 @@ export function verifyMandate(
 ): VerifyResult {
   const errors: string[] = [];
 
-  if (mandate["aithos-mandate"] !== "0.1.0") {
+  if (
+    mandate["aithos-mandate"] !== "0.1.0" &&
+    mandate["aithos-mandate"] !== MANDATE_VERSION_CURRENT
+  ) {
     errors.push(`Unsupported mandate version: ${mandate["aithos-mandate"]}`);
+  }
+
+  // Forbidden-scope enforcement applies at verify time regardless of the
+  // envelope version: a v0.1.0 mandate that somehow carries a forbidden scope
+  // must still be rejected, because the subject never had the right to
+  // delegate it.
+  for (const s of mandate.scopes) {
+    if (FORBIDDEN_SCOPES.has(s)) {
+      errors.push(
+        `Mandate carries forbidden scope "${s}". These operations cannot be delegated.`,
+      );
+    }
   }
   if (mandate.issuer !== didDoc.id) {
     errors.push(`issuer ${mandate.issuer} does not match did document ${didDoc.id}`);
