@@ -4,14 +4,14 @@
   "description": "Aithos protocol — reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
-  "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",
+  "homepage": "https://github.com/Math1987/aithos-protocol#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aithos-protocol/aithos-protocol.git",
+    "url": "git+https://github.com/Math1987/aithos-protocol.git",
     "directory": "packages/protocol-core"
   },
   "bugs": {
-    "url": "https://github.com/aithos-protocol/aithos-protocol/issues"
+    "url": "https://github.com/Math1987/aithos-protocol/issues"
   },
   "keywords": [
     "aithos",
