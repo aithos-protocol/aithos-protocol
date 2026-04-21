@@ -69,6 +69,16 @@ import {
 } from "./did.js";
 import { ensureDir, identityDir, readJson, writeJson } from "./storage.js";
 import { loadMandate, findRevocation } from "./mandate.js";
+import {
+  appendGammaEntry,
+  buildGammaEntry,
+  delegateGammaSigner,
+  gammaHead,
+  readGammaLog,
+  sphereGammaSigner,
+  type GammaEntry,
+  type GammaSigner,
+} from "./gamma.js";
 
 /* -------------------------------------------------------------------------- */
 /*  Path helpers                                                              */
@@ -154,6 +164,20 @@ export interface ZoneCipher {
   wraps: ZoneWrap[];
 }
 
+/**
+ * Anchor to the gamma deep-memory log (§D draft).
+ *
+ * Each new edition snapshots the log's current head hash and length so the
+ * manifest (which IS signed end-to-end) commits to the state of the log.
+ * Off-box delivery (e.g. an S3 URL for the encrypted .jsonl.enc) can later
+ * populate `url`; v0.1.0 keeps the log purely local and leaves `url` unset.
+ */
+export interface GammaManifestAnchor {
+  head: string | null;   // sha256:<hex> of latest entry, null if log is empty
+  count: number;         // total number of entries in the log
+  url?: string;          // optional off-box location of the encrypted log
+}
+
 export interface Manifest {
   aithos: "0.1.0";
   bundle_id: string;
@@ -168,6 +192,7 @@ export interface Manifest {
     height: number;
   };
   zones: Record<Sphere, ZoneManifest>;
+  gamma?: GammaManifestAnchor;
   integrity: {
     sha256_of_did_json: string; // hex
     manifest_signature: { alg: "ed25519"; key: string; value: string };
@@ -828,6 +853,11 @@ export function persistEdition(
 
   const supersedes = prevManifest ? prevManifest.bundle_id : null;
 
+  // Snapshot gamma log state into the manifest so the signature commits to
+  // the current head. `gamma` is omitted entirely when the log is absent on
+  // disk, keeping pre-gamma manifests byte-identical.
+  const gammaAnchor = safeReadGammaAnchor(handle, identity);
+
   const unsigned: Manifest = {
     aithos: "0.1.0",
     bundle_id: bundleId,
@@ -842,6 +872,7 @@ export function persistEdition(
       height,
     },
     zones: zoneManifestEntries as Record<Sphere, ZoneManifest>,
+    ...(gammaAnchor ? { gamma: gammaAnchor } : {}),
     integrity: {
       sha256_of_did_json: didSnapshot.hashHex,
       manifest_signature: {
@@ -872,6 +903,25 @@ function safeLoadPreviousManifest(handle: string): Manifest | null {
   }
 }
 
+/**
+ * Best-effort read of the gamma log to produce a manifest anchor. Returns
+ * `null` when no log is present (the common case for pre-gamma identities),
+ * so `persistEdition` can omit the `gamma` field entirely and stay
+ * byte-compatible with v0.1.0 manifests.
+ */
+function safeReadGammaAnchor(handle: string, identity: Identity): GammaManifestAnchor | null {
+  try {
+    const entries = readGammaLog(handle, identity);
+    if (entries.length === 0) return null;
+    return {
+      head: entries[entries.length - 1].hash,
+      count: entries.length,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Section / revision manipulation                                           */
 /* -------------------------------------------------------------------------- */
@@ -895,7 +945,9 @@ export interface AddSectionArgs {
   at?: Date;
 }
 
-export function addSection(args: AddSectionArgs): { section: Section; manifest: Manifest } {
+export function addSection(
+  args: AddSectionArgs,
+): { section: Section; manifest: Manifest; gammaEntry: GammaEntry } {
   const zones = loadAllZones(args.handle, args.identity);
   const sectionId = newSectionId();
   while (zones[args.zone].sections.some((s) => s.id === sectionId)) {
@@ -903,9 +955,12 @@ export function addSection(args: AddSectionArgs): { section: Section; manifest: 
     throw new Error("Section id collision, try again");
   }
 
+  const at = args.at ?? new Date();
+  const atIso = at.toISOString();
+
   const first: Revision = buildRevision({
     revisionNumber: 1,
-    at: (args.at ?? new Date()).toISOString(),
+    at: atIso,
     body: args.body,
     prevHash: null,
     zone: args.zone,
@@ -937,8 +992,31 @@ export function addSection(args: AddSectionArgs): { section: Section; manifest: 
   };
   writeSignaturesFile(args.handle, sigFile);
 
-  const manifest = persistEdition(args.handle, args.identity, zones);
-  return { section, manifest };
+  // Emit a `section.add` gamma entry. We do this before `persistEdition` so
+  // the new edition's manifest (via `safeReadGammaAnchor`) already commits to
+  // the freshly-appended head.
+  const gammaSigner: GammaSigner = args.delegate
+    ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
+    : sphereGammaSigner(args.identity, args.zone);
+  const prevGammaHash = gammaHead(args.handle, args.identity);
+  const gammaEntry = buildGammaEntry({
+    subjectDid: rootDid(args.identity),
+    zone: args.zone,
+    op: "section.add",
+    target: { section_id: sectionId },
+    payload: {
+      title: args.title,
+      body: args.body,
+      ...(args.tags && args.tags.length > 0 ? { tags: args.tags } : {}),
+    },
+    prevGammaHash,
+    signer: gammaSigner,
+    at,
+  });
+  appendGammaEntry(args.handle, args.identity, gammaEntry);
+
+  const manifest = persistEdition(args.handle, args.identity, zones, { now: at });
+  return { section, manifest, gammaEntry };
 }
 
 export interface AddRevisionArgs {

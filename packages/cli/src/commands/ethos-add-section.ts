@@ -44,7 +44,7 @@ export function runEthosAddSection(opts: EthosAddSectionOpts): void {
     ? resolveDelegate(opts.mandate, opts.agentKey, zone)
     : undefined;
 
-  const { section, manifest } = addSection({
+  const { section, manifest, gammaEntry } = addSection({
     handle,
     identity,
     zone,
@@ -55,7 +55,7 @@ export function runEthosAddSection(opts: EthosAddSectionOpts): void {
   });
 
   if (opts.json) {
-    console.log(JSON.stringify({ section, manifest }, null, 2));
+    console.log(JSON.stringify({ section, manifest, gammaEntry }, null, 2));
     return;
   }
 
@@ -64,6 +64,8 @@ export function runEthosAddSection(opts: EthosAddSectionOpts): void {
   console.log(`  title:        ${section.title}`);
   console.log(`  rev:          1`);
   console.log(`  edition:      ${manifest.edition.version} (height=${manifest.edition.height})`);
+  console.log(`  gamma:        ${gammaEntry.id}`);
+  console.log(`  gamma.head:   ${manifest.gamma?.head ?? "(none)"} (count=${manifest.gamma?.count ?? 0})`);
   if (delegate) console.log(`  authorized:   ${delegate.mandateId}`);
 }
 

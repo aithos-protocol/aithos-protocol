@@ -377,7 +377,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           );
         }
       }
-      const { section, manifest } = addSection({
+      const { section, manifest, gammaEntry } = addSection({
         handle: h,
         zone,
         identity,
@@ -390,6 +390,9 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         section: sectionSummary(zone, section),
         manifest_version: manifest.edition.version,
         manifest_height: manifest.edition.height,
+        gamma_entry_id: gammaEntry.id,
+        gamma_head: manifest.gamma?.head ?? null,
+        gamma_count: manifest.gamma?.count ?? 0,
       });
     },
   );
