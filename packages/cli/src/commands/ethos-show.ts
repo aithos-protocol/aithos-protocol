@@ -4,7 +4,9 @@
  * Default: prints manifest summary (edition, zones, section counts).
  * --zone <z>: prints the zone markdown (decrypts with the local identity if
  * the zone is encrypted).
- * --section <id>: prints the current body of a specific section.
+ * --section <id>: prints the current body of a specific section along with
+ * its gamma_ref anchor. Full revision history is not inlined — use
+ * `aithos gamma show --section <id>` for the signed mutation log.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -24,7 +26,6 @@ export interface EthosShowOpts {
   zone?: string;
   section?: string;
   json?: boolean;
-  revisions?: boolean;
 }
 
 export function runEthosShow(opts: EthosShowOpts): void {
@@ -49,6 +50,11 @@ export function runEthosShow(opts: EthosShowOpts): void {
     console.log(`  Edition:      ${manifest.edition.version} (height=${manifest.edition.height})`);
     console.log(`  Created:      ${manifest.edition.created_at}`);
     console.log(`  Bundle id:    ${manifest.bundle_id}`);
+    if (manifest.gamma) {
+      console.log(
+        `  Gamma:        head=${manifest.gamma.head ?? "(none)"} count=${manifest.gamma.count}`,
+      );
+    }
     console.log();
     for (const z of ["public", "circle", "self"] as const) {
       const zm = manifest.zones[z];
@@ -82,24 +88,11 @@ export function runEthosShow(opts: EthosShowOpts): void {
       return;
     }
     console.log(`[handle=${handle}] # ${sec.title} (${sec.id}) — zone: ${zone}`);
-    if (opts.revisions) {
-      for (const r of sec.revisions) {
-        const signedBy = r.authorized_by
-          ? `delegated via ${r.authorized_by} (key ${r.signature.key})`
-          : `sphere-key (${zone})`;
-        console.log(
-          `\n<!-- rev ${r.revision} at ${r.at} | signed_by: ${signedBy} | hash ${r.hash} -->`,
-        );
-        console.log(r.body);
-      }
-    } else {
-      const current = sec.revisions[sec.revisions.length - 1];
-      const signedBy = current.authorized_by
-        ? `delegated via ${current.authorized_by}`
-        : `sphere-key`;
-      console.log(`<!-- current: rev ${current.revision} · signed_by: ${signedBy} -->`);
-      console.log(current.body);
+    console.log(`<!-- gamma_ref: ${sec.gamma_ref} -->`);
+    if (sec.tags && sec.tags.length > 0) {
+      console.log(`<!-- tags: ${JSON.stringify(sec.tags)} -->`);
     }
+    console.log(sec.body);
     return;
   }
 

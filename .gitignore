@@ -16,3 +16,7 @@ dist/
 !stubs/aithos-py/birth/aithos-birth.ethos
 !stubs/aithos-rs/birth/aithos-birth.ethos
 !stubs/aithos-go/birth/aithos-birth.ethos
+packages/cli/src/commands/*.removed
+
+# local-only scratch files from cutover tooling
+.gitignore_v2_cutover

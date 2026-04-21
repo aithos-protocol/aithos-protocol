@@ -1,14 +1,19 @@
 /**
- * `aithos ethos add-revision` — append a revision to an existing section.
+ * `aithos ethos modify-section` — apply an in-place modification to a section.
  *
- * The previous revision's `hash` becomes the new revision's `prev_hash`; the
- * new `at` must be strictly after the previous one; the chain is append-only.
+ * In v0.2.0 there is no per-section revision array: every change is a signed
+ * entry in the gamma log (spec §10.6.1). This command emits one signed
+ * `section.modify` entry carrying the full new value of each field being
+ * replaced, then updates the live section and its `gamma_ref`.
+ *
+ * At least one of --title, --body / --body-file, --tags (or --clear-tags)
+ * must be provided.
  */
 
 import { readFileSync, existsSync } from "node:fs";
 import {
   loadIdentity,
-  addRevision,
+  modifySection,
   ethosDir,
   type Sphere,
   loadConfig,
@@ -17,18 +22,21 @@ import {
   findRevocation,
 } from "@aithos/protocol-core";
 
-export interface EthosAddRevisionOpts {
+export interface EthosModifySectionOpts {
   zone: string;
   sectionId: string;
+  title?: string;
   body?: string;
   bodyFile?: string;
+  tags?: string; // comma-separated; sets the full tag list
+  clearTags?: boolean; // force tags := []
   mandate?: string;
   agentKey?: string;
   handle?: string;
   json?: boolean;
 }
 
-export function runEthosAddRevision(opts: EthosAddRevisionOpts): void {
+export function runEthosModifySection(opts: EthosModifySectionOpts): void {
   const handle = opts.handle ?? loadConfig().default_handle;
   if (!handle) throw new Error("No identity handle. Pass --handle <h>.");
   if (!existsSync(ethosDir(handle))) {
@@ -36,30 +44,44 @@ export function runEthosAddRevision(opts: EthosAddRevisionOpts): void {
   }
 
   const zone = ensureZone(opts.zone);
-  const body = resolveBody(opts);
+  const { title, body, tags } = resolveChanges(opts);
+
+  if (title === undefined && body === undefined && tags === undefined) {
+    throw new Error(
+      "Nothing to modify. Pass at least one of --title, --body/--body-file, --tags, --clear-tags.",
+    );
+  }
+
   const identity = loadIdentity(handle);
   const delegate = opts.mandate ? resolveDelegate(opts.mandate, opts.agentKey, zone) : undefined;
 
-  const { revision, manifest } = addRevision({
+  const { section, manifest, gammaEntry } = modifySection({
     handle,
     identity,
     zone,
     sectionId: opts.sectionId,
+    title,
     body,
+    tags,
     delegate,
   });
 
   if (opts.json) {
-    console.log(JSON.stringify({ revision, manifest }, null, 2));
+    console.log(JSON.stringify({ section, manifest, gammaEntry }, null, 2));
     return;
   }
 
-  console.log(`[handle=${handle}] Appended revision ${revision.revision} to ${opts.sectionId} (${zone})`);
-  console.log(`  at:           ${revision.at}`);
-  console.log(`  prev_hash:    ${revision.prev_hash}`);
-  console.log(`  hash:         ${revision.hash}`);
+  const changed: string[] = [];
+  if (title !== undefined) changed.push("title");
+  if (body !== undefined) changed.push("body");
+  if (tags !== undefined) changed.push("tags");
+
+  console.log(`[handle=${handle}] Modified ${opts.sectionId} in ${zone} (${changed.join(", ")})`);
+  console.log(`  gamma:        ${gammaEntry.id}`);
+  console.log(`  gamma.head:   ${manifest.gamma?.head ?? "(none)"} (count=${manifest.gamma?.count ?? 0})`);
   console.log(`  edition:      ${manifest.edition.version} (height=${manifest.edition.height})`);
   if (delegate) console.log(`  authorized:   ${delegate.mandateId}`);
+  console.log(`  section.gamma_ref: ${section.gamma_ref}`);
 }
 
 function ensureZone(z: string): Sphere {
@@ -67,11 +89,29 @@ function ensureZone(z: string): Sphere {
   throw new Error(`Invalid --zone ${z}. Expected public | circle | self.`);
 }
 
-function resolveBody(opts: EthosAddRevisionOpts): string {
-  if (opts.body && opts.bodyFile) throw new Error("Pass either --body or --body-file, not both.");
-  if (opts.body) return opts.body;
-  if (opts.bodyFile) return readFileSync(opts.bodyFile, "utf8").replace(/\s+$/, "");
-  throw new Error("Missing --body or --body-file for the new revision.");
+function resolveChanges(opts: EthosModifySectionOpts): {
+  title?: string;
+  body?: string;
+  tags?: string[];
+} {
+  if (opts.body && opts.bodyFile) {
+    throw new Error("Pass either --body or --body-file, not both.");
+  }
+  if (opts.tags && opts.clearTags) {
+    throw new Error("Pass either --tags or --clear-tags, not both.");
+  }
+
+  const out: { title?: string; body?: string; tags?: string[] } = {};
+  if (opts.title !== undefined) out.title = opts.title;
+  if (opts.body !== undefined) out.body = opts.body;
+  if (opts.bodyFile !== undefined) {
+    out.body = readFileSync(opts.bodyFile, "utf8").replace(/\s+$/, "");
+  }
+  if (opts.tags !== undefined) {
+    out.tags = opts.tags.split(",").map((t) => t.trim()).filter(Boolean);
+  }
+  if (opts.clearTags) out.tags = [];
+  return out;
 }
 
 interface DelegateKeyfile {

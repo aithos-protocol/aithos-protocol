@@ -7,13 +7,14 @@
  *   - introspect an identity (read sphere public keys, DID)
  *   - list sections across zones
  *   - read the current body of a section (decrypting circle/self locally)
- *   - verify the full ethos (chains, signatures, manifest link)
- *   - append revisions (under a write mandate + agent key)
+ *   - verify the full ethos (gamma anchor, signatures, manifest link)
+ *   - add sections and modify them (under a write mandate + agent key), each
+ *     mutation emitting a signed gamma entry (spec §10)
  *
  * The server is intentionally stateless: each tool call re-reads from disk.
  * That's slightly slower than caching, but it matches the on-disk semantics
- * (the CLI may have written new revisions between calls) and makes tamper
- * detection honest.
+ * (the CLI may have written new gamma entries between calls) and makes
+ * tamper detection honest.
  */
 import {
   McpServer,
@@ -40,7 +41,7 @@ import {
   loadZoneDoc,
   verifyEthos,
   addSection,
-  addRevision,
+  modifySection,
   type Section,
   type ZoneDoc,
   type Manifest,
@@ -87,17 +88,14 @@ function sectionSummary(
   zone: Sphere;
   id: string;
   title: string;
-  revision: number;
-  updated_at: string;
+  gamma_ref: string;
   tags: string[];
 } {
-  const latest = s.revisions[s.revisions.length - 1];
   return {
     zone,
     id: s.id,
     title: s.title,
-    revision: s.revisions.length,
-    updated_at: latest?.at ?? "",
+    gamma_ref: s.gamma_ref,
     tags: s.tags ?? [],
   };
 }
@@ -257,16 +255,16 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     {
       title: "Show a section's current content",
       description:
-        "Returns the latest revision body of a section, plus metadata. " +
-        "Set `includeHistory` to get every revision.",
+        "Returns the current body of a section, plus metadata and the " +
+        "gamma_ref anchor. Mutation history lives in the gamma log — call " +
+        "`aithos_ethos_gamma` (or `aithos gamma show --section`) to walk it.",
       inputSchema: {
         handle: z.string().optional(),
         zone: z.enum(SPHERE_FRAGMENTS),
         sectionId: z.string().describe("Section id (sec_<hex>)"),
-        includeHistory: z.boolean().optional(),
       },
     },
-    async ({ handle, zone, sectionId, includeHistory }) => {
+    async ({ handle, zone, sectionId }) => {
       const h = resolveHandle(handle);
       // Short-circuit encrypted zones on a tracked identity with an explicit
       // message — the on-disk ciphertext cannot be read without the sphere key,
@@ -282,25 +280,14 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       if (!section) {
         throw new Error(`section ${sectionId} not found in zone ${zone}`);
       }
-      const latest = section.revisions[section.revisions.length - 1];
-      const payload: Record<string, unknown> = {
+      return ok({
         zone,
         id: section.id,
         title: section.title,
         tags: section.tags ?? [],
-        updated_at: latest?.at,
-        body: latest?.body,
-      };
-      if (includeHistory) {
-        payload.revisions = section.revisions.map((r) => ({
-          at: r.at,
-          body: r.body,
-          hash: r.hash,
-          prev_hash: r.prev_hash,
-          signer_key: r.signature?.key,
-        }));
-      }
-      return ok(payload);
+        gamma_ref: section.gamma_ref,
+        body: section.body,
+      });
     },
   );
 
@@ -309,8 +296,11 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     {
       title: "Verify ethos integrity",
       description:
-        "Full integrity check: section hash chains, per-revision signatures, " +
-        "zone signatures, manifest signature, and edition history link.",
+        "Full integrity check: zone signatures, manifest signature, edition " +
+        "history link, and the gamma anchor (manifest.gamma.head must match " +
+        "the live log tail, and every section's gamma_ref must exist in the " +
+        "log). The signed mutation history itself is walked by the companion " +
+        "`aithos gamma verify` tool.",
       inputSchema: {
         handle: z.string().optional(),
         decrypt: z
@@ -398,22 +388,44 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   );
 
   server.registerTool(
-    "aithos_ethos_add_revision",
+    "aithos_ethos_modify_section",
     {
-      title: "Append a revision to an existing section",
+      title: "Modify an existing section in-place",
       description:
-        "Appends a new revision body to a section (append-only, hash-chained). " +
-        "Auth semantics identical to `aithos_ethos_add_section`.",
+        "Applies a change to one or more of {title, body, tags} on an " +
+        "existing section. Emits one signed `section.modify` entry in the " +
+        "gamma log carrying the full new value of each changed field (spec " +
+        "§10.6.1); the previous state remains in the log as the audit trail. " +
+        "Auth semantics identical to `aithos_ethos_add_section`. Pass at " +
+        "least one of { title, body, tags, clearTags }.",
       inputSchema: {
         handle: z.string().optional(),
         zone: z.enum(SPHERE_FRAGMENTS),
         sectionId: z.string(),
-        body: z.string().min(1),
+        title: z.string().optional(),
+        body: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        clearTags: z.boolean().optional(),
         mandate: z.string().optional(),
         agentKey: z.string().optional(),
       },
     },
-    async ({ handle, zone, sectionId, body, mandate, agentKey }) => {
+    async ({
+      handle,
+      zone,
+      sectionId,
+      title,
+      body,
+      tags,
+      clearTags,
+      mandate,
+      agentKey,
+    }) => {
+      if (title === undefined && body === undefined && tags === undefined && !clearTags) {
+        throw new Error(
+          "aithos_ethos_modify_section: pass at least one of title, body, tags, clearTags",
+        );
+      }
       const h = resolveHandle(handle);
       const identity = loadIdentity(h);
       const auth = resolveWriteAuth({ mandate, agentKey });
@@ -425,25 +437,24 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           );
         }
       }
-      const { revision, manifest } = addRevision({
+      const effectiveTags = clearTags ? [] : tags;
+      const { section, manifest, gammaEntry } = modifySection({
         handle: h,
         zone,
         identity,
         sectionId,
+        title,
         body,
+        tags: effectiveTags,
         delegate: auth?.delegate,
       });
       return ok({
-        zone,
-        sectionId,
-        revision: {
-          at: revision.at,
-          hash: revision.hash,
-          prev_hash: revision.prev_hash,
-          signer_key: revision.signature?.key,
-        },
+        section: sectionSummary(zone, section),
         manifest_version: manifest.edition.version,
         manifest_height: manifest.edition.height,
+        gamma_entry_id: gammaEntry.id,
+        gamma_head: manifest.gamma?.head ?? null,
+        gamma_count: manifest.gamma?.count ?? 0,
       });
     },
   );

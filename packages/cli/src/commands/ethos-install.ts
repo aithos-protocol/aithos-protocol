@@ -21,7 +21,8 @@
  *       ├── public/public.md         ← copied from bundle
  *       ├── circle/circle.md.enc     ← copied if encrypted zone present
  *       ├── self/self.md.enc         ← copied if encrypted zone present
- *       └── signatures/*.json        ← copied from bundle
+ *       └── gamma/gamma.jsonl.enc    ← copied if the bundle carries the sealed
+ *                                       mutation log (spec §10)
  *
  * No sealed seeds, so the keystore flags this as tracked (isTrackedIdentity).
  */
@@ -30,7 +31,6 @@ import {
   existsSync,
   readFileSync,
   writeFileSync,
-  readdirSync,
   mkdtempSync,
   rmSync,
   statSync,
@@ -47,11 +47,12 @@ import {
   ethosDir,
   ethosZoneDir,
   ethosZoneFile,
-  ethosSignaturesDir,
   ethosHistoryDir,
   ethosManifestPath,
   identityDir,
   ensureDir,
+  gammaDir,
+  gammaFilePath,
   loadConfig,
   saveConfig,
 } from "@aithos/protocol-core";
@@ -221,7 +222,7 @@ function installIntoKeystore(handle: string, src: string, manifest: Manifest): v
   ensureDir(ethosZoneDir(handle, "public"));
   ensureDir(ethosZoneDir(handle, "circle"));
   ensureDir(ethosZoneDir(handle, "self"));
-  ensureDir(ethosSignaturesDir(handle));
+  ensureDir(gammaDir(handle));
   ensureDir(ethosHistoryDir(handle));
 
   // manifest.json
@@ -254,16 +255,13 @@ function installIntoKeystore(handle: string, src: string, manifest: Manifest): v
     chmodSync(ethosZoneFile(handle, "self"), 0o600);
   }
 
-  // signatures/*.json
-  const sigSrc = join(src, "signatures");
-  if (existsSync(sigSrc)) {
-    for (const fn of readdirSync(sigSrc)) {
-      if (!fn.endsWith(".json")) continue;
-      const from = join(sigSrc, fn);
-      const to = join(ethosSignaturesDir(handle), fn);
-      copyFileSync(from, to);
-      chmodSync(to, 0o644);
-    }
+  // gamma.jsonl.enc — sealed mutation log (spec §10). Optional: when absent,
+  // the tracked identity still has the manifest anchor and can receive the
+  // log later out-of-band.
+  const gammaSrc = join(src, "gamma.jsonl.enc");
+  if (existsSync(gammaSrc)) {
+    copyFileSync(gammaSrc, gammaFilePath(handle));
+    chmodSync(gammaFilePath(handle), 0o600);
   }
 
   // Reference manifest to silence unused-var linter warnings, while also

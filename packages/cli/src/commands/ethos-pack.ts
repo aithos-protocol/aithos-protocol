@@ -2,22 +2,22 @@
  * `aithos ethos pack` / `aithos ethos unpack`
  *
  * Pack turns the live ethos/ directory into a .ethos zip per spec §3.2:
- *   manifest.json, did.json, public.md, circle.md.enc, self.md.enc, signatures/,
- *   README.txt (optional, human-readable).
+ *   manifest.json, did.json, public.md, circle.md.enc, self.md.enc,
+ *   gamma.jsonl.enc (sealed mutation log, spec §10), README.txt (optional).
  *
  * Unpack reverses it into a target directory (for distribution / import).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import AdmZip from "adm-zip";
 
 import {
   ethosDir,
   ethosZoneFile,
-  ethosSignaturesDir,
   ethosManifestPath,
   readManifest,
+  gammaFilePath,
   type Manifest,
   loadConfig,
 } from "@aithos/protocol-core";
@@ -25,8 +25,10 @@ import {
 const README_TXT = `This is an Aithos ethos bundle (.ethos).
 
 It is a signed, structured description of a subject, partitioned into three
-zones: public (clear), circle (encrypted), and self (encrypted). See
-https://aithos.dev/spec/v0.1 for the specification.
+zones: public (clear), circle (encrypted), and self (encrypted). Every
+section mutation is recorded in the sealed gamma log (gamma.jsonl.enc),
+whose current tail is committed to by the signed manifest. See
+https://aithos.dev/spec/v0.2 for the specification.
 
 To open: any zip tool, then start with manifest.json.
 `;
@@ -59,12 +61,11 @@ export function runEthosPack(opts: EthosPackOpts): void {
   if (existsSync(ethosZoneFile(handle, "circle"))) zip.addLocalFile(ethosZoneFile(handle, "circle"));
   if (existsSync(ethosZoneFile(handle, "self"))) zip.addLocalFile(ethosZoneFile(handle, "self"));
 
-  // signatures/
-  if (existsSync(ethosSignaturesDir(handle))) {
-    for (const fn of readdirSync(ethosSignaturesDir(handle))) {
-      zip.addLocalFile(join(ethosSignaturesDir(handle), fn), "signatures");
-    }
-  }
+  // Sealed gamma log (spec §10). When present, the bundle carries the full
+  // mutation history; when absent, the manifest's anchor still commits to the
+  // head hash so late delivery of the log stays verifiable.
+  const gammaPath = gammaFilePath(handle);
+  if (existsSync(gammaPath)) zip.addLocalFile(gammaPath);
 
   // README
   if (opts.readme !== false) zip.addFile("README.txt", Buffer.from(README_TXT, "utf8"));
@@ -77,6 +78,9 @@ export function runEthosPack(opts: EthosPackOpts): void {
   }
   console.log(`[handle=${handle}] Packed ethos to ${outPath}`);
   console.log(`  bundle_id: ${manifest.bundle_id}`);
+  if (manifest.gamma) {
+    console.log(`  gamma:     head=${manifest.gamma.head ?? "(none)"} count=${manifest.gamma.count}`);
+  }
 }
 
 /* -------------------------------------------------------------------------- */

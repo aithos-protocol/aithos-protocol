@@ -6,27 +6,33 @@
  *   ~/.aithos/identities/<handle>/ethos/
  *   ├── manifest.json            (current edition manifest — spec §3.3)
  *   ├── history/
- *   │   └── <edition>.manifest.json   (every past edition's manifest, for chain walks)
+ *   │   └── <edition>.manifest.json   (every past edition's manifest)
  *   ├── public/
  *   │   └── public.md            (plaintext markdown — spec §2.6)
  *   ├── circle/
  *   │   └── circle.md.enc        (XChaCha20-Poly1305 ciphertext — spec §3.4)
  *   ├── self/
  *   │   └── self.md.enc
- *   └── signatures/
- *       └── <section_id>.json    (per-section revision signatures — spec §3.2.5)
+ *   └── gamma/
+ *       └── gamma.jsonl.enc      (signed, hash-chained mutation log — spec §10)
  *
- * The live folder is the source of truth for editing. The `.ethos` bundle
- * (spec §3) is derived from it via `aithos ethos pack`.
+ * The live folder is the source of truth for what the subject *currently
+ * looks like*. The gamma log is the source of truth for *how they got
+ * there* — every add/modify/delete is a signed entry in a hash-chained
+ * JSONL log, living side by side with the live doc (spec §10).
+ *
+ * The live sections carry only { id, title, body, tags?, gamma_ref }: no
+ * embedded history. The `gamma_ref` points to the latest gamma entry
+ * affecting the section, so every visible field is traceable back to the
+ * signed mutation that produced it.
  *
  * Every edit creates a new edition:
  *   - `edition.version` is `YYYY.MM.DD-N` (auto-incrementing N within a day)
  *   - `edition.prev_hash` is sha256 of the previous edition's canonical manifest
  *     with the manifest signature value blanked
  *   - `edition.height` is prev.height + 1
- *
- * Integrity is verifiable end-to-end (§3.8) and resistant to tampering with any
- * past revision (§2.5.4.2).
+ *   - `gamma.head` anchors the edition to the current tail of the log, so the
+ *     signed manifest commits to the entire history (spec §10.2 / §10.7).
  */
 
 import { join } from "node:path";
@@ -37,7 +43,6 @@ import {
   readdirSync,
   chmodSync,
   copyFileSync,
-  unlinkSync,
 } from "node:fs";
 import * as ed from "@noble/ed25519";
 import { sha256 as sha256fn } from "@noble/hashes/sha256";
@@ -58,18 +63,15 @@ import {
   rootDid,
   edSeedToX25519Secret,
   x25519PublicFromSecret,
-  sha256Hex,
 } from "./identity.js";
 import {
   didUrlForKex,
   type Sphere,
   SPHERE_FRAGMENTS,
   multibaseToEd25519PublicKey,
-  ed25519PublicKeyToMultibase,
   x25519PublicKeyToMultibase,
 } from "./did.js";
 import { ensureDir, identityDir, readJson, writeJson } from "./storage.js";
-import { loadMandate, findRevocation } from "./mandate.js";
 import {
   appendGammaEntry,
   buildGammaEntry,
@@ -100,10 +102,6 @@ export function ethosZoneFile(handle: string, zone: Sphere): string {
     : join(ethosZoneDir(handle, zone), `${zone}.md.enc`);
 }
 
-export function ethosSignaturesDir(handle: string): string {
-  return join(ethosDir(handle), "signatures");
-}
-
 export function ethosHistoryDir(handle: string): string {
   return join(ethosDir(handle), "history");
 }
@@ -116,21 +114,20 @@ export function ethosManifestPath(handle: string): string {
 /*  Document-form types                                                       */
 /* -------------------------------------------------------------------------- */
 
-export interface Revision {
-  revision: number;
-  at: string;
-  body: string;
-  prev_hash: string | null;
-  hash: string;
-  signature: { alg: "ed25519"; key: string; value: string };
-  authorized_by?: string; // mandate id (delegated writes only)
-}
-
+/**
+ * A section in the live ethos document. Spec §2.5.1.
+ *
+ * No embedded revision history — every mutation is a signed entry in the
+ * gamma log (spec §10). The `gamma_ref` field names the latest gamma entry
+ * that produced the current state of this section, so readers can always
+ * trace a visible field back to the signed mutation that authored it.
+ */
 export interface Section {
   id: string;
   title: string;
-  revisions: Revision[];
+  body: string;
   tags?: string[];
+  gamma_ref: string;
 }
 
 export interface ZoneDoc {
@@ -167,12 +164,12 @@ export interface ZoneCipher {
 }
 
 /**
- * Anchor to the gamma deep-memory log (§D draft).
+ * Anchor to the gamma deep-memory log (spec §10).
  *
  * Each new edition snapshots the log's current head hash and length so the
- * manifest (which IS signed end-to-end) commits to the state of the log.
- * Off-box delivery (e.g. an S3 URL for the encrypted .jsonl.enc) can later
- * populate `url`; v0.1.0 keeps the log purely local and leaves `url` unset.
+ * signed manifest commits to the state of the log (spec §10.3.5 / §10.7).
+ * Off-box delivery (e.g. an S3 URL for the encrypted .jsonl.enc) can
+ * populate `url`; otherwise the log lives purely local.
  */
 export interface GammaManifestAnchor {
   head: string | null;   // sha256:<hex> of latest entry, null if log is empty
@@ -180,8 +177,16 @@ export interface GammaManifestAnchor {
   url?: string;          // optional off-box location of the encrypted log
 }
 
+/**
+ * Manifest version. Bumped to 0.2.0 for the gamma cutover: sections no
+ * longer carry embedded revisions[], and `gamma` is REQUIRED as soon as the
+ * ethos has any section (every section is born from a gamma entry).
+ */
+export const AITHOS_VERSION = "0.2.0" as const;
+export type AithosVersion = typeof AITHOS_VERSION;
+
 export interface Manifest {
-  aithos: "0.1.0";
+  aithos: AithosVersion;
   bundle_id: string;
   subject_did: string;
   subject_handle: string;
@@ -202,28 +207,12 @@ export interface Manifest {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Signatures side-file                                                      */
-/* -------------------------------------------------------------------------- */
-
-export interface SignaturesFile {
-  aithos: "0.1.0";
-  section_id: string;
-  zone: Sphere;
-  revisions: Array<{
-    revision: number;
-    hash: string;
-    signature_value: string;
-  }>;
-}
-
-/* -------------------------------------------------------------------------- */
 /*  Low-level IO                                                              */
 /* -------------------------------------------------------------------------- */
 
 export function ensureEthosLayout(handle: string): void {
   ensureDir(ethosDir(handle));
   for (const s of SPHERE_FRAGMENTS) ensureDir(ethosZoneDir(handle, s));
-  ensureDir(ethosSignaturesDir(handle));
   ensureDir(ethosHistoryDir(handle));
 }
 
@@ -233,50 +222,6 @@ export function readManifest(handle: string): Manifest {
 
 export function writeManifest(handle: string, m: Manifest): void {
   writeJson(ethosManifestPath(handle), m, 0o600);
-}
-
-export function readSignaturesFile(handle: string, sectionId: string): SignaturesFile | null {
-  const p = join(ethosSignaturesDir(handle), `${sectionId}.json`);
-  if (!existsSync(p)) return null;
-  return readJson<SignaturesFile>(p);
-}
-
-export function writeSignaturesFile(handle: string, f: SignaturesFile): void {
-  writeJson(join(ethosSignaturesDir(handle), `${f.section_id}.json`), f, 0o600);
-}
-
-export function listSignatureFiles(handle: string): string[] {
-  const d = ethosSignaturesDir(handle);
-  if (!existsSync(d)) return [];
-  return readdirSync(d).filter((n) => n.endsWith(".json"));
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Revision hash-chain primitives                                            */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Compute the per-revision self-hash. Per spec §2.5.4 step 3:
- *   hash = sha256( jcs( revision with hash="" AND signature.value="" ) )
- */
-export function computeRevisionHash(rev: Revision): string {
-  const clone: Revision = {
-    ...rev,
-    hash: "",
-    signature: { ...rev.signature, value: "" },
-  };
-  const bytes = new TextEncoder().encode(canonicalize(clone));
-  return "sha256:" + Buffer.from(sha256fn(bytes)).toString("hex");
-}
-
-/**
- * Compute the revision signature. Per spec §2.5.4 step 5: sign the JCS form of
- * the revision object with `signature.value` replaced by "".
- * The caller is responsible for setting `hash` before calling.
- */
-export function signRevisionBytes(rev: Revision): Uint8Array {
-  const clone: Revision = { ...rev, signature: { ...rev.signature, value: "" } };
-  return new TextEncoder().encode(canonicalize(clone));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -291,14 +236,17 @@ export interface RenderContext {
 }
 
 /**
- * Document-form → markdown form, per spec §2.6.1.
- * The `signature_value` of each revision is NOT inlined — only a truncated
- * prefix goes in the HTML comment. The full value lives in `signatures/`.
+ * Document-form → markdown form, per spec §2.6.1 (revised for v0.2.0).
+ *
+ * Each section is a heading whose HTML comment carries the section id AND
+ * its gamma_ref — the id of the latest gamma entry affecting the section.
+ * The body follows as plain markdown. No per-revision blocks; the gamma
+ * log holds the signed history.
  */
 export function renderZoneMarkdown(zone: Sphere, doc: ZoneDoc, ctx: RenderContext): string {
   const fm = [
     "---",
-    `aithos: "0.1.0"`,
+    `aithos: "${AITHOS_VERSION}"`,
     `zone: ${zone}`,
     `subject_did: ${ctx.subjectDid}`,
     `subject_handle: ${ctx.subjectHandle}`,
@@ -311,40 +259,28 @@ export function renderZoneMarkdown(zone: Sphere, doc: ZoneDoc, ctx: RenderContex
   const parts: string[] = [fm];
 
   for (const sec of doc.sections) {
-    parts.push(`# ${sec.title} <!-- ${sec.id} -->`);
+    parts.push(`# ${sec.title} <!-- ${sec.id} · ${sec.gamma_ref} -->`);
     if (sec.tags && sec.tags.length > 0) {
       parts.push(`<!-- tags: ${JSON.stringify(sec.tags)} -->`);
     }
     parts.push("");
-
-    for (const rev of sec.revisions) {
-      const sigPrefix = rev.signature.value.slice(0, 12);
-      const metaBits = [
-        `rev ${rev.revision}`,
-        `at:${rev.at}`,
-      ];
-      if (rev.prev_hash) metaBits.push(`prev:${rev.prev_hash}`);
-      metaBits.push(`hash:${rev.hash}`);
-      metaBits.push(`sig:${sigPrefix}`);
-      if (rev.authorized_by) metaBits.push(`authorized_by:${rev.authorized_by}`);
-
-      parts.push(`<!-- ${metaBits.join(" · ")} -->`);
-      parts.push("");
-      parts.push(rev.body);
-      parts.push("");
-    }
+    parts.push(sec.body);
+    parts.push("");
   }
 
   // Trim trailing whitespace while preserving a final newline.
   return parts.join("\n").replace(/\s+$/, "") + "\n";
 }
 
-/** Markdown form → document form. Reconstitutes from markdown + signatures/ side-files. */
+/**
+ * Markdown form → document form. Parses the v0.2.0 layout:
+ *   `# <title> <!-- <sec_id> · <gamma_ref> -->`
+ *   optional `<!-- tags: [...] -->`
+ *   body until the next `# ` heading.
+ */
 export function parseZoneMarkdown(
   markdown: string,
-  sigFiles: Record<string, SignaturesFile>,
   expectedZone: Sphere,
-  opts?: { subjectDid?: string; resolveMandateGranteePubkey?: (mandateId: string) => string },
 ): ZoneDoc {
   const fmMatch = markdown.match(/^---\n([\s\S]*?)\n---\n?/);
   if (!fmMatch) throw new Error("Zone markdown missing YAML frontmatter");
@@ -356,91 +292,50 @@ export function parseZoneMarkdown(
   if (fm.zone !== expectedZone) {
     throw new Error(`Zone markdown declares zone=${fm.zone}, expected ${expectedZone}`);
   }
-  const subjectDid = opts?.subjectDid ?? fm.subject_did;
   const body = markdown.slice(fmMatch[0].length);
 
   const sections: Section[] = [];
   const sectionChunks = body.split(/(?=^# )/m).filter((c) => c.trim());
   for (const chunk of sectionChunks) {
-    const header = chunk.match(/^# (.+?) <!-- (sec_[a-z0-9_-]+) -->\s*\n/);
-    if (!header) continue;
+    const header = chunk.match(
+      /^# (.+?) <!-- (sec_[a-z0-9_-]+) · (gamma_[0-9A-Z]+) -->\s*\n/,
+    );
+    if (!header) {
+      throw new Error(
+        `Zone markdown: section heading missing section id / gamma_ref anchor; ` +
+          `expected "# <title> <!-- sec_xxx · gamma_xxx -->"`,
+      );
+    }
     const title = header[1].trim();
     const id = header[2];
-    const rest = chunk.slice(header[0].length);
+    const gammaRef = header[3];
+    let rest = chunk.slice(header[0].length);
 
-    // Optional tags comment on its own line right after heading
+    // Optional tags comment on its own line right after heading.
     let tags: string[] | undefined;
     const tagsMatch = rest.match(/^<!-- tags:\s*(\[.*?\])\s*-->\s*\n/);
-    let revisionsStart = 0;
     if (tagsMatch) {
       try {
         tags = JSON.parse(tagsMatch[1]);
       } catch {
         /* ignore malformed tags */
       }
-      revisionsStart = tagsMatch[0].length;
+      rest = rest.slice(tagsMatch[0].length);
     }
 
-    // Revisions are delimited by <!-- rev N · ... --> lines.
-    const revBlob = rest.slice(revisionsStart);
-    const revisions: Revision[] = [];
-    const revRegex = /<!-- rev (\d+) · ([^>]+?) -->\s*\n([\s\S]*?)(?=(?:<!-- rev \d+ · )|$)/g;
-    let rm: RegExpExecArray | null;
-    while ((rm = revRegex.exec(revBlob)) !== null) {
-      const revNum = parseInt(rm[1], 10);
-      const metaStr = rm[2];
-      const bodyText = rm[3].trim();
+    // Everything that remains (trimmed) is the section body.
+    const sectionBody = rest.replace(/^\n+/, "").replace(/\s+$/, "");
 
-      const meta: Record<string, string> = {};
-      for (const kv of metaStr.split("·").map((s) => s.trim())) {
-        const idx = kv.indexOf(":");
-        if (idx > 0) meta[kv.slice(0, idx).trim()] = kv.slice(idx + 1).trim();
-      }
-
-      const sigFile = sigFiles[id];
-      if (!sigFile) {
-        throw new Error(`signatures/${id}.json not found; cannot round-trip section ${id}`);
-      }
-      const sigEntry = sigFile.revisions.find((r) => r.revision === revNum);
-      if (!sigEntry) {
-        throw new Error(`signatures/${id}.json has no entry for revision ${revNum}`);
-      }
-
-      const key = meta.authorized_by
-        ? (opts?.resolveMandateGranteePubkey
-            ? opts.resolveMandateGranteePubkey(meta.authorized_by)
-            : "delegate")
-        : `${subjectDid}#${expectedZone}`;
-
-      const rev: Revision = {
-        revision: revNum,
-        at: meta.at,
-        body: bodyText,
-        prev_hash: meta.prev ?? null,
-        hash: meta.hash,
-        signature: {
-          alg: "ed25519",
-          key,
-          value: sigEntry.signature_value,
-        },
-        ...(meta.authorized_by ? { authorized_by: meta.authorized_by } : {}),
-      };
-      revisions.push(rev);
-    }
-
-    sections.push({ id, title, revisions, ...(tags ? { tags } : {}) });
+    sections.push({
+      id,
+      title,
+      body: sectionBody,
+      gamma_ref: gammaRef,
+      ...(tags ? { tags } : {}),
+    });
   }
 
   return { sections };
-}
-
-/** Resolve a mandate id to its grantee pubkey multibase by loading the mandate file. */
-export function defaultMandateResolver(mandateId: string): string {
-  const m = loadMandate(mandateId);
-  if (!m.grantee.pubkey) {
-    throw new Error(`Mandate ${mandateId} has no grantee.pubkey — cannot verify delegate signature`);
-  }
-  return m.grantee.pubkey;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -748,7 +643,6 @@ export function subjectHandleFromManifest(m: Manifest): string {
 }
 
 export function loadZoneDoc(handle: string, zone: Sphere, identity?: Identity, manifest?: Manifest): ZoneDoc {
-  const sigFiles = loadAllSignatureFiles(handle);
   const bodyPath = ethosZoneFile(handle, zone);
   if (!existsSync(bodyPath)) return { sections: [] };
 
@@ -765,19 +659,7 @@ export function loadZoneDoc(handle: string, zone: Sphere, identity?: Identity, m
     if (!zm.cipher) throw new Error(`Manifest missing cipher for ${zone}`);
     plaintext = decryptZone(new Uint8Array(ct), zm.cipher, m.bundle_id, recipient.did, recipient.x25519Secret);
   }
-  return parseZoneMarkdown(plaintext, sigFiles, zone, {
-    subjectDid: m.subject_did,
-    resolveMandateGranteePubkey: defaultMandateResolver,
-  });
-}
-
-export function loadAllSignatureFiles(handle: string): Record<string, SignaturesFile> {
-  const out: Record<string, SignaturesFile> = {};
-  for (const fn of listSignatureFiles(handle)) {
-    const f = readJson<SignaturesFile>(join(ethosSignaturesDir(handle), fn));
-    out[f.section_id] = f;
-  }
-  return out;
+  return parseZoneMarkdown(plaintext, zone);
 }
 
 export function writeZoneToDisk(
@@ -856,12 +738,13 @@ export function persistEdition(
   const supersedes = prevManifest ? prevManifest.bundle_id : null;
 
   // Snapshot gamma log state into the manifest so the signature commits to
-  // the current head. `gamma` is omitted entirely when the log is absent on
-  // disk, keeping pre-gamma manifests byte-identical.
+  // the current head. In v0.2.0 the log IS the history; an ethos with any
+  // section necessarily has a non-empty log. The anchor is omitted only
+  // when the log is empty (fresh identity with no sections yet).
   const gammaAnchor = safeReadGammaAnchor(handle, identity);
 
   const unsigned: Manifest = {
-    aithos: "0.1.0",
+    aithos: AITHOS_VERSION,
     bundle_id: bundleId,
     subject_did: subjectDid,
     subject_handle: handle,
@@ -925,8 +808,20 @@ function safeReadGammaAnchor(handle: string, identity: Identity): GammaManifestA
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Section / revision manipulation                                           */
+/*  Section mutation — gamma-backed (spec §10)                                */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Shared shape for delegate-signer args across add / modify / delete.
+ * A delegate is an agent's Ed25519 keypair authorized by a write mandate
+ * (`ethos.write.<zone>`). The mandate's grantee.pubkey MUST equal
+ * `keyMultibase`; the seed is used to sign the gamma entry directly.
+ */
+export interface DelegateSigner {
+  mandateId: string;
+  keySeed: Uint8Array;
+  keyMultibase: string;
+}
 
 export interface AddSectionArgs {
   handle: string;
@@ -935,68 +830,34 @@ export interface AddSectionArgs {
   title: string;
   body: string;
   tags?: string[];
-  /**
-   * If set, sign the initial revision via a delegate key authorized by a
-   * write mandate. Otherwise sign directly with the zone's sphere key.
-   */
-  delegate?: {
-    mandateId: string;
-    keySeed: Uint8Array;
-    keyMultibase: string; // must match mandate.grantee.pubkey
-  };
+  delegate?: DelegateSigner;
   at?: Date;
 }
 
+/**
+ * Append a new section to a zone.
+ *
+ * Flow:
+ *   1. Emit a signed `section.add` gamma entry carrying the full title/body/tags.
+ *   2. Use that entry's id as the section's `gamma_ref`.
+ *   3. Add the section to the in-memory zone doc and persist a new edition.
+ *
+ * The gamma entry is appended FIRST so the edition's signed manifest already
+ * commits to the updated `gamma.head` (spec §10.3.5). A crash between steps
+ * 2 and 3 leaves the log ahead of the live doc — the next edition will
+ * catch up.
+ */
 export function addSection(
   args: AddSectionArgs,
 ): { section: Section; manifest: Manifest; gammaEntry: GammaEntry } {
   const zones = loadAllZones(args.handle, args.identity);
   const sectionId = newSectionId();
-  while (zones[args.zone].sections.some((s) => s.id === sectionId)) {
-    // defend against absurd collisions
+  if (zones[args.zone].sections.some((s) => s.id === sectionId)) {
     throw new Error("Section id collision, try again");
   }
 
   const at = args.at ?? new Date();
-  const atIso = at.toISOString();
 
-  const first: Revision = buildRevision({
-    revisionNumber: 1,
-    at: atIso,
-    body: args.body,
-    prevHash: null,
-    zone: args.zone,
-    identity: args.identity,
-    delegate: args.delegate,
-  });
-
-  const section: Section = {
-    id: sectionId,
-    title: args.title,
-    revisions: [first],
-    ...(args.tags && args.tags.length > 0 ? { tags: args.tags } : {}),
-  };
-
-  zones[args.zone].sections.push(section);
-
-  // Write sig file
-  const sigFile: SignaturesFile = {
-    aithos: "0.1.0",
-    section_id: sectionId,
-    zone: args.zone,
-    revisions: [
-      {
-        revision: 1,
-        hash: first.hash,
-        signature_value: first.signature.value,
-      },
-    ],
-  };
-  writeSignaturesFile(args.handle, sigFile);
-
-  // Emit a `section.add` gamma entry. We do this before `persistEdition` so
-  // the new edition's manifest (via `safeReadGammaAnchor`) already commits to
-  // the freshly-appended head.
   const gammaSigner: GammaSigner = args.delegate
     ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
     : sphereGammaSigner(args.identity, args.zone);
@@ -1017,62 +878,109 @@ export function addSection(
   });
   appendGammaEntry(args.handle, args.identity, gammaEntry);
 
+  const section: Section = {
+    id: sectionId,
+    title: args.title,
+    body: args.body,
+    gamma_ref: gammaEntry.id,
+    ...(args.tags && args.tags.length > 0 ? { tags: args.tags } : {}),
+  };
+  zones[args.zone].sections.push(section);
+
   const manifest = persistEdition(args.handle, args.identity, zones, { now: at });
   return { section, manifest, gammaEntry };
 }
 
-export interface AddRevisionArgs {
+/* -------------------------------------------------------------------------- */
+/*  Section modification — replaces add-revision in v0.2.0                    */
+/* -------------------------------------------------------------------------- */
+
+export interface ModifySectionArgs {
   handle: string;
   identity: Identity;
   zone: Sphere;
   sectionId: string;
-  body: string;
-  delegate?: {
-    mandateId: string;
-    keySeed: Uint8Array;
-    keyMultibase: string;
-  };
+  /** New title. Omit to keep the existing title. */
+  title?: string;
+  /** New body. Omit to keep the existing body. */
+  body?: string;
+  /**
+   * New tag set. Omit to keep existing tags. To CLEAR tags, pass [].
+   * Any array (including []) is treated as the authoritative replacement.
+   */
+  tags?: string[];
+  delegate?: DelegateSigner;
   at?: Date;
 }
 
-export function addRevision(args: AddRevisionArgs): { revision: Revision; manifest: Manifest } {
+/**
+ * Apply an in-place modification to a section.
+ *
+ * Semantics (spec §10.6.1, option (a)):
+ *   - The payload of the emitted `section.modify` entry carries the FULL
+ *     new value of each field being changed — not a diff. Readers replay
+ *     the log by applying each payload as a straight replacement.
+ *   - At least one of {title, body, tags} MUST be provided.
+ *   - The section's `gamma_ref` is updated to point at the new entry.
+ *
+ * The prior `section.add` (and any earlier `section.modify` entries) remain
+ * immutable in the log — that's the audit trail.
+ */
+export function modifySection(
+  args: ModifySectionArgs,
+): { section: Section; manifest: Manifest; gammaEntry: GammaEntry } {
+  if (args.title === undefined && args.body === undefined && args.tags === undefined) {
+    throw new Error("modifySection: must set at least one of {title, body, tags}");
+  }
+
   const zones = loadAllZones(args.handle, args.identity);
   const section = zones[args.zone].sections.find((s) => s.id === args.sectionId);
-  if (!section) throw new Error(`Section ${args.sectionId} not found in ${args.zone}`);
-  const prev = section.revisions[section.revisions.length - 1];
-
-  const atIso = (args.at ?? new Date()).toISOString();
-  if (new Date(atIso).getTime() <= new Date(prev.at).getTime()) {
-    throw new Error(
-      `New revision 'at' (${atIso}) must be strictly after previous revision's 'at' (${prev.at})`,
-    );
+  if (!section) {
+    throw new Error(`Section ${args.sectionId} not found in zone ${args.zone}`);
   }
 
-  const rev = buildRevision({
-    revisionNumber: prev.revision + 1,
-    at: atIso,
-    body: args.body,
-    prevHash: prev.hash,
+  const at = args.at ?? new Date();
+
+  // Build payload containing only the fields that actually change. This
+  // keeps the signed record honest: readers can see at a glance which
+  // fields the writer intended to replace.
+  const payload: Record<string, unknown> = {};
+  if (args.title !== undefined) payload.title = args.title;
+  if (args.body !== undefined) payload.body = args.body;
+  if (args.tags !== undefined) payload.tags = args.tags;
+
+  const existingLog = readGammaLog(args.handle, args.identity);
+  const priorOnSection = latestGammaForSection(existingLog, args.sectionId);
+
+  const gammaSigner: GammaSigner = args.delegate
+    ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
+    : sphereGammaSigner(args.identity, args.zone);
+  const prevGammaHash = gammaHead(args.handle, args.identity);
+
+  const gammaEntry = buildGammaEntry({
+    subjectDid: rootDid(args.identity),
     zone: args.zone,
-    identity: args.identity,
-    delegate: args.delegate,
+    op: "section.modify",
+    target: { section_id: args.sectionId },
+    payload,
+    prevGammaHash,
+    ...(priorOnSection ? { prevSectionGamma: priorOnSection.id } : {}),
+    signer: gammaSigner,
+    at,
   });
-  section.revisions.push(rev);
+  appendGammaEntry(args.handle, args.identity, gammaEntry);
 
-  // Update sig file
-  let sigFile = readSignaturesFile(args.handle, args.sectionId);
-  if (!sigFile) {
-    sigFile = { aithos: "0.1.0", section_id: args.sectionId, zone: args.zone, revisions: [] };
+  // Apply the change to the in-memory section.
+  if (args.title !== undefined) section.title = args.title;
+  if (args.body !== undefined) section.body = args.body;
+  if (args.tags !== undefined) {
+    if (args.tags.length === 0) delete section.tags;
+    else section.tags = args.tags;
   }
-  sigFile.revisions.push({
-    revision: rev.revision,
-    hash: rev.hash,
-    signature_value: rev.signature.value,
-  });
-  writeSignaturesFile(args.handle, sigFile);
+  section.gamma_ref = gammaEntry.id;
 
-  const manifest = persistEdition(args.handle, args.identity, zones);
-  return { revision: rev, manifest };
+  const manifest = persistEdition(args.handle, args.identity, zones, { now: at });
+  return { section, manifest, gammaEntry };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1086,12 +994,7 @@ export interface DeleteSectionArgs {
   sectionId: string;
   /** Free-text reason; stored in the gamma entry payload for audit. */
   reason?: string;
-  /** Delegate signer (same shape as addSection.delegate). */
-  delegate?: {
-    mandateId: string;
-    keySeed: Uint8Array;
-    keyMultibase: string;
-  };
+  delegate?: DelegateSigner;
   at?: Date;
 }
 
@@ -1102,7 +1005,6 @@ export interface DeleteSectionArgs {
  * After this call:
  *   - the current edition no longer contains the section (pack/install sees
  *     it as if it never existed in the live doc),
- *   - the signatures/<section_id>.json file is deleted,
  *   - the gamma log retains the original `section.add` entry AND a new
  *     `section.delete` entry, both signed and hash-chained,
  *   - `manifest.gamma.head` is updated to the new delete entry's hash.
@@ -1123,14 +1025,6 @@ export function deleteSection(
   }
   const deleted = zone.sections[idx];
   zone.sections.splice(idx, 1);
-
-  // Remove the side signatures file (best-effort: ignore if already gone).
-  const sigPath = join(ethosSignaturesDir(args.handle), `${args.sectionId}.json`);
-  try {
-    if (existsSync(sigPath)) unlinkSync(sigPath);
-  } catch {
-    /* ignore — filesystem quirk, will be overwritten on next edition */
-  }
 
   // Build the gamma entry. `prev_section_gamma` points at the most recent
   // gamma entry for this section (usually its own add, but could be a prior
@@ -1163,38 +1057,6 @@ export function deleteSection(
   return { manifest, gammaEntry, deletedTitle: deleted.title };
 }
 
-function buildRevision(params: {
-  revisionNumber: number;
-  at: string;
-  body: string;
-  prevHash: string | null;
-  zone: Sphere;
-  identity: Identity;
-  delegate?: { mandateId: string; keySeed: Uint8Array; keyMultibase: string };
-}): Revision {
-  const sphereKeyUrl = sphereDidUrl(params.identity, params.zone);
-  const base: Revision = {
-    revision: params.revisionNumber,
-    at: params.at,
-    body: params.body,
-    prev_hash: params.prevHash,
-    hash: "",
-    signature: {
-      alg: "ed25519",
-      key: params.delegate ? params.delegate.keyMultibase : sphereKeyUrl,
-      value: "",
-    },
-    ...(params.delegate ? { authorized_by: params.delegate.mandateId } : {}),
-  };
-  base.hash = computeRevisionHash(base);
-  const toSign = signRevisionBytes(base);
-  const sig = params.delegate
-    ? ed.sign(toSign, params.delegate.keySeed)
-    : signWithSphere(params.identity, params.zone, toSign);
-  base.signature.value = base64url(sig);
-  return base;
-}
-
 export function loadAllZones(handle: string, identity: Identity): Zones {
   return {
     public: loadZoneDoc(handle, "public", identity),
@@ -1204,7 +1066,7 @@ export function loadAllZones(handle: string, identity: Identity): Zones {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Verification (spec §3.8 + §2.5.4.2)                                       */
+/*  Verification (spec §3.8 + §10.7)                                          */
 /* -------------------------------------------------------------------------- */
 
 export interface VerifyEthosResult {
@@ -1213,6 +1075,26 @@ export interface VerifyEthosResult {
   warnings: string[];
 }
 
+/**
+ * Verify an installed ethos.
+ *
+ * In v0.2.0 the history of a section lives in the gamma log, not in the
+ * live document. So section-level integrity has two layers:
+ *
+ *   - **Live view**: the rendered zone markdown must hash to the value
+ *     declared in the manifest, and every section in the live doc must
+ *     name a `gamma_ref` that exists in the gamma log with a matching
+ *     section id.
+ *   - **Mutation history**: the gamma log must be self-consistent (every
+ *     entry's hash/signature verifies, every link chains to the previous
+ *     entry's hash) and the manifest's `gamma.head` / `gamma.count` must
+ *     agree with the log's actual tail.
+ *
+ * The deeper gamma-log walk (per-entry signature + chain) is performed by
+ * `verifyGammaLog` from `gamma.ts`; this function only checks the light
+ * anchor-vs-log consistency required by spec §10.7 (light tier). The CLI
+ * wires in the full walk separately.
+ */
 export function verifyEthos(
   handle: string,
   identity: Identity | null,
@@ -1223,10 +1105,12 @@ export function verifyEthos(
 
   const manifest = readManifest(handle);
 
-  // Check 2: manifest structural validity (light)
-  if (manifest.aithos !== "0.1.0") errors.push(`manifest.aithos is not 0.1.0`);
+  // Check 2: manifest structural validity (light).
+  if (manifest.aithos !== AITHOS_VERSION) {
+    errors.push(`manifest.aithos is not ${AITHOS_VERSION}`);
+  }
 
-  // Check 3+4: did.json
+  // Check 3+4: did.json.
   const didPath = join(ethosDir(handle), "did.json");
   if (!existsSync(didPath)) {
     errors.push("did.json snapshot missing from ethos/");
@@ -1238,19 +1122,20 @@ export function verifyEthos(
     }
   }
 
-  // Check 6: manifest signature
+  // Check 6: manifest signature.
   const manSig = verifyManifestSignature(manifest, didDoc);
   if (!manSig.ok) errors.push(manSig.error ?? "manifest signature failed");
 
-  // Check 5 + 7: zone integrity + section chain
+  // Collect gamma_refs we've seen in the live doc so we can cross-check
+  // against the log below.
+  const seenGammaRefs = new Set<string>();
+
+  // Check 5 + 7: zone integrity (plaintext hash, zone signature, titles).
   for (const z of SPHERE_FRAGMENTS) {
     const zm = manifest.zones[z];
     const loaded = safeLoadZone(handle, z, identity, manifest, errors);
     if (!loaded.doc) continue;
     if (loaded.skipped) {
-      // Encrypted zone with no key available — verify what we can from the
-      // public data (ciphertext hash, if we want later) but skip everything
-      // that requires plaintext. Record it as a warning, not an error.
       warnings.push(
         `zone ${z}: skipped content checks (encrypted, no sphere key available) — manifest declares ${zm.section_titles.length} section(s)`,
       );
@@ -1258,54 +1143,77 @@ export function verifyEthos(
     }
     const doc = loaded.doc;
 
-    // 5: plaintext hash
+    // 5: plaintext hash.
     const md = renderZoneMarkdownFromDoc(z, doc, manifest);
     const hex = Buffer.from(sha256fn(new TextEncoder().encode(md))).toString("hex");
     if (hex !== zm.sha256_of_plaintext) {
       errors.push(`zone ${z}: sha256_of_plaintext mismatch (rendered=${hex} manifest=${zm.sha256_of_plaintext})`);
     }
 
-    // section_titles consistency
+    // section_titles consistency.
     const actualTitles = doc.sections.map((s) => s.title);
     if (JSON.stringify(actualTitles) !== JSON.stringify(zm.section_titles)) {
       errors.push(`zone ${z}: section_titles mismatch`);
     }
 
-    // zone signature
+    // Zone signature.
     const zs = verifyZoneSignature(doc, zm.signature, didDoc);
     if (!zs.ok) errors.push(`zone ${z}: ${zs.error}`);
 
-    // section hash chains
+    // Every section must name a gamma_ref.
     for (const sec of doc.sections) {
-      const res = verifySectionChain(sec, z, didDoc, manifest);
-      for (const e of res.errors) errors.push(`zone ${z} section ${sec.id}: ${e}`);
-      for (const w of res.warnings) warnings.push(`zone ${z} section ${sec.id}: ${w}`);
-    }
-
-    // signatures/<sec>.json agreement
-    for (const sec of doc.sections) {
-      const sigFile = readSignaturesFile(handle, sec.id);
-      if (!sigFile) {
-        errors.push(`zone ${z} section ${sec.id}: signatures/${sec.id}.json missing`);
+      if (!sec.gamma_ref) {
+        errors.push(`zone ${z} section ${sec.id}: missing gamma_ref`);
         continue;
       }
-      if (sigFile.zone !== z) {
-        errors.push(`zone ${z} section ${sec.id}: sig file records zone=${sigFile.zone}`);
-      }
-      for (const r of sec.revisions) {
-        const entry = sigFile.revisions.find((e) => e.revision === r.revision);
-        if (!entry) {
-          errors.push(`section ${sec.id} rev ${r.revision}: no entry in signatures side-file`);
-        } else if (entry.hash !== r.hash) {
-          errors.push(`section ${sec.id} rev ${r.revision}: hash mismatch between chain and sig file`);
-        } else if (entry.signature_value !== r.signature.value) {
-          errors.push(`section ${sec.id} rev ${r.revision}: signature_value mismatch`);
-        }
-      }
+      seenGammaRefs.add(sec.gamma_ref);
     }
   }
 
-  // Check 8: edition chain self-consistency
+  // Check: gamma anchor consistency (spec §10.7 light tier).
+  //
+  // When the subject keys are available we walk the log and confirm head +
+  // count. Otherwise we note the anchor but cannot verify it.
+  if (identity) {
+    try {
+      const entries = readGammaLog(handle, identity);
+      if (manifest.gamma) {
+        if (manifest.gamma.count !== entries.length) {
+          errors.push(
+            `gamma.count mismatch: manifest=${manifest.gamma.count} log=${entries.length}`,
+          );
+        }
+        const tailHash = entries.length === 0 ? null : entries[entries.length - 1].hash;
+        if (manifest.gamma.head !== tailHash) {
+          errors.push(
+            `gamma.head mismatch: manifest=${manifest.gamma.head ?? "null"} log=${tailHash ?? "null"}`,
+          );
+        }
+      } else if (entries.length > 0) {
+        errors.push(
+          `gamma log has ${entries.length} entr${entries.length === 1 ? "y" : "ies"} but manifest omits the gamma anchor`,
+        );
+      }
+
+      // Every section's gamma_ref must exist in the log.
+      if (seenGammaRefs.size > 0) {
+        const ids = new Set(entries.map((e) => e.id));
+        for (const ref of seenGammaRefs) {
+          if (!ids.has(ref)) {
+            errors.push(`section gamma_ref ${ref} not found in gamma log`);
+          }
+        }
+      }
+    } catch (e) {
+      errors.push(`gamma log: failed to read (${(e as Error).message})`);
+    }
+  } else if (manifest.gamma) {
+    warnings.push(
+      `gamma anchor present (head=${manifest.gamma.head ?? "null"}, count=${manifest.gamma.count}) but no identity key available to verify the log`,
+    );
+  }
+
+  // Check 8: edition chain self-consistency.
   if (manifest.edition.height < 1) errors.push("edition.height must be >= 1");
   if ((manifest.edition.prev_hash === null) !== (manifest.edition.supersedes === null)) {
     errors.push("edition.prev_hash must be null iff edition.supersedes is null");
@@ -1362,120 +1270,7 @@ function renderZoneMarkdownFromDoc(zone: Sphere, doc: ZoneDoc, m: Manifest): str
   });
 }
 
-export function verifySectionChain(
-  section: Section,
-  zone: Sphere,
-  didDoc: DidDocument,
-  manifest: Manifest,
-): { errors: string[]; warnings: string[] } {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-  const revs = section.revisions;
-  if (revs.length === 0) return { errors: ["section has no revisions"], warnings };
-
-  const expectedSphereKey = `${didDoc.id}#${zone}`;
-
-  for (let i = 0; i < revs.length; i++) {
-    const r = revs[i];
-    if (r.revision !== i + 1) errors.push(`rev ${i + 1}: expected revision=${i + 1} got ${r.revision}`);
-
-    // prev_hash
-    if (i === 0) {
-      if (r.prev_hash !== null) errors.push(`rev 1: prev_hash must be null`);
-    } else {
-      const prev = revs[i - 1];
-      if (r.prev_hash !== prev.hash) errors.push(`rev ${r.revision}: prev_hash does not link`);
-      if (new Date(r.at).getTime() <= new Date(prev.at).getTime()) {
-        errors.push(`rev ${r.revision}: 'at' not strictly after previous`);
-      }
-    }
-
-    // Re-compute hash
-    const expectedHash = computeRevisionHash(r);
-    if (expectedHash !== r.hash) errors.push(`rev ${r.revision}: hash does not match computed value`);
-
-    // Resolve the verification public key.
-    let pk: Uint8Array;
-    if (r.authorized_by) {
-      // Delegated: signature.key is the multibase of the delegate key, which
-      // must also match mandate.grantee.pubkey (enforced at write time, and
-      // re-checkable by cross-referencing the mandate file).
-      try {
-        pk = multibaseToEd25519PublicKey(r.signature.key);
-      } catch (e) {
-        errors.push(`rev ${r.revision}: bad delegate multibase "${r.signature.key}" (${(e as Error).message})`);
-        continue;
-      }
-    } else {
-      if (r.signature.key !== expectedSphereKey) {
-        errors.push(`rev ${r.revision}: signature.key ${r.signature.key} does not match ${expectedSphereKey}`);
-        continue;
-      }
-      const vm = didDoc.verificationMethod.find((v) => v.id === expectedSphereKey);
-      if (!vm) {
-        errors.push(`rev ${r.revision}: DID doc has no verificationMethod ${expectedSphereKey}`);
-        continue;
-      }
-      pk = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
-    }
-
-    // Signature check.
-    const bytes = signRevisionBytes(r);
-    const sig = base64urlDecode(r.signature.value);
-    if (!ed.verify(sig, bytes, pk)) {
-      errors.push(`rev ${r.revision}: signature failed to verify`);
-    }
-
-    // R8 — Prospective-revocation invariant (spec §3.8 check 7.5).
-    //
-    // Revocation does NOT retroactively invalidate past revisions: a revision
-    // signed while the mandate was still valid remains valid forever (the
-    // hash-chain is append-only). But a revision whose `at` is ≥ the
-    // mandate's revoked_at means the writer either ignored the revocation or
-    // forged a timestamp — that breaks the protocol and IS an error.
-    //
-    // Not-before / not-after are ALSO append-only invariants here: a
-    // delegated signature outside the mandate's validity window is invalid,
-    // period.
-    if (r.authorized_by) {
-      try {
-        const m = loadMandate(r.authorized_by);
-        const atMs = new Date(r.at).getTime();
-        const nbMs = new Date(m.not_before).getTime();
-        const naMs = new Date(m.not_after).getTime();
-        if (atMs < nbMs) {
-          errors.push(
-            `rev ${r.revision}: signed at ${r.at} before mandate ${r.authorized_by} not_before=${m.not_before}`,
-          );
-        }
-        if (atMs >= naMs) {
-          errors.push(
-            `rev ${r.revision}: signed at ${r.at} after mandate ${r.authorized_by} not_after=${m.not_after}`,
-          );
-        }
-        const rev = findRevocation(r.authorized_by);
-        if (rev) {
-          const revokedMs = new Date(rev.revoked_at).getTime();
-          if (atMs >= revokedMs) {
-            errors.push(
-              `rev ${r.revision}: signed at ${r.at} after mandate ${r.authorized_by} was revoked at ${rev.revoked_at} (reason: ${rev.reason})`,
-            );
-          } else {
-            warnings.push(
-              `rev ${r.revision}: signed by mandate ${r.authorized_by} which has since been revoked at ${rev.revoked_at} (reason: ${rev.reason}). Revision remains valid (prospective revocation).`,
-            );
-          }
-        }
-      } catch (e) {
-        // Mandate file missing locally. Don't fail verification — the subject
-        // may have pruned their mandate archive or this is an imported bundle.
-        // Flag as a warning so auditors see it.
-        warnings.push(
-          `rev ${r.revision}: authorized_by=${r.authorized_by} but mandate file not found locally — cannot cross-check validity window or revocation status (${(e as Error).message})`,
-        );
-      }
-    }
-  }
-
-  return { errors, warnings };
-}
+// v0.1.0's `verifySectionChain` is gone. The revision chain no longer
+// exists in the live doc — history is held by the gamma log. See
+// `verifyGammaLog` in gamma.ts for the per-entry + chain walk, and
+// `verifyEthos` above for the light anchor-vs-log consistency check.

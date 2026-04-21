@@ -33,7 +33,7 @@ import { runRotate } from "./commands/rotate.js";
 import { runEthosInit } from "./commands/ethos-init.js";
 import { runEthosAddSection } from "./commands/ethos-add-section.js";
 import { runEthosDeleteSection } from "./commands/ethos-delete-section.js";
-import { runEthosAddRevision } from "./commands/ethos-add-revision.js";
+import { runEthosModifySection } from "./commands/ethos-modify-section.js";
 import { runEthosShow } from "./commands/ethos-show.js";
 import { runEthosList } from "./commands/ethos-list.js";
 import { runEthosVerify } from "./commands/ethos-verify.js";
@@ -212,24 +212,50 @@ ethos
   .action((opts) => wrap(() => runEthosDeleteSection({ zone: opts.zone, section: opts.section, reason: opts.reason, mandate: opts.mandate, agentKey: opts.agentKey, handle: opts.handle, json: opts.json })));
 
 ethos
-  .command("add-revision")
-  .description("Append a revision to an existing section (append-only)")
+  .command("modify-section")
+  .description(
+    "Apply an in-place modification to an existing section. " +
+      "Emits one signed section.modify entry in the gamma log carrying the " +
+      "full new value of each changed field; the previous state remains in " +
+      "the log as the audit trail (spec §10.6.1).",
+  )
   .requiredOption("--zone <zone>", "public | circle | self")
   .requiredOption("--section <id>", "Section id (sec_<hex>)")
-  .option("--body <markdown>", "Revision body (inline)")
-  .option("--body-file <path>", "Read body from file")
+  .option("--title <title>", "New title (omit to keep)")
+  .option("--body <markdown>", "New body, inline (omit to keep)")
+  .option("--body-file <path>", "Read new body from file")
+  .option("--tags <list>", "Comma-separated tag list (replaces existing tags)")
+  .option("--clear-tags", "Remove all tags")
   .option("--mandate <id>", "Write mandate authorizing a delegate key")
   .option("--agent-key <path>", "Agent keyfile (required with --mandate)")
   .option("--handle <h>", "Identity handle")
   .option("--json", "Output JSON")
-  .action((opts) => wrap(() => runEthosAddRevision({ zone: opts.zone, sectionId: opts.section, body: opts.body, bodyFile: opts.bodyFile, mandate: opts.mandate, agentKey: opts.agentKey, handle: opts.handle, json: opts.json })));
+  .action((opts) =>
+    wrap(() =>
+      runEthosModifySection({
+        zone: opts.zone,
+        sectionId: opts.section,
+        title: opts.title,
+        body: opts.body,
+        bodyFile: opts.bodyFile,
+        tags: opts.tags,
+        clearTags: opts.clearTags,
+        mandate: opts.mandate,
+        agentKey: opts.agentKey,
+        handle: opts.handle,
+        json: opts.json,
+      }),
+    ),
+  );
 
 ethos
   .command("show")
-  .description("Show manifest summary, or a zone/section's content")
+  .description(
+    "Show manifest summary, or a zone/section's current content. " +
+      "Section mutation history lives in the gamma log — see `aithos gamma show`.",
+  )
   .option("--zone <zone>", "public | circle | self")
   .option("--section <id>", "Section id")
-  .option("--revisions", "With --section, print every revision instead of the current body")
   .option("--handle <h>", "Identity handle")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runEthosShow(opts)));

@@ -1,11 +1,12 @@
 /**
  * `aithos ethos list sections` — list all sections of a zone with their id,
- * title, current revision, and last-updated timestamp.
+ * title, current gamma_ref, and the timestamp of the latest gamma entry
+ * affecting them.
  *
  * Output is a properly padded table with explicit column separators so that
- * IDs and revision numbers cannot visually collide (R3). A trailing
- * `[delegated]` marker is appended to rows whose latest revision was signed
- * via a write-mandate rather than directly by the sphere key (R7).
+ * IDs cannot visually collide (R3). A trailing `[delegated]` marker is
+ * appended to rows whose latest gamma entry was signed via a write-mandate
+ * rather than directly by the sphere key (R7).
  */
 
 import { existsSync } from "node:fs";
@@ -16,7 +17,11 @@ import {
   ethosDir,
   loadZoneDoc,
   readManifest,
+  readGammaLog,
+  latestGammaForSection,
   type Sphere,
+  type GammaEntry,
+  type Identity,
   loadConfig,
 } from "@aithos/protocol-core";
 
@@ -30,7 +35,7 @@ interface Row {
   zone: Sphere;
   id: string;
   title: string;
-  revision: number;
+  gamma_ref: string;
   at: string;
   delegated: boolean;
   mandateId?: string;
@@ -54,6 +59,11 @@ export function runEthosList(opts: EthosListOpts): void {
   const identity = tracked ? null : loadIdentity(handle);
   const manifest = readManifest(handle);
 
+  // Pull the gamma log once when we have the identity; we'll look up each
+  // section's latest entry from memory.
+  const gammaEntries: GammaEntry[] | null =
+    identity ? safeReadGamma(handle, identity) : null;
+
   const zones: Sphere[] = opts.zone ? [ensureZone(opts.zone)] : ["public", "circle", "self"];
 
   const rows: Row[] = [];
@@ -69,16 +79,20 @@ export function runEthosList(opts: EthosListOpts): void {
     try {
       const doc = loadZoneDoc(handle, z, identity ?? undefined, manifest);
       for (const s of doc.sections) {
-        const last = s.revisions[s.revisions.length - 1];
-        const delegated = !!last.authorized_by;
+        // Look up the gamma entry named by gamma_ref — it holds the canonical
+        // `at` timestamp and tells us whether the mutation was delegated.
+        const latest = gammaEntries
+          ? gammaEntries.find((e) => e.id === s.gamma_ref) ??
+            latestGammaForSection(gammaEntries, s.id)
+          : null;
         rows.push({
           zone: z,
           id: s.id,
           title: s.title,
-          revision: last.revision,
-          at: last.at,
-          delegated,
-          mandateId: last.authorized_by,
+          gamma_ref: s.gamma_ref,
+          at: latest?.at ?? "—",
+          delegated: !!latest?.authorized_by,
+          mandateId: latest?.authorized_by,
         });
       }
     } catch (e) {
@@ -109,17 +123,17 @@ export function runEthosList(opts: EthosListOpts): void {
   // Column widths. TITLE is unbounded (last column).
   const W_ZONE = 7;   // public | circle | self
   const W_ID = 16;    // sec_<12hex>
-  const W_REV = 4;    // rev number
-  const W_AT = 24;    // ISO 8601 with ms, e.g. 2026-04-19T07:42:40.863Z
+  const W_GAMMA = 32; // gamma_<26-char ULID>
+  const W_AT = 24;    // ISO 8601 with ms
 
   const pad = (s: string, n: number) => s.padEnd(n);
   const sep = " │ ";
 
-  const header = [pad("ZONE", W_ZONE), pad("ID", W_ID), pad("REV", W_REV), pad("UPDATED", W_AT), "TITLE"].join(sep);
+  const header = [pad("ZONE", W_ZONE), pad("ID", W_ID), pad("GAMMA_REF", W_GAMMA), pad("UPDATED", W_AT), "TITLE"].join(sep);
   const rule =
     "─".repeat(W_ZONE) + "─┼─" +
     "─".repeat(W_ID)   + "─┼─" +
-    "─".repeat(W_REV)  + "─┼─" +
+    "─".repeat(W_GAMMA)+ "─┼─" +
     "─".repeat(W_AT)   + "─┼─" +
     "─".repeat(5);
 
@@ -132,7 +146,7 @@ export function runEthosList(opts: EthosListOpts): void {
         [
           pad(r.zone, W_ZONE),
           pad(r.id, W_ID),
-          pad(String(r.revision), W_REV),
+          pad(r.gamma_ref, W_GAMMA),
           pad(r.at, W_AT),
           titleCell,
         ].join(sep),
@@ -150,4 +164,14 @@ export function runEthosList(opts: EthosListOpts): void {
 function ensureZone(z: string): Sphere {
   if (z === "public" || z === "circle" || z === "self") return z;
   throw new Error(`Invalid --zone ${z}. Expected public | circle | self.`);
+}
+
+function safeReadGamma(handle: string, identity: Identity): GammaEntry[] | null {
+  try {
+    return readGammaLog(handle, identity);
+  } catch {
+    // Log may be absent on identities that predate v0.2.0 or that have zero
+    // sections yet. Treat as "no entries" rather than erroring the listing.
+    return null;
+  }
 }

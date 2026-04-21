@@ -29,7 +29,7 @@ export interface ResolvedWriteAuth {
   mandatePath: string;
   agentKey: AgentKeyFile;
   agentKeyPath: string;
-  /** Ready-to-use shape expected by ethos.addSection / addRevision. */
+  /** Ready-to-use shape expected by ethos.addSection / modifySection. */
   delegate: {
     mandateId: string;
     keySeed: Uint8Array;

@@ -11,17 +11,23 @@
  *   ├── public.md
  *   ├── circle.md.enc   (optional)
  *   ├── self.md.enc     (optional)
- *   ├── signatures/
- *   │   └── <section_id>.json
+ *   ├── gamma.jsonl.enc (optional — the sealed mutation log, spec §10)
  *   └── README.txt      (optional, informative)
  *
  * The entry point is {@link verifyBundleAtPath}, which performs the stateless
  * subset of spec §3.8 — everything that can be done without the subject's
  * sphere keys or the local keystore. See spec/09-local-store.md §9.4 for the
  * exact scope.
+ *
+ * In v0.2.0 the signatures/ side-files are gone: section mutation history
+ * lives in the gamma log, whose current tail is committed to by the
+ * manifest's `gamma.head` / `gamma.count` anchor (spec §10.7). The stateless
+ * bundle check therefore verifies the *shape* of the anchor and — if the
+ * log file is present in the bundle — its advertised byte length; it cannot
+ * decrypt the log without the subject's sphere keys.
  */
 
-import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { statSync } from "node:fs";
@@ -29,15 +35,14 @@ import { sha256 as sha256fn } from "@noble/hashes/sha256";
 import AdmZip from "adm-zip";
 
 import {
+  AITHOS_VERSION,
   type Manifest,
-  type SignaturesFile,
   type VerifyEthosResult,
   verifyManifestSignature,
   verifyZoneSignature,
   parseZoneMarkdown,
   renderZoneMarkdown,
   canonicalManifestHashHex,
-  verifySectionChain,
 } from "./ethos.js";
 import { type DidDocument, verifyDidDocument } from "./identity.js";
 import { SPHERE_FRAGMENTS, type Sphere } from "./did.js";
@@ -147,7 +152,9 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
       zones_skipped: zonesSkipped,
     };
   }
-  if (manifest.aithos !== "0.1.0") errors.push(`manifest.aithos is not 0.1.0`);
+  if (manifest.aithos !== AITHOS_VERSION) {
+    errors.push(`manifest.aithos is not ${AITHOS_VERSION}`);
+  }
 
   // Check 3: did.json parses + root signature verifies.
   let didDoc: DidDocument;
@@ -183,22 +190,6 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
   const manSig = verifyManifestSignature(manifest, didDoc);
   if (!manSig.ok) errors.push(manSig.error ?? "manifest signature failed");
 
-  // Signatures side-files — read all under signatures/ so parseZoneMarkdown
-  // can consume them.
-  const sigDir = join(dir, "signatures");
-  const sigFiles: Record<string, SignaturesFile> = {};
-  if (existsSync(sigDir)) {
-    for (const fn of readdirSync(sigDir)) {
-      if (!fn.endsWith(".json")) continue;
-      try {
-        const sf = JSON.parse(readFileSync(join(sigDir, fn), "utf8")) as SignaturesFile;
-        sigFiles[sf.section_id] = sf;
-      } catch (e) {
-        warnings.push(`signatures/${fn}: unparseable (${(e as Error).message})`);
-      }
-    }
-  }
-
   // Per-zone checks (5, 7).
   for (const z of SPHERE_FRAGMENTS) {
     const zm = manifest.zones[z];
@@ -219,7 +210,7 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
       continue;
     }
 
-    // Plaintext zone (public). Read, parse, hash, verify zone signature, chains.
+    // Plaintext zone (public). Read, parse, hash, verify zone signature.
     const zonePath = join(dir, "public.md");
     if (!existsSync(zonePath)) {
       errors.push(`zone ${z}: public.md missing`);
@@ -229,7 +220,7 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
 
     let doc;
     try {
-      doc = parseZoneMarkdown(markdown, sigFiles, z, { subjectDid: manifest.subject_did });
+      doc = parseZoneMarkdown(markdown, z);
     } catch (e) {
       errors.push(`zone ${z}: failed to parse (${(e as Error).message})`);
       continue;
@@ -261,31 +252,68 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
     const zs = verifyZoneSignature(doc, zm.signature, didDoc);
     if (!zs.ok) errors.push(`zone ${z}: ${zs.error}`);
 
-    // Section hash chain + per-revision signatures (§2.5.4.2).
+    // Every live section must carry a gamma_ref — the signed gamma entry
+    // that produced the current state. We can't validate the target entry
+    // statelessly (the log is encrypted), but the manifest's gamma anchor
+    // pins its tail. That's checked below.
     for (const sec of doc.sections) {
-      const res = verifySectionChain(sec, z, didDoc, manifest);
-      for (const e of res.errors) errors.push(`zone ${z} section ${sec.id}: ${e}`);
-      for (const w of res.warnings) warnings.push(`zone ${z} section ${sec.id}: ${w}`);
+      if (!sec.gamma_ref) {
+        errors.push(`zone ${z} section ${sec.id}: missing gamma_ref`);
+      }
+    }
+  }
 
-      // signatures/<sec>.json agreement.
-      const sigFile = sigFiles[sec.id];
-      if (!sigFile) {
-        errors.push(`zone ${z} section ${sec.id}: signatures/${sec.id}.json missing`);
-        continue;
+  // Gamma anchor shape (stateless — no decryption).
+  //
+  // Spec §10.7: the signed manifest commits to the log's current tail via
+  // `gamma.head` + `gamma.count`. We can't open the sealed .jsonl.enc without
+  // sphere keys, but we can at least assert:
+  //   - the anchor is internally consistent (head null iff count 0),
+  //   - if the bundle ships the log file, its byte length is nonzero when
+  //     count > 0, and the file is absent when count == 0.
+  if (manifest.gamma) {
+    const { head, count } = manifest.gamma;
+    if (count < 0 || !Number.isInteger(count)) {
+      errors.push(`gamma.count must be a non-negative integer`);
+    }
+    if ((head === null) !== (count === 0)) {
+      errors.push(
+        `gamma anchor inconsistent: head=${head ?? "null"} but count=${count}`,
+      );
+    }
+    const logPath = join(dir, "gamma.jsonl.enc");
+    const hasLog = existsSync(logPath);
+    if (hasLog) {
+      const sz = statSync(logPath).size;
+      if (count === 0 && sz > 0) {
+        errors.push(
+          `gamma anchor declares count=0 but gamma.jsonl.enc is ${sz} bytes`,
+        );
       }
-      if (sigFile.zone !== z) {
-        errors.push(`zone ${z} section ${sec.id}: sig file records zone=${sigFile.zone}`);
+      if (count > 0 && sz === 0) {
+        errors.push(
+          `gamma anchor declares count=${count} but gamma.jsonl.enc is empty`,
+        );
       }
-      for (const r of sec.revisions) {
-        const entry = sigFile.revisions.find((e) => e.revision === r.revision);
-        if (!entry) {
-          errors.push(`section ${sec.id} rev ${r.revision}: no entry in signatures side-file`);
-        } else if (entry.hash !== r.hash) {
-          errors.push(`section ${sec.id} rev ${r.revision}: hash mismatch between chain and sig file`);
-        } else if (entry.signature_value !== r.signature.value) {
-          errors.push(`section ${sec.id} rev ${r.revision}: signature_value mismatch`);
-        }
-      }
+      warnings.push(
+        `gamma log present in bundle (${sz} bytes, sealed) — deep verification skipped (no sphere key)`,
+      );
+    } else if (count > 0) {
+      warnings.push(
+        `gamma anchor declares ${count} entr${count === 1 ? "y" : "ies"} (head=${head}) but gamma.jsonl.enc is not in the bundle — log verification deferred to subject`,
+      );
+    }
+  } else {
+    // No anchor. Allowed only for a completely empty-history ethos, i.e. no
+    // sections at all in any zone. But every section is born from a gamma
+    // entry, so if any zone has titles the anchor is required.
+    const anyTitles = SPHERE_FRAGMENTS.some(
+      (z) => (manifest.zones[z]?.section_titles?.length ?? 0) > 0,
+    );
+    if (anyTitles) {
+      errors.push(
+        `manifest has sections but no gamma anchor — every section must be born from a signed gamma entry (spec §10)`,
+      );
     }
   }
 
