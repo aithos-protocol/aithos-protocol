@@ -3,7 +3,7 @@
  * Aithos reference CLI entry point.
  *
  * The CLI is intentionally small. It covers exactly the primitives defined in
- * the v0.1.0 protocol:
+ * the v0.2.0 protocol:
  *
  *   aithos init          — create an identity, derive DID document
  *   aithos show          — print identity info
@@ -47,7 +47,7 @@ const program = new Command();
 program
   .name("aithos")
   .description("Aithos reference CLI — identities, mandates, signatures.")
-  .version("0.1.2");
+  .version("0.2.0");
 
 program
   .command("init")

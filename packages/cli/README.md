@@ -1,8 +1,8 @@
 # @aithos/cli
 
-Reference CLI for the Aithos protocol (v0.1.0).
+Reference CLI for the Aithos protocol (v0.2.0).
 
-This tool creates and manages Aithos identities, issues and revokes mandates, and verifies signed artifacts. It is a **reference implementation** — small, readable, pinned to the v0.1.0 spec. It is not hardened for production: seeds are stored as plaintext JSON files on disk, protected only by Unix permissions. See the security note at the bottom.
+This tool creates and manages Aithos identities, issues and revokes mandates, and verifies signed artifacts. It is a **reference implementation** — small, readable, pinned to the v0.2.0 spec. It is not hardened for production: seeds are stored as plaintext JSON files on disk, protected only by Unix permissions. See the security note at the bottom.
 
 ## Install
 
@@ -79,7 +79,8 @@ aithos rotate --sphere circle --reason key_compromise --yes
 | `rotate` | Rotate a sphere key — the kill-switch. Invalidates every mandate signed by the old key, including any you could not enumerate. |
 | `verify` | Verify a mandate, revocation, or action artifact. |
 | `sign-action` | Emit or counter-sign an action artifact (agent-side / subject-side). |
-| `ethos <sub>` | Manage the live ethos document — `init` (only needed after `init --no-ethos` or to reset), `add-section`, `add-revision`, `show`, `list`, `verify`, `pack`, `unpack`. |
+| `ethos <sub>` | Manage the live ethos document — `init` (only needed after `init --no-ethos` or to reset), `add-section`, `modify-section`, `delete-section`, `show`, `list`, `verify`, `pack`, `unpack`, `install`. |
+| `gamma <sub>` | Walk and verify the signed mutation log — `show`, `verify`. Every add/modify/delete is a signed entry here; the live ethos holds only the current state. |
 
 Run `aithos <cmd> --help` for per-command flags.
 
@@ -105,7 +106,7 @@ Run `aithos <cmd> --help` for per-command flags.
 
 ## Tracked identities (read-only)
 
-An identity directory that contains `did.json` and an `ethos/` folder but **no** `*.sealed.json` files is a **tracked** identity. You hold someone else's public material — enough to read their public zone and verify every signature they ever emitted — but you hold none of their private sphere keys, so you cannot decrypt the encrypted zones, sign mandates on their behalf, or append revisions to their ethos. This is the intended mode for subscribing to someone's published ethos.
+An identity directory that contains `did.json` and an `ethos/` folder but **no** `*.sealed.json` files is a **tracked** identity. You hold someone else's public material — enough to read their public zone and verify every signature they ever emitted — but you hold none of their private sphere keys, so you cannot decrypt the encrypted zones, sign mandates on their behalf, or record mutations to their ethos. This is the intended mode for subscribing to someone's published ethos.
 
 The CLI and the MCP server both auto-detect this state via `isTrackedIdentity(handle)` and downgrade gracefully rather than crashing when a sealed-seed file is missing:
 
@@ -120,9 +121,9 @@ Handle:         alice  [tracked — public data only]
 
 $ aithos ethos list --handle alice
 [handle=alice] [tracked] Ethos sections
-ZONE    │ ID               │ REV  │ UPDATED                  │ TITLE
-────────┼──────────────────┼──────┼──────────────────────────┼─────
-public  │ sec_9ae63416bf2a │ 1    │ 2026-04-19T11:11:10.864Z │ Public Bio
+ZONE    │ ID               │ GAMMA_REF                        │ UPDATED                  │ TITLE
+────────┼──────────────────┼──────────────────────────────────┼──────────────────────────┼─────
+public  │ sec_9ae63416bf2a │ gamma_01JG4X7R…                  │ 2026-04-19T11:11:10.864Z │ Public Bio
 
   (circle: encrypted — no sphere key (identity is tracked-only))
   (self: encrypted — no sphere key (identity is tracked-only))
@@ -133,25 +134,25 @@ $ aithos ethos verify --handle alice
   warning: zone self: skipped content checks (encrypted, no sphere key available) — manifest declares 1 section(s)
 ```
 
-Write operations (`ethos add-section`, `ethos add-revision`, `grant`, `rotate`, `revoke`, `sign-action`) refuse cleanly with a `TrackedIdentityError` that lists exactly which sealed seed files are missing. The encryption boundary is enforced by the protocol, not by the CLI: even if you manipulate the on-disk state, you cannot read circle/self ciphertext without the sphere's X25519 private key.
+Write operations (`ethos add-section`, `ethos modify-section`, `ethos delete-section`, `grant`, `rotate`, `revoke`, `sign-action`) refuse cleanly with a `TrackedIdentityError` that lists exactly which sealed seed files are missing. The encryption boundary is enforced by the protocol, not by the CLI: even if you manipulate the on-disk state, you cannot read circle/self ciphertext without the sphere's X25519 private key.
 
 ## Write mandates
 
-`ethos.write.{public,circle,self}` scopes authorize a **delegate key** — a separate Ed25519 keypair generated with `aithos delegate-key` — to append revisions to the named zone on the subject's behalf. The sphere key never leaves the primary device; it signs the mandate once, and the delegate key does the day-to-day signing. Revoking the mandate with the sphere key terminates the delegate's authority. Past revisions remain in the chain (append-only), but the subject MAY publish a redaction revision naming them by hash if they wish to repudiate.
+`ethos.write.{public,circle,self}` scopes authorize a **delegate key** — a separate Ed25519 keypair generated with `aithos delegate-key` — to record mutations to the named zone on the subject's behalf. The sphere key never leaves the primary device; it signs the mandate once, and the delegate key does the day-to-day signing of gamma entries. Revoking the mandate with the sphere key terminates the delegate's authority. Past gamma entries remain in the chain (append-only), but the subject MAY publish a follow-up gamma entry (a new modify-section or delete-section) if they wish to repudiate.
 
-See [spec §4.5.4](../spec/04-mandates.md#454-write-mandate-delegated-authoring) and [§2.5.4](../spec/02-ethos.md#254-revisions--the-per-section-hash-chain) for the full protocol semantics.
+See [spec §4.5.4](../../spec/04-mandates.md#454-write-mandate-delegated-authoring) and [§10](../../spec/10-gamma.md) for the full protocol semantics.
 
 ### Revocation is prospective
 
-Revoking a mandate terminates its authority going forward. Revisions that were signed *while the mandate was still valid* remain valid forever — the hash chain is append-only, and the integrity check treats those revisions as sound. `ethos verify` will emit an informational **warning** identifying revisions signed by a since-revoked mandate, but will not mark the ethos as failed. Conversely, a revision whose timestamp falls **on or after** the revocation timestamp — or outside the mandate's `not_before`/`not_after` window — is rejected by both the write path and `ethos verify`, because it violates the protocol invariant.
+Revoking a mandate terminates its authority going forward. Gamma entries that were signed *while the mandate was still valid* remain valid forever — the log is append-only, and the integrity check treats those entries as sound. `ethos verify` and `gamma verify` will emit an informational **warning** identifying entries signed by a since-revoked mandate, but will not mark the ethos as failed. Conversely, an entry whose timestamp falls **on or after** the revocation timestamp — or outside the mandate's `not_before`/`not_after` window — is rejected by both the write path and the verifiers, because it violates the protocol invariant.
 
-If a subject wants to repudiate what a revoked mandate wrote, they publish a follow-up redaction revision signed by their sphere key. The history is never rewritten.
+If a subject wants to repudiate what a revoked mandate wrote, they publish a follow-up gamma entry (modify-section or delete-section) signed by their sphere key. The log is never rewritten.
 
-## Security note (v0.1.0)
+## Security note (v0.2.0)
 
-This CLI stores seeds as **plaintext JSON** under `~/.aithos/`, protected only by filesystem permissions. That is acceptable for a developer preview on a trusted device. It is **not** acceptable for production.
+This CLI stores sphere-key seeds as **plaintext JSON** under `~/.aithos/`, protected only by filesystem permissions. That is acceptable for a developer preview on a trusted device. It is **not** acceptable for production.
 
-A v0.1.1 follow-up MUST add passphrase-sealed seeds using Argon2id + XChaCha20-Poly1305 as specified in §1.4.3 of the protocol. Until then, treat `~/.aithos/` as you would an SSH key directory: do not back it up to untrusted services, do not copy it across machines without a secure channel, and do not run this CLI on shared infrastructure.
+A subsequent minor release MUST add passphrase-sealed seeds using Argon2id + XChaCha20-Poly1305 as specified in §1.4.3 of the protocol. Until then, treat `~/.aithos/` as you would an SSH key directory: do not back it up to untrusted services, do not copy it across machines without a secure channel, and do not run this CLI on shared infrastructure. Note that the gamma log itself is already sealed at rest under the self sphere key.
 
 ## License
 
