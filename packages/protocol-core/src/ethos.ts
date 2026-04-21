@@ -83,6 +83,13 @@ import {
   type GammaEntry,
   type GammaSigner,
 } from "./gamma.js";
+import {
+  type Author,
+  assertCanWrite,
+  authorSubjectDid,
+  authorMandateId,
+  ownerAuthor,
+} from "./author.js";
 
 /* -------------------------------------------------------------------------- */
 /*  Path helpers                                                              */
@@ -140,13 +147,35 @@ export type Zones = Record<Sphere, ZoneDoc>;
 /*  Manifest                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Signature carried by a zone manifest entry or the top-level manifest.
+ *
+ * `key` is either a sphere DID URL (owner signature) or a multibase-encoded
+ * Ed25519 public key (delegate signature). When signed by a delegate,
+ * `authorized_by` is set to the issuing mandate's id so verifiers can
+ * resolve the delegate pubkey against a local mandate file.
+ */
+export interface ZoneSignature {
+  alg: "ed25519";
+  key: string;
+  value: string;
+  authorized_by?: string;
+}
+
+export interface ManifestSignature {
+  alg: "ed25519";
+  key: string;
+  value: string;
+  authorized_by?: string;
+}
+
 export interface ZoneManifest {
   file: string;
   encrypted: boolean;
   sha256_of_plaintext: string; // hex without prefix
   section_titles: string[];
   cipher?: ZoneCipher; // only when encrypted
-  signature: { alg: "ed25519"; key: string; value: string };
+  signature: ZoneSignature;
 }
 
 export interface ZoneWrap {
@@ -202,7 +231,7 @@ export interface Manifest {
   gamma?: GammaManifestAnchor;
   integrity: {
     sha256_of_did_json: string; // hex
-    manifest_signature: { alg: "ed25519"; key: string; value: string };
+    manifest_signature: ManifestSignature;
   };
 }
 
@@ -529,45 +558,98 @@ export function allocateEditionVersion(handle: string, now: Date = new Date()): 
 /*  Manifest signing                                                          */
 /* -------------------------------------------------------------------------- */
 
-export function signManifest(identity: Identity, m: Manifest): Manifest {
-  const unsigned: Manifest = {
+/**
+ * Sign the top-level manifest.
+ *
+ * Owner path: signed with the subject's public sphere key (unchanged).
+ * Delegate path: signed with the delegate Ed25519 seed; the resulting
+ * `manifest_signature` carries `authorized_by = mandate.id` so verifiers can
+ * resolve the delegate pubkey against the issuing mandate.
+ *
+ * The canonical bytes include the `key` and `authorized_by` fields (with
+ * `value` blanked), so the signature binds to both the signer identity and
+ * the mandate it claims authority under — an attacker cannot swap
+ * `authorized_by` post-facto without invalidating the signature.
+ */
+export function signManifest(subject: Identity | Author, m: Manifest): Manifest {
+  const author = toAuthor(subject);
+
+  const baseSig: ManifestSignature =
+    author.kind === "owner"
+      ? { alg: "ed25519", key: sphereDidUrl(author.identity, "public"), value: "" }
+      : {
+          alg: "ed25519",
+          key: author.pubkeyMultibase,
+          value: "",
+          authorized_by: author.mandate.id,
+        };
+
+  const toSign: Manifest = {
     ...m,
-    integrity: {
-      ...m.integrity,
-      manifest_signature: { ...m.integrity.manifest_signature, value: "" },
-    },
+    integrity: { ...m.integrity, manifest_signature: baseSig },
   };
-  const bytes = new TextEncoder().encode(canonicalize(unsigned));
-  const sig = signWithSphere(identity, "public", bytes);
+  const bytes = new TextEncoder().encode(canonicalize(toSign));
+
+  const rawSig =
+    author.kind === "owner"
+      ? signWithSphere(author.identity, "public", bytes)
+      : ed.sign(bytes, author.seed);
+
   return {
-    ...unsigned,
+    ...toSign,
     integrity: {
-      ...unsigned.integrity,
-      manifest_signature: {
-        alg: "ed25519",
-        key: sphereDidUrl(identity, "public"),
-        value: base64url(sig),
-      },
+      ...toSign.integrity,
+      manifest_signature: { ...baseSig, value: base64url(rawSig) },
     },
   };
 }
 
-export function verifyManifestSignature(m: Manifest, didDoc: DidDocument): { ok: boolean; error?: string } {
-  const sigKey = m.integrity.manifest_signature.key;
-  const vm = didDoc.verificationMethod.find((v) => v.id === sigKey);
-  if (!vm) return { ok: false, error: `No verificationMethod for ${sigKey}` };
+export interface VerifySignatureOpts {
+  /**
+   * Resolver for delegate public keys when the signature carries
+   * `authorized_by`. Returns the raw 32-byte Ed25519 public key or throws.
+   * The resolver is expected to also validate the mandate (signature + time
+   * window + scope) before returning; if any of those checks fail, it must
+   * throw.
+   */
+  resolveDelegatePubkey?: (keyId: string, mandateId: string) => Uint8Array;
+}
+
+export function verifyManifestSignature(
+  m: Manifest,
+  didDoc: DidDocument,
+  opts: VerifySignatureOpts = {},
+): { ok: boolean; error?: string } {
+  const sig = m.integrity.manifest_signature;
+  let pk: Uint8Array;
+  if (sig.authorized_by !== undefined) {
+    if (!opts.resolveDelegatePubkey) {
+      return {
+        ok: false,
+        error: `manifest signature is delegate-signed (authorized_by=${sig.authorized_by}) but no resolveDelegatePubkey provided`,
+      };
+    }
+    try {
+      pk = opts.resolveDelegatePubkey(sig.key, sig.authorized_by);
+    } catch (e) {
+      return { ok: false, error: `delegate key resolution failed: ${(e as Error).message}` };
+    }
+  } else {
+    const vm = didDoc.verificationMethod.find((v) => v.id === sig.key);
+    if (!vm) return { ok: false, error: `No verificationMethod for ${sig.key}` };
+    pk = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
+  }
 
   const unsigned: Manifest = {
     ...m,
     integrity: {
       ...m.integrity,
-      manifest_signature: { ...m.integrity.manifest_signature, value: "" },
+      manifest_signature: { ...sig, value: "" },
     },
   };
   const bytes = new TextEncoder().encode(canonicalize(unsigned));
-  const pk = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
-  const sig = base64urlDecode(m.integrity.manifest_signature.value);
-  return ed.verify(sig, bytes, pk)
+  const sigBytes = base64urlDecode(sig.value);
+  return ed.verify(sigBytes, bytes, pk)
     ? { ok: true }
     : { ok: false, error: "manifest signature failed to verify" };
 }
@@ -585,25 +667,79 @@ export function canonicalManifestHashHex(m: Manifest): string {
   return Buffer.from(sha256fn(bytes)).toString("hex");
 }
 
+/**
+ * Upgrade a bare Identity OR an Author into an Author. Accepts either shape
+ * so legacy callers (owner-only) can keep passing an Identity and new code
+ * can pass an Author directly.
+ */
+function toAuthor(subject: Identity | Author): Author {
+  if ((subject as Author).kind === "owner" || (subject as Author).kind === "delegate") {
+    return subject as Author;
+  }
+  return ownerAuthor(subject as Identity);
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Zone signature (over the canonical zone document)                         */
 /* -------------------------------------------------------------------------- */
 
-export function signZone(identity: Identity, zone: Sphere, doc: ZoneDoc): { alg: "ed25519"; key: string; value: string } {
+/**
+ * Sign a zone document.
+ *
+ * Owner path: the sphere key matching the zone. Delegate path: the delegate
+ * Ed25519 seed; the returned signature carries `authorized_by = mandate.id`.
+ * Enforces `ethos.write.<zone>` scope + validity window before signing.
+ */
+export function signZone(
+  subject: Identity | Author,
+  zone: Sphere,
+  doc: ZoneDoc,
+): ZoneSignature {
+  const author = toAuthor(subject);
   const bytes = new TextEncoder().encode(canonicalize(doc));
-  const sig = signWithSphere(identity, zone, bytes);
-  return { alg: "ed25519", key: sphereDidUrl(identity, zone), value: base64url(sig) };
+  if (author.kind === "owner") {
+    const sig = signWithSphere(author.identity, zone, bytes);
+    return {
+      alg: "ed25519",
+      key: sphereDidUrl(author.identity, zone),
+      value: base64url(sig),
+    };
+  }
+  assertCanWrite(author, zone);
+  const sig = ed.sign(bytes, author.seed);
+  return {
+    alg: "ed25519",
+    key: author.pubkeyMultibase,
+    value: base64url(sig),
+    authorized_by: author.mandate.id,
+  };
 }
 
 export function verifyZoneSignature(
   doc: ZoneDoc,
-  sig: { alg: "ed25519"; key: string; value: string },
+  sig: ZoneSignature,
   didDoc: DidDocument,
+  opts: VerifySignatureOpts = {},
 ): { ok: boolean; error?: string } {
-  const vm = didDoc.verificationMethod.find((v) => v.id === sig.key);
-  if (!vm) return { ok: false, error: `No verificationMethod for ${sig.key}` };
+  let pk: Uint8Array;
+  if (sig.authorized_by !== undefined) {
+    if (!opts.resolveDelegatePubkey) {
+      return {
+        ok: false,
+        error: `zone signature is delegate-signed (authorized_by=${sig.authorized_by}) but no resolveDelegatePubkey provided`,
+      };
+    }
+    try {
+      pk = opts.resolveDelegatePubkey(sig.key, sig.authorized_by);
+    } catch (e) {
+      return { ok: false, error: `delegate key resolution failed: ${(e as Error).message}` };
+    }
+  } else {
+    const vm = didDoc.verificationMethod.find((v) => v.id === sig.key);
+    if (!vm) return { ok: false, error: `No verificationMethod for ${sig.key}` };
+    pk = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
+  }
   const bytes = new TextEncoder().encode(canonicalize(doc));
-  const pk = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
   const verified = ed.verify(base64urlDecode(sig.value), bytes, pk);
   return verified ? { ok: true } : { ok: false, error: "zone signature failed to verify" };
 }
