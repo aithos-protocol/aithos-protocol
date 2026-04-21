@@ -12,8 +12,7 @@
   "scripts": {
     "build": "npm run build --workspace=@aithos/protocol-core && npm run build --workspace=aithos && npm run build --workspace=@aithos/mcp",
     "check-types": "npm run check-types --workspaces --if-present",
-    "clean": "npm run clean --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "clean": "npm run clean --workspaces --if-present"
   },
   "engines": {
     "node": ">=20"
