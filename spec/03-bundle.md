@@ -48,6 +48,8 @@ Readers MUST reject bundles that contain forbidden entries.
 
 ### 3.2.5 The `signatures/` directory
 
+> **v0.2.0 transition note.** The per-section, per-revision signatures described below are a v0.1.x artifact. In v0.2.0 each section's signed history lives in the gamma log (§10) — every `section.add` / `section.modify` / `section.delete` entry in gamma carries its own Ed25519 signature, reachable from a section's `gamma_ref`. The bundle's `signatures/` directory in v0.2.0 therefore carries only zone signatures (one per zone) and MAY omit the `revisions[]` inner structure entirely. The full restructuring of this section ships with the verification refactor.
+
 The `signatures/` directory carries the **full signature values** for each section's revisions. The bundle markdown files (§2.6) carry only short truncated signature prefixes in their HTML-comment metadata for human visual checks; the authoritative signatures are here.
 
 Layout:

@@ -1,7 +1,7 @@
 # Aithos Protocol Specification
 
-**Version:** 0.1.0 (draft)
-**Status:** Under active development. Breaking changes expected until 1.0.0.
+**Version:** 0.2.0 (draft)
+**Status:** Under active development. Breaking changes expected until 1.0.0. v0.2.0 is a breaking change from v0.1.x — section history moves from embedded `revisions[]` (v0.1.x) to a separate gamma log (§10).
 **Editors:** Mathieu Colla <mathieu.colla.pro@gmail.com>
 **License:** Apache-2.0
 
@@ -11,26 +11,27 @@ This is the normative specification of the Aithos protocol. For the motivation a
 
 ## Document map
 
-The spec is broken into self-contained chapters, roughly layered from the cryptographic floor up to the application ceiling. Chapters 0–7 are wire-format and protocol semantics; chapter 9 describes the local CLI store and the owned-vs-tracked distinction.
+The spec is broken into self-contained chapters, roughly layered from the cryptographic floor up to the application ceiling. Chapters 0–7 and 10 are wire-format and protocol semantics; chapter 9 describes the local CLI store and the owned-vs-tracked distinction.
 
 | # | Chapter | What it covers |
 |---|---|---|
 | 0 | [Introduction](./spec/00-introduction.md) | Terminology, conformance, versioning, RFC-2119 usage |
 | 1 | [Identity](./spec/01-identity.md) | `did:aithos` method, root key, three sphere keys, DID document |
-| 2 | [Ethos](./spec/02-ethos.md) | Ethos document model: zones, sections, editions, revisions, append-only history |
-| 3 | [Bundle](./spec/03-bundle.md) | `.ethos` zip container, manifest, encrypted zones, per-edition hash chain |
+| 2 | [Ethos](./spec/02-ethos.md) | Ethos document model: zones, sections (current state), editions |
+| 3 | [Bundle](./spec/03-bundle.md) | `.ethos` zip container, manifest, encrypted zones, gamma anchor, per-edition hash chain |
 | 4 | [Mandates](./spec/04-mandates.md) | Grant structure, scopes, TTL, revocation |
 | 5 | [Signing](./spec/05-signing.md) | Canonicalization (RFC 8785), Ed25519 signatures, action artifacts |
 | 6 | [Transport](./spec/06-transport.md) | MCP bridge (normative), HTTP API (normative) |
 | 7 | [Threat model](./spec/07-threat-model.md) | Adversaries, tradeoffs, known leaks |
 | 8 | [Glossary](./spec/08-glossary.md) | Every defined term in one place |
 | 9 | [Local store](./spec/09-local-store.md) | Owned vs tracked identities, install, stateless verify, mandate intake, capability resolution |
+| 10 | [Gamma](./spec/10-gamma.md) | Deep memory log: append-only signed chain of every mutation, bundle anchor via `gamma.head` |
 
 ## Conformance in one paragraph
 
 A conformant **author implementation** produces bundles (§3) whose manifest, signatures, and DID document validate against this specification, with identity derived as in §1. A conformant **reader implementation** (an AI agent or an MCP server serving one) resolves the DID (§1), verifies the bundle (§3) and any mandate it holds (§4) before reading a non-public zone, and rejects any bundle or mandate whose signatures do not verify under the canonicalization rules in §5.
 
-Implementations MUST declare the protocol version they target. The current version is `"aithos": "0.1.0"`.
+Implementations MUST declare the protocol version they target. The current version is `"aithos": "0.2.0"`.
 
 ## Requirement levels
 

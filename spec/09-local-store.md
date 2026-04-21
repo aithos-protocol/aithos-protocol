@@ -7,7 +7,7 @@ The preceding chapters define the wire formats: the DID document (ch. 1), the et
 Two classes of identity live side-by-side in a keystore:
 
 - **Owned identities.** The keystore holds the sphere seed files and can therefore sign, decrypt, and issue mandates.
-- **Tracked identities.** The keystore holds only the public artifacts of another subject's identity — their DID document and (optionally) a received ethos bundle. The user can read the public zone, verify signatures, and, when holding the right mandates, read further zones or append revisions via delegate keys.
+- **Tracked identities.** The keystore holds only the public artifacts of another subject's identity — their DID document and (optionally) a received ethos bundle. The user can read the public zone, verify signatures, and, when holding the right mandates, read further zones or author gamma entries (§10) via delegate keys.
 
 A tracked identity is indistinguishable from an owned one on the wire. The distinction exists entirely at the storage layer: presence or absence of sealed seed files.
 
