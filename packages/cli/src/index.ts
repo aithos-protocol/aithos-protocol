@@ -39,6 +39,8 @@ import { runEthosList } from "./commands/ethos-list.js";
 import { runEthosVerify } from "./commands/ethos-verify.js";
 import { runEthosPack, runEthosUnpack } from "./commands/ethos-pack.js";
 import { runEthosInstall } from "./commands/ethos-install.js";
+import { runGammaShow } from "./commands/gamma-show.js";
+import { runGammaVerify } from "./commands/gamma-verify.js";
 
 const program = new Command();
 
@@ -286,6 +288,36 @@ ethos
       }),
     ),
   );
+
+/* -------------------------------------------------------------------------- */
+/*  `aithos gamma …` — inspect and verify the deep-memory log                 */
+/* -------------------------------------------------------------------------- */
+
+const gamma = program.command("gamma").description("Inspect and verify the gamma deep-memory log");
+
+gamma
+  .command("show")
+  .description(
+    "Print the gamma log (one line per entry). Use --section to filter to " +
+      "a single section's history, --id to show one entry in full, or --head " +
+      "to print just the head hash and count.",
+  )
+  .option("--section <id>", "Filter to entries touching this section id")
+  .option("--id <gamma_id>", "Show a single entry in full")
+  .option("--head", "Print only the current head hash and count")
+  .option("--handle <h>", "Identity handle")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runGammaShow(opts)));
+
+gamma
+  .command("verify")
+  .description(
+    "Verify hash integrity, chain linkage, signatures, and the manifest " +
+      "anchor (manifest.gamma.head must equal the on-disk head).",
+  )
+  .option("--handle <h>", "Identity handle")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runGammaVerify(opts)));
 
 program
   .command("sign-action")
