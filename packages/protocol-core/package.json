@@ -69,7 +69,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check-types": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\""
   },
   "dependencies": {
     "@noble/curves": "^2.2.0",
@@ -85,6 +86,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "tsx": "^4.11.0",
     "typescript": "^5.5.0"
   },
   "engines": {
