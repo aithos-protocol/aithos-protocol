@@ -17,6 +17,10 @@ dist/
 !stubs/aithos-rs/birth/aithos-birth.ethos
 !stubs/aithos-go/birth/aithos-birth.ethos
 packages/cli/src/commands/*.removed
+packages/*/dist/commands/*.removed
 
 # local-only scratch files from cutover tooling
 .gitignore_v2_cutover
+
+# npm pack outputs (published via npm publish, never committed)
+*.tgz

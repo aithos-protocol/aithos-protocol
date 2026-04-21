@@ -4,13 +4,33 @@
   "description": "Aithos MCP server — exposes an Aithos identity's ethos and mandates to MCP-speaking agents over stdio or HTTP.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aithos-protocol/aithos-protocol.git",
+    "directory": "packages/mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/aithos-protocol/aithos-protocol/issues"
+  },
+  "keywords": [
+    "aithos",
+    "did",
+    "identity",
+    "ethos",
+    "mandate",
+    "mcp",
+    "ai-agent",
+    "protocol"
+  ],
   "type": "module",
   "bin": {
     "aithos-mcp": "./dist/bin.js"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/bin.js",

@@ -1,0 +1,4 @@
+# Stranded sandbox artifacts — excluded from the published tarball.
+# (The sandbox filesystem blocks rm on git-tracked files, so we rename to
+# *.removed and filter them out here.)
+*.removed
