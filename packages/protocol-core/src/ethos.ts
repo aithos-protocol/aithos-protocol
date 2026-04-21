@@ -63,6 +63,7 @@ import {
   rootDid,
   edSeedToX25519Secret,
   x25519PublicFromSecret,
+  ed25519PubToX25519Pub,
 } from "./identity.js";
 import {
   didUrlForKex,
@@ -74,11 +75,14 @@ import {
 import { ensureDir, identityDir, readJson, writeJson } from "./storage.js";
 import {
   appendGammaEntry,
+  appendGammaEntryForAuthor,
   buildGammaEntry,
   delegateGammaSigner,
   gammaHead,
+  gammaHeadForAuthor,
   latestGammaForSection,
   readGammaLog,
+  readGammaLogForAuthor,
   sphereGammaSigner,
   type GammaEntry,
   type GammaSigner,
@@ -86,6 +90,7 @@ import {
 import {
   type Author,
   assertCanWrite,
+  authorGammaSigner,
   authorSubjectDid,
   authorMandateId,
   ownerAuthor,
@@ -533,6 +538,91 @@ export function subjectRecipientFor(identity: Identity, zone: "circle" | "self")
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Recipient derivation for Author                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Stable wrap-list label for a delegate's DEK entry.
+ *
+ * The `did` field on a ZoneWrap / GammaWrap is just a unique key for the
+ * recipient — lookup is by string equality, not DID resolution. For owner
+ * wraps we use `did:aithos:...#kex-<zone>`. For delegate wraps we use
+ * `<grantee.id>#<delegate-pubkey-multibase>`, which is stable across
+ * editions while remaining distinguishable from any sphere wrap.
+ */
+export function delegateWrapDid(granteeId: string, pubkeyMultibase: string): string {
+  return `${granteeId}#${pubkeyMultibase}`;
+}
+
+/**
+ * Derive the owner's sphere X25519 public key from public metadata — no
+ * sphere seed required. Used on the delegate side to include the owner as
+ * a wrap recipient so the owner can decrypt a bundle the delegate produced.
+ */
+function ownerSphereX25519Pub(
+  metadata: { didDocument: DidDocument; sphereDids: Record<Sphere, string> },
+  zone: Sphere,
+): Uint8Array {
+  const sphereVmId = metadata.sphereDids[zone];
+  const vm = metadata.didDocument.verificationMethod.find((v) => v.id === sphereVmId);
+  if (!vm) {
+    throw new Error(`did.json has no verificationMethod for sphere ${zone}`);
+  }
+  const edPub = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
+  // Lazy import to avoid pulling identity.ts into this module's public surface.
+  return ed25519PubToX25519Pub(edPub);
+}
+
+/**
+ * Recipients to include when an author writes (and re-encrypts) an encrypted
+ * zone:
+ *   - Owner: their own sphere X25519 pubkey (subject-as-recipient, §3.5.1).
+ *   - Delegate: BOTH the owner's sphere X25519 pubkey (so the owner can
+ *     decrypt when the bundle returns) AND the delegate's own X25519 pubkey
+ *     (so the delegate can continue reading the zone they just wrote).
+ */
+export function authorZoneWriteRecipients(
+  subject: Identity | Author,
+  zone: "circle" | "self",
+): Array<{ did: string; x25519PublicKey: Uint8Array }> {
+  const author = toAuthor(subject);
+  if (author.kind === "owner") {
+    const r = subjectRecipientFor(author.identity, zone);
+    return [{ did: r.did, x25519PublicKey: r.x25519PublicKey }];
+  }
+  const ownerPk = ownerSphereX25519Pub(author.subject, zone);
+  const ownerDid = didUrlForKex(author.subject.did, zone);
+  const delegatePk = ed25519PubToX25519Pub(multibaseToEd25519PublicKey(author.pubkeyMultibase));
+  return [
+    { did: ownerDid, x25519PublicKey: ownerPk },
+    {
+      did: delegateWrapDid(author.mandate.grantee.id, author.pubkeyMultibase),
+      x25519PublicKey: delegatePk,
+    },
+  ];
+}
+
+/**
+ * Recipient (did label + X25519 secret) an author uses to DECRYPT a zone
+ * they're allowed to read. Owner → sphere secret. Delegate → their own
+ * Ed25519-derived X25519 secret.
+ */
+export function authorZoneDecryptRecipient(
+  subject: Identity | Author,
+  zone: "circle" | "self",
+): { did: string; x25519Secret: Uint8Array } {
+  const author = toAuthor(subject);
+  if (author.kind === "owner") {
+    const r = subjectRecipientFor(author.identity, zone);
+    return { did: r.did, x25519Secret: r.x25519Secret };
+  }
+  return {
+    did: delegateWrapDid(author.mandate.grantee.id, author.pubkeyMultibase),
+    x25519Secret: edSeedToX25519Secret(author.seed),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Edition version allocation                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -778,7 +868,12 @@ export function subjectHandleFromManifest(m: Manifest): string {
   return m.subject_handle;
 }
 
-export function loadZoneDoc(handle: string, zone: Sphere, identity?: Identity, manifest?: Manifest): ZoneDoc {
+export function loadZoneDoc(
+  handle: string,
+  zone: Sphere,
+  who?: Identity | Author,
+  manifest?: Manifest,
+): ZoneDoc {
   const bodyPath = ethosZoneFile(handle, zone);
   if (!existsSync(bodyPath)) return { sections: [] };
 
@@ -788,12 +883,19 @@ export function loadZoneDoc(handle: string, zone: Sphere, identity?: Identity, m
   if (!zm.encrypted) {
     plaintext = readFileSync(bodyPath, "utf8");
   } else {
-    if (!identity) throw new Error(`Identity required to decrypt ${zone}`);
+    if (!who) throw new Error(`Identity or Author required to decrypt ${zone}`);
     if (zone === "public") throw new Error(`public zone should never be encrypted`);
-    const recipient = subjectRecipientFor(identity, zone);
+    const author = toAuthor(who);
+    const recipient = authorZoneDecryptRecipient(author, zone as "circle" | "self");
     const ct = readFileSync(bodyPath);
     if (!zm.cipher) throw new Error(`Manifest missing cipher for ${zone}`);
-    plaintext = decryptZone(new Uint8Array(ct), zm.cipher, m.bundle_id, recipient.did, recipient.x25519Secret);
+    plaintext = decryptZone(
+      new Uint8Array(ct),
+      zm.cipher,
+      m.bundle_id,
+      recipient.did,
+      recipient.x25519Secret,
+    );
   }
   return parseZoneMarkdown(plaintext, zone);
 }
@@ -802,14 +904,15 @@ export function writeZoneToDisk(
   handle: string,
   zone: Sphere,
   doc: ZoneDoc,
-  identity: Identity,
+  subject: Identity | Author,
   ctx: RenderContext,
   bundleId: string,
-): { sha256Hex: string; cipher?: ZoneCipher; signature: { alg: "ed25519"; key: string; value: string }; sectionTitles: string[] } {
+): { sha256Hex: string; cipher?: ZoneCipher; signature: ZoneSignature; sectionTitles: string[] } {
+  const author = toAuthor(subject);
   const md = renderZoneMarkdown(zone, doc, ctx);
   const plaintextHashHex = Buffer.from(sha256fn(new TextEncoder().encode(md))).toString("hex");
   const sectionTitles = doc.sections.map((s) => s.title);
-  const signature = signZone(identity, zone, doc);
+  const signature = signZone(author, zone, doc);
 
   const filePath = ethosZoneFile(handle, zone);
   ensureDir(ethosZoneDir(handle, zone));
@@ -819,30 +922,38 @@ export function writeZoneToDisk(
     return { sha256Hex: plaintextHashHex, signature, sectionTitles };
   }
 
-  const recipient = subjectRecipientFor(identity, zone as "circle" | "self");
-  const { ciphertext, cipher } = encryptZone(md, bundleId, [
-    { did: recipient.did, x25519PublicKey: recipient.x25519PublicKey },
-  ]);
+  const recipients = authorZoneWriteRecipients(author, zone as "circle" | "self");
+  const { ciphertext, cipher } = encryptZone(md, bundleId, recipients);
   writeFileSync(filePath, ciphertext, { mode: 0o600 });
   chmodSync(filePath, 0o600);
   return { sha256Hex: plaintextHashHex, cipher, signature, sectionTitles };
 }
 
 /**
- * Persist a new edition: re-render all three zones, rebuild the manifest,
- * sign it, archive the previous manifest under history/.
+ * Persist a new edition: re-render the zone(s) the author is authorised on,
+ * rebuild the manifest, sign it, archive the previous manifest under history/.
+ *
+ * Owner path: all three zones are re-rendered every edition (previous
+ * behaviour). Delegate path: only `author.mandate.actor_sphere` is re-rendered
+ * and re-signed — other zones carry their previous manifest entry forward
+ * unchanged, because the delegate has no authority to re-sign them.
  */
 export function persistEdition(
   handle: string,
-  identity: Identity,
+  subject: Identity | Author,
   zones: Zones,
   opts: { now?: Date; prevManifest?: Manifest | null } = {},
 ): Manifest {
+  const author = toAuthor(subject);
   const now = opts.now ?? new Date();
   const createdAt = now.toISOString();
   const editionVersion = allocateEditionVersion(handle, now);
   const bundleId = `urn:aithos:${handle}:${editionVersion}`;
-  const subjectDid = rootDid(identity);
+  const subjectDid = authorSubjectDid(author);
+  const displayName =
+    author.kind === "owner"
+      ? author.identity.displayName
+      : author.subject.displayName;
 
   const ctx: RenderContext = {
     subjectDid,
@@ -851,9 +962,31 @@ export function persistEdition(
     createdAt,
   };
 
+  const prevManifest =
+    opts.prevManifest === undefined
+      ? safeLoadPreviousManifest(handle)
+      : opts.prevManifest;
+
   const zoneManifestEntries: Partial<Record<Sphere, ZoneManifest>> = {};
   for (const z of SPHERE_FRAGMENTS) {
-    const out = writeZoneToDisk(handle, z, zones[z], identity, ctx, bundleId);
+    const shouldReRender =
+      author.kind === "owner" || author.mandate.actor_sphere === z;
+
+    if (!shouldReRender) {
+      // Delegate without write-authority on this zone: carry forward the
+      // previous manifest entry untouched. The on-disk ciphertext file is
+      // left alone — nothing to re-write.
+      if (!prevManifest) {
+        throw new Error(
+          `persistEdition: delegate is writing to ${author.kind === "delegate" ? author.mandate.actor_sphere : "?"} ` +
+            `but zone ${z} has no previous manifest entry to carry forward`,
+        );
+      }
+      zoneManifestEntries[z] = prevManifest.zones[z];
+      continue;
+    }
+
+    const out = writeZoneToDisk(handle, z, zones[z], author, ctx, bundleId);
     const entry: ZoneManifest = {
       file: z === "public" ? "public.md" : `${z}.md.enc`,
       encrypted: z !== "public",
@@ -867,24 +1000,29 @@ export function persistEdition(
 
   const didSnapshot = snapshotDidJson(handle);
 
-  const prevManifest = opts.prevManifest === undefined ? safeLoadPreviousManifest(handle) : opts.prevManifest;
-  const prevHash = prevManifest ? "sha256:" + canonicalManifestHashHex(prevManifest) : null;
+  const prevHash = prevManifest
+    ? "sha256:" + canonicalManifestHashHex(prevManifest)
+    : null;
   const height = prevManifest ? prevManifest.edition.height + 1 : 1;
-
   const supersedes = prevManifest ? prevManifest.bundle_id : null;
 
   // Snapshot gamma log state into the manifest so the signature commits to
   // the current head. In v0.2.0 the log IS the history; an ethos with any
   // section necessarily has a non-empty log. The anchor is omitted only
   // when the log is empty (fresh identity with no sections yet).
-  const gammaAnchor = safeReadGammaAnchor(handle, identity);
+  const gammaAnchor = safeReadGammaAnchor(handle, author, prevManifest);
+
+  const unsignedSigKey =
+    author.kind === "owner"
+      ? sphereDidUrl(author.identity, "public")
+      : author.pubkeyMultibase;
 
   const unsigned: Manifest = {
     aithos: AITHOS_VERSION,
     bundle_id: bundleId,
     subject_did: subjectDid,
     subject_handle: handle,
-    display_name: identity.displayName,
+    display_name: displayName,
     edition: {
       version: editionVersion,
       created_at: createdAt,
@@ -898,13 +1036,16 @@ export function persistEdition(
       sha256_of_did_json: didSnapshot.hashHex,
       manifest_signature: {
         alg: "ed25519",
-        key: sphereDidUrl(identity, "public"),
+        key: unsignedSigKey,
         value: "",
+        ...(author.kind === "delegate"
+          ? { authorized_by: author.mandate.id }
+          : {}),
       },
     },
   };
 
-  const signed = signManifest(identity, unsigned);
+  const signed = signManifest(author, unsigned);
   writeManifest(handle, signed);
 
   // Archive.
@@ -930,17 +1071,29 @@ function safeLoadPreviousManifest(handle: string): Manifest | null {
  * so `persistEdition` can omit the `gamma` field entirely and stay
  * byte-compatible with v0.1.0 manifests.
  */
-function safeReadGammaAnchor(handle: string, identity: Identity): GammaManifestAnchor | null {
-  try {
-    const entries = readGammaLog(handle, identity);
-    if (entries.length === 0) return null;
-    return {
-      head: entries[entries.length - 1].hash,
-      count: entries.length,
-    };
-  } catch {
-    return null;
+function safeReadGammaAnchor(
+  handle: string,
+  author: Author,
+  prevManifest?: Manifest | null,
+): GammaManifestAnchor | null {
+  if (author.kind === "owner") {
+    try {
+      const entries = readGammaLog(handle, author.identity);
+      if (entries.length === 0) return null;
+      return {
+        head: entries[entries.length - 1].hash,
+        count: entries.length,
+      };
+    } catch {
+      return null;
+    }
   }
+  // Delegate path: no sphere key held — carry forward the previous manifest's
+  // anchor. A delegate that wants to advance the gamma log must go through
+  // `issueMandateWithRewrap` (which rewraps the log's DEK for the delegate)
+  // plus an append path that updates the anchor separately; this helper only
+  // provides the default byte-preserving behaviour.
+  return prevManifest?.gamma ?? null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -961,7 +1114,14 @@ export interface DelegateSigner {
 
 export interface AddSectionArgs {
   handle: string;
-  identity: Identity;
+  /**
+   * Owner identity (legacy shape) OR Author (v0.2.1). Exactly one of
+   * `identity` / `author` must be set; if both are set, `author` wins.
+   * The `delegate` signer is the v0.2.0-style shim and still works for
+   * owner-local callers that already hold their own delegate keypair.
+   */
+  identity?: Identity;
+  author?: Author;
   zone: Sphere;
   title: string;
   body: string;
@@ -986,7 +1146,8 @@ export interface AddSectionArgs {
 export function addSection(
   args: AddSectionArgs,
 ): { section: Section; manifest: Manifest; gammaEntry: GammaEntry } {
-  const zones = loadAllZones(args.handle, args.identity);
+  const author = resolveAuthorArg(args);
+  const zones = loadAllZones(args.handle, author);
   const sectionId = newSectionId();
   if (zones[args.zone].sections.some((s) => s.id === sectionId)) {
     throw new Error("Section id collision, try again");
@@ -996,10 +1157,10 @@ export function addSection(
 
   const gammaSigner: GammaSigner = args.delegate
     ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
-    : sphereGammaSigner(args.identity, args.zone);
-  const prevGammaHash = gammaHead(args.handle, args.identity);
+    : authorGammaSigner(author, args.zone);
+  const prevGammaHash = gammaHeadForAuthor(args.handle, author);
   const gammaEntry = buildGammaEntry({
-    subjectDid: rootDid(args.identity),
+    subjectDid: authorSubjectDid(author),
     zone: args.zone,
     op: "section.add",
     target: { section_id: sectionId },
@@ -1012,7 +1173,7 @@ export function addSection(
     signer: gammaSigner,
     at,
   });
-  appendGammaEntry(args.handle, args.identity, gammaEntry);
+  appendGammaEntryForAuthor(args.handle, author, gammaEntry);
 
   const section: Section = {
     id: sectionId,
@@ -1023,8 +1184,21 @@ export function addSection(
   };
   zones[args.zone].sections.push(section);
 
-  const manifest = persistEdition(args.handle, args.identity, zones, { now: at });
+  const manifest = persistEdition(args.handle, author, zones, { now: at });
   return { section, manifest, gammaEntry };
+}
+
+/**
+ * Normalize a mutation call's `{ identity?, author? }` into a single Author.
+ * Callers MUST supply exactly one; `author` takes precedence when both are
+ * set (the legacy `identity` field is accepted only for b/w compat).
+ */
+function resolveAuthorArg(args: { identity?: Identity; author?: Author }): Author {
+  if (args.author) return args.author;
+  if (args.identity) return ownerAuthor(args.identity);
+  throw new Error(
+    "addSection/modifySection/deleteSection require one of { identity, author }",
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1033,7 +1207,9 @@ export function addSection(
 
 export interface ModifySectionArgs {
   handle: string;
-  identity: Identity;
+  /** Owner identity (legacy) OR v0.2.1 Author. Exactly one must be set. */
+  identity?: Identity;
+  author?: Author;
   zone: Sphere;
   sectionId: string;
   /** New title. Omit to keep the existing title. */
@@ -1069,7 +1245,8 @@ export function modifySection(
     throw new Error("modifySection: must set at least one of {title, body, tags}");
   }
 
-  const zones = loadAllZones(args.handle, args.identity);
+  const author = resolveAuthorArg(args);
+  const zones = loadAllZones(args.handle, author);
   const section = zones[args.zone].sections.find((s) => s.id === args.sectionId);
   if (!section) {
     throw new Error(`Section ${args.sectionId} not found in zone ${args.zone}`);
@@ -1085,16 +1262,16 @@ export function modifySection(
   if (args.body !== undefined) payload.body = args.body;
   if (args.tags !== undefined) payload.tags = args.tags;
 
-  const existingLog = readGammaLog(args.handle, args.identity);
+  const existingLog = readGammaLogForAuthor(args.handle, author);
   const priorOnSection = latestGammaForSection(existingLog, args.sectionId);
 
   const gammaSigner: GammaSigner = args.delegate
     ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
-    : sphereGammaSigner(args.identity, args.zone);
-  const prevGammaHash = gammaHead(args.handle, args.identity);
+    : authorGammaSigner(author, args.zone);
+  const prevGammaHash = gammaHeadForAuthor(args.handle, author);
 
   const gammaEntry = buildGammaEntry({
-    subjectDid: rootDid(args.identity),
+    subjectDid: authorSubjectDid(author),
     zone: args.zone,
     op: "section.modify",
     target: { section_id: args.sectionId },
@@ -1104,7 +1281,7 @@ export function modifySection(
     signer: gammaSigner,
     at,
   });
-  appendGammaEntry(args.handle, args.identity, gammaEntry);
+  appendGammaEntryForAuthor(args.handle, author, gammaEntry);
 
   // Apply the change to the in-memory section.
   if (args.title !== undefined) section.title = args.title;
@@ -1115,7 +1292,7 @@ export function modifySection(
   }
   section.gamma_ref = gammaEntry.id;
 
-  const manifest = persistEdition(args.handle, args.identity, zones, { now: at });
+  const manifest = persistEdition(args.handle, author, zones, { now: at });
   return { section, manifest, gammaEntry };
 }
 
@@ -1125,7 +1302,9 @@ export function modifySection(
 
 export interface DeleteSectionArgs {
   handle: string;
-  identity: Identity;
+  /** Owner identity (legacy) OR v0.2.1 Author. Exactly one must be set. */
+  identity?: Identity;
+  author?: Author;
   zone: Sphere;
   sectionId: string;
   /** Free-text reason; stored in the gamma entry payload for audit. */
@@ -1153,7 +1332,8 @@ export interface DeleteSectionArgs {
 export function deleteSection(
   args: DeleteSectionArgs,
 ): { manifest: Manifest; gammaEntry: GammaEntry; deletedTitle: string } {
-  const zones = loadAllZones(args.handle, args.identity);
+  const author = resolveAuthorArg(args);
+  const zones = loadAllZones(args.handle, author);
   const zone = zones[args.zone];
   const idx = zone.sections.findIndex((s) => s.id === args.sectionId);
   if (idx < 0) {
@@ -1166,16 +1346,16 @@ export function deleteSection(
   // gamma entry for this section (usually its own add, but could be a prior
   // modify). This lets per-section walks skip the global chain.
   const at = args.at ?? new Date();
-  const existingLog = readGammaLog(args.handle, args.identity);
+  const existingLog = readGammaLogForAuthor(args.handle, author);
   const priorOnSection = latestGammaForSection(existingLog, args.sectionId);
 
   const gammaSigner: GammaSigner = args.delegate
     ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
-    : sphereGammaSigner(args.identity, args.zone);
+    : authorGammaSigner(author, args.zone);
 
-  const prevGammaHash = gammaHead(args.handle, args.identity);
+  const prevGammaHash = gammaHeadForAuthor(args.handle, author);
   const gammaEntry = buildGammaEntry({
-    subjectDid: rootDid(args.identity),
+    subjectDid: authorSubjectDid(author),
     zone: args.zone,
     op: "section.delete",
     target: { section_id: args.sectionId },
@@ -1187,17 +1367,38 @@ export function deleteSection(
     signer: gammaSigner,
     at,
   });
-  appendGammaEntry(args.handle, args.identity, gammaEntry);
+  appendGammaEntryForAuthor(args.handle, author, gammaEntry);
 
-  const manifest = persistEdition(args.handle, args.identity, zones, { now: at });
+  const manifest = persistEdition(args.handle, author, zones, { now: at });
   return { manifest, gammaEntry, deletedTitle: deleted.title };
 }
 
-export function loadAllZones(handle: string, identity: Identity): Zones {
+/**
+ * Load every zone the author can see.
+ *
+ * Owner: all three zones (public + circle + self).
+ *
+ * Delegate: only the mandate's `actor_sphere` is decrypted through the
+ * delegate wrap. The other two zones come back as empty docs — we do NOT
+ * decrypt them under the delegate key (they aren't wrapped for the delegate
+ * anyway) because a delegate operating on a tracked install has no
+ * authority to re-sign them. `persistEdition` carries those zones' manifest
+ * entries forward from the previous manifest untouched.
+ */
+export function loadAllZones(handle: string, who: Identity | Author): Zones {
+  const author = toAuthor(who);
+  if (author.kind === "owner") {
+    return {
+      public: loadZoneDoc(handle, "public", author),
+      circle: loadZoneDoc(handle, "circle", author),
+      self: loadZoneDoc(handle, "self", author),
+    };
+  }
+  const target = author.mandate.actor_sphere;
   return {
-    public: loadZoneDoc(handle, "public", identity),
-    circle: loadZoneDoc(handle, "circle", identity),
-    self: loadZoneDoc(handle, "self", identity),
+    public: target === "public" ? loadZoneDoc(handle, "public", author) : { sections: [] },
+    circle: target === "circle" ? loadZoneDoc(handle, "circle", author) : { sections: [] },
+    self: target === "self" ? loadZoneDoc(handle, "self", author) : { sections: [] },
   };
 }
 

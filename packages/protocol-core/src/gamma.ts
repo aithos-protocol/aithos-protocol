@@ -49,6 +49,7 @@ import {
   sphereDidUrl,
   rootDid,
   edSeedToX25519Secret,
+  ed25519PubToX25519Pub,
   x25519PublicFromSecret,
 } from "./identity.js";
 import {
@@ -59,6 +60,7 @@ import {
   x25519PublicKeyToMultibase,
 } from "./did.js";
 import { ensureDir, identityDir } from "./storage.js";
+import type { Author } from "./author.js";
 
 /* -------------------------------------------------------------------------- */
 /*  Path helpers                                                              */
@@ -604,6 +606,108 @@ export function appendGammaEntry(
   const next = current + entryToJsonLine(entry) + "\n";
   const recipients = defaultGammaRecipients(identity);
   const file = sealGammaFile(next, rootDid(identity), recipients);
+  writeGammaFile(handle, file);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Author-aware helpers (v0.2.1)                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Decrypt the gamma log's JSONL plaintext using whichever recipient the
+ * author holds a secret for.
+ *
+ * Owner: same behaviour as `readGammaPlaintext(handle, identity)`.
+ * Delegate: looks up the wrap whose recipient matches
+ *   `<mandate.grantee.id>#<pubkeyMultibase>` — set by
+ *   `issueMandateWithRewrap` — and decrypts with the delegate's X25519
+ *   secret derived from their Ed25519 seed.
+ *
+ * Throws if the author holds no secret matching any wrap on disk.
+ */
+export function readGammaPlaintextForAuthor(handle: string, author: Author): string {
+  if (author.kind === "owner") return readGammaPlaintext(handle, author.identity);
+  const file = readGammaFile(handle);
+  if (!file) return "";
+  const recipientDid = `${author.mandate.grantee.id}#${author.pubkeyMultibase}`;
+  const me: DecryptedGammaRecipient = {
+    did: recipientDid,
+    x25519Secret: edSeedToX25519Secret(author.seed),
+  };
+  try {
+    return openGammaFile(file, author.subject.did, me);
+  } finally {
+    me.x25519Secret.fill(0);
+  }
+}
+
+/** Same as `readGammaLog` but accepts an Author. */
+export function readGammaLogForAuthor(handle: string, author: Author): GammaEntry[] {
+  return parseJsonlLog(readGammaPlaintextForAuthor(handle, author));
+}
+
+/** Same as `gammaHead` but accepts an Author. */
+export function gammaHeadForAuthor(handle: string, author: Author): string | null {
+  const entries = readGammaLogForAuthor(handle, author);
+  if (entries.length === 0) return null;
+  return entries[entries.length - 1].hash;
+}
+
+/**
+ * Derive the full recipient list for resealing the gamma log when the
+ * delegate appends, reconstructing public keys from metadata that does NOT
+ * require the delegate to hold sphere seeds:
+ *   - The owner's three sphere X25519 pubkeys from `did.json` (Edwards→Montgomery).
+ *   - The delegate's own X25519 pubkey, from their multibase Ed25519 pubkey.
+ *
+ * Rationale: the wraps stored on disk don't include the raw recipient X25519
+ * pubkey (only an ephemeral one per-wrap), so we can't simply "carry
+ * existing wraps forward". We recompute them from the published DID
+ * document instead. This keeps the owner decryption path alive across
+ * delegate edits.
+ */
+export function delegateGammaRecipients(author: Author & { kind: "delegate" }): GammaRecipient[] {
+  const doc = author.subject.didDocument;
+  const recipients: GammaRecipient[] = [];
+  for (const s of SPHERE_FRAGMENTS) {
+    const sphereVmId = author.subject.sphereDids[s];
+    const vm = doc.verificationMethod.find((v) => v.id === sphereVmId);
+    if (!vm) {
+      throw new Error(
+        `delegateGammaRecipients: did.json has no verificationMethod for sphere ${s}`,
+      );
+    }
+    const edPub = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
+    const xPub = ed25519PubToX25519Pub(edPub);
+    recipients.push({ did: didUrlForKex(author.subject.did, s), x25519PublicKey: xPub });
+  }
+  const delegateEdPub = multibaseToEd25519PublicKey(author.pubkeyMultibase);
+  const delegateXPub = ed25519PubToX25519Pub(delegateEdPub);
+  recipients.push({
+    did: `${author.mandate.grantee.id}#${author.pubkeyMultibase}`,
+    x25519PublicKey: delegateXPub,
+  });
+  return recipients;
+}
+
+/**
+ * Append a gamma entry on behalf of an author. Owner path mirrors the
+ * legacy `appendGammaEntry`; delegate path decrypts via their wrap, reseals
+ * under the full recipient set reconstructed via `delegateGammaRecipients`.
+ */
+export function appendGammaEntryForAuthor(
+  handle: string,
+  author: Author,
+  entry: GammaEntry,
+): void {
+  if (author.kind === "owner") {
+    appendGammaEntry(handle, author.identity, entry);
+    return;
+  }
+  const current = readGammaPlaintextForAuthor(handle, author);
+  const next = current + entryToJsonLine(entry) + "\n";
+  const recipients = delegateGammaRecipients(author);
+  const file = sealGammaFile(next, author.subject.did, recipients);
   writeGammaFile(handle, file);
 }
 
