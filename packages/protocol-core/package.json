@@ -56,6 +56,10 @@
       "types": "./dist/ethos.d.ts",
       "import": "./dist/ethos.js"
     },
+    "./filesystem-storage": {
+      "types": "./dist/filesystem-storage.d.ts",
+      "import": "./dist/filesystem-storage.js"
+    },
     "./identity": {
       "types": "./dist/identity.d.ts",
       "import": "./dist/identity.js"

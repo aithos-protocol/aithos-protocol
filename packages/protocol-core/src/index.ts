@@ -21,3 +21,4 @@ export * from "./gamma.js";
 export * from "./author.js";
 export * from "./envelope.js";
 export * from "./backend.js";
+export * from "./filesystem-storage.js";
