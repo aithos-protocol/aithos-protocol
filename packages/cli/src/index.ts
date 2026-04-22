@@ -47,7 +47,7 @@ const program = new Command();
 program
   .name("aithos")
   .description("Aithos reference CLI — identities, mandates, signatures.")
-  .version("0.2.0");
+  .version("0.2.1");
 
 program
   .command("init")

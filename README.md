@@ -5,7 +5,7 @@
 
 Aithos lets a person publish a signed, versioned, zone-partitioned description of themselves — their *ethos* — that any AI agent can read, under rules the person sets. The person can grant a time-bounded, scoped mandate to a specific agent and revoke it. The agent's actions, when taken under that mandate, are cryptographically attributable.
 
-**Status: v0.2.0 (breaking).** Spec is stabilizing. CLI is a working reference implementation. v0.2.0 promotes the signed **gamma log** (append-only, hash-chained, Ed25519-signed, sealed under the self sphere) to the sole authority on section mutation history — the per-section `revisions[]` chain from v0.1.x is gone. Nothing is frozen yet.
+**Status: v0.2.1.** Spec is stabilizing. CLI is a working reference implementation. v0.2.0 promoted the signed **gamma log** (append-only, hash-chained, Ed25519-signed, sealed under the self sphere) to the sole authority on section mutation history — the per-section `revisions[]` chain from v0.1.x is gone. v0.2.1 closes the loop on **delegated writes against a tracked identity**: a delegate produces a fully verifiable edition (signed manifest, signed gamma entries, sealed zones) without ever holding the owner's sphere seeds, and the owner pulls that edition back in with `aithos ethos install --force`. Nothing is frozen yet.
 
 ## Start here
 

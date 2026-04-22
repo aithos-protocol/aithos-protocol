@@ -5,6 +5,50 @@ All notable changes to the Aithos reference CLI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-04-22
+
+Point release. Closes the loop on **mandate-driven writes against a tracked
+identity**: a delegate now produces a fully verifiable edition (signed manifest,
+signed gamma entries, sealed zones) without ever holding the owner's sphere
+seeds, and the owner can pull that edition back into their own keystore in one
+command.
+
+### Added
+- **`aithos ethos install --force` on owned identities.** Lets an owner pull a
+  delegate-produced edition back into their local keystore without touching the
+  sealed sphere seeds (only `did.json`, `manifest.json`, the zone files, and the
+  gamma log are overwritten).
+- **`aithos mandate add` accepts both `aithos-mandate@0.1.0` and `0.2.1`
+  mandates.** The version handshake is widened so a tracked installer can import
+  v0.2.1 mandates carrying `grantee.pubkey` and the X25519 DEK wrap needed for
+  delegate writes.
+
+### Changed
+- **`aithos ethos install` now verifies delegate-signed bundles.** The install
+  path threads a keystore-aware delegate-pubkey resolver into stateless bundle
+  verification, so manifests/zones carrying `authorized_by: mandate_…` resolve
+  the agent's signing key from the locally-installed mandate (verified, not
+  revoked, matching grantee binding).
+- **CLI version stamp bumped to `0.2.1`.**
+
+### Protocol
+- Targets **`@aithos/protocol-core@^0.2.1`**. Picks up: the `Author`
+  abstraction (`OwnerAuthor | DelegateAuthor`), `authorized_by` on zone /
+  manifest / gamma signatures, mandate v0.2.1 with `grantee.pubkey` + the
+  RFC 7748 §4.1 Edwards→Montgomery key conversion, DEK rewrap on
+  `issueMandateWithRewrap`, DEK repin on `repinAfterRevocation`, the
+  `keystoreDelegateResolver` factored out for reuse, and the on-disk-bytes
+  hash check for the public zone (previously rendered, which caused
+  carry-forward editions to fail their own verification).
+
+### Tested
+- New end-to-end CLI scenario (`packages/cli/test/cli-delegate-e2e.test.ts`)
+  driving the built `aithos` binary through: owner init → delegate-key →
+  grant → pack → install on a fresh `AITHOS_HOME` → mandate add → delegate
+  add-section → pack back → owner re-install (`--force`) → ethos verify →
+  revoke → post-revocation pack → next delegate write fails closed
+  (DEK no longer wrapped to the revoked grantee).
+
 ## [0.2.0] — 2026-04-21
 
 **Breaking release.** Section mutation history is now recorded exclusively in

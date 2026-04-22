@@ -118,6 +118,6 @@ location /mcp {
 - The server runs with the privileges of the user who started it. Anyone who
   can reach the bearer-protected endpoint gets full read/write power over the
   identities in `$AITHOS_HOME`.
-- v0.2.0 stores private sphere-key seeds as plaintext JSON files under
+- v0.2.x stores private sphere-key seeds as plaintext JSON files under
   `$AITHOS_HOME` (mode 0600). Treat that directory as a credential store.
   The gamma log itself is sealed at rest under the self sphere key.

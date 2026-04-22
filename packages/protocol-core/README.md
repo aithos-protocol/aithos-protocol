@@ -45,9 +45,14 @@ path as an argument. Hosts that want a default keystore layout (the
 
 ## Status
 
-**Draft**, targeting Aithos protocol v0.2.0. The wire format may change on
-any minor-version bump until 1.0.0. v0.2.0 is a breaking release over v0.1.x:
-section mutation history lives in the signed gamma log only (see spec §10).
+**Draft**, package v0.2.1, targeting Aithos protocol v0.2.x (manifests stamp
+`aithos: "0.2.0"`, mandates stamp `aithos-mandate: "0.2.1"`). The wire format
+may change on any minor-version bump until 1.0.0. v0.2.0 was a breaking release
+over v0.1.x: section mutation history lives in the signed gamma log only (see
+spec §10). v0.2.1 closes the loop on delegate writes against a tracked
+identity: mandates carry the grantee's Ed25519 pubkey, zone/manifest/gamma
+signatures carry an optional `authorized_by`, and the keystore-aware delegate
+resolver lets stateless verifiers accept delegate-signed bundles.
 
 ## License
 

@@ -1,8 +1,8 @@
 # @aithos/cli
 
-Reference CLI for the Aithos protocol (v0.2.0).
+Reference CLI for the Aithos protocol (v0.2.x; package v0.2.1, mandates v0.2.1, manifests v0.2.0).
 
-This tool creates and manages Aithos identities, issues and revokes mandates, and verifies signed artifacts. It is a **reference implementation** — small, readable, pinned to the v0.2.0 spec. It is not hardened for production: seeds are stored as plaintext JSON files on disk, protected only by Unix permissions. See the security note at the bottom.
+This tool creates and manages Aithos identities, issues and revokes mandates, and verifies signed artifacts. It is a **reference implementation** — small, readable, pinned to the v0.2.x spec. It is not hardened for production: seeds are stored as plaintext JSON files on disk, protected only by Unix permissions. See the security note at the bottom.
 
 ## Install
 
@@ -148,7 +148,7 @@ Revoking a mandate terminates its authority going forward. Gamma entries that we
 
 If a subject wants to repudiate what a revoked mandate wrote, they publish a follow-up gamma entry (modify-section or delete-section) signed by their sphere key. The log is never rewritten.
 
-## Security note (v0.2.0)
+## Security note (v0.2.x)
 
 This CLI stores sphere-key seeds as **plaintext JSON** under `~/.aithos/`, protected only by filesystem permissions. That is acceptable for a developer preview on a trusted device. It is **not** acceptable for production.
 
