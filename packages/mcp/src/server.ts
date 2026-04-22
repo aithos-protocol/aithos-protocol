@@ -1,8 +1,8 @@
 /**
  * Aithos MCP server.
  *
- * Wraps the CLI's ethos + identity + mandate primitives as MCP tools and
- * resources so that LLM agents speaking the Model Context Protocol can:
+ * Wraps the protocol-core primitives (identity / ethos / mandate) as MCP tools
+ * and resources so LLM agents speaking the Model Context Protocol can:
  *
  *   - introspect an identity (read sphere public keys, DID)
  *   - list sections across zones
@@ -11,9 +11,16 @@
  *   - add sections and modify them (under a write mandate + agent key), each
  *     mutation emitting a signed gamma entry (spec §10)
  *
- * The server is intentionally stateless: each tool call re-reads from disk.
- * That's slightly slower than caching, but it matches the on-disk semantics
- * (the CLI may have written new gamma entries between calls) and makes
+ * Every I/O call flows through an injected {@link AithosStorage}. The default
+ * is {@link FilesystemStorage} which reads/writes the local `$AITHOS_HOME`.
+ * Hosts that want to back the MCP with a remote API (e.g. the Aithos platform)
+ * can pass their own `AithosStorage` implementation — typically one that
+ * packages every write in a signed envelope (spec §11.2) and forwards it to
+ * the remote.
+ *
+ * The server is intentionally stateless: each tool call re-reads from the
+ * backend. That's slightly slower than caching, but it matches the on-disk
+ * semantics (gamma entries may have been written between calls) and keeps
  * tamper detection honest.
  */
 import {
@@ -23,50 +30,41 @@ import {
 import { z } from "zod";
 
 import {
-  loadConfig,
-  listIdentities,
   AITHOS_HOME,
-  identityDir,
-  readJson,
-  loadIdentity,
-  loadIdentityMetadata,
-  isTrackedIdentity,
+  ethosManifestPath,
+  FilesystemStorage,
+  SPHERE_FRAGMENTS,
   TrackedIdentityError,
   rootDid,
-  sphereDidUrl,
-  type DidDocument,
-  ethosManifestPath,
-  ethosZoneFile,
-  readManifest,
-  loadZoneDoc,
-  verifyEthos,
-  addSection,
-  modifySection,
-  type Section,
-  type ZoneDoc,
-  type Manifest,
-  SPHERE_FRAGMENTS,
-  type Sphere,
   verifyMandate,
-  loadMandate,
+  type AithosStorage,
+  type DidDocument,
+  type Identity,
   type Mandate,
+  type Manifest,
+  type Section,
+  type Sphere,
+  type ZoneDoc,
 } from "@aithos/protocol-core";
 import fs from "node:fs";
 import path from "node:path";
 
-import { resolveWriteAuth } from "./auth.js";
+import { resolveWriteAuth, type ResolvedWriteAuth } from "./auth.js";
 
 // ---------- helpers --------------------------------------------------------
 
-function resolveHandle(handle?: string): string {
+async function resolveHandle(
+  storage: AithosStorage,
+  handle?: string,
+): Promise<string> {
   if (handle) return handle;
-  const cfg = loadConfig();
-  if (!cfg.default_handle) {
+  const def = await storage.defaultHandle();
+  if (!def) {
     throw new Error(
       "no handle provided and no default identity configured (run `aithos init`)",
     );
   }
-  return cfg.default_handle;
+  return def;
 }
 
 function ok(value: unknown) {
@@ -104,24 +102,46 @@ function sectionSummary(
  * Best-effort zone loader: decrypts circle/self if the identity is owned,
  * errors with a tracked-identity message if only the public data is available.
  */
-function readZone(handle: string, zone: Sphere): ZoneDoc {
+async function readZone(
+  storage: AithosStorage,
+  handle: string,
+  zone: Sphere,
+): Promise<ZoneDoc> {
   if (zone === "public") {
-    // No identity required to read the cleartext public zone.
     try {
-      return loadZoneDoc(handle, zone);
+      return await storage.readZoneDoc(handle, zone);
     } catch (e) {
-      // `loadZoneDoc` may still need the manifest; fall through with a helpful error
       throw new Error(
         `failed to load public zone for ${handle}: ${(e as Error).message}`,
       );
     }
   }
   // circle / self need a local Identity (subject secret) to decrypt.
-  // loadIdentity throws TrackedIdentityError if any sealed seed is missing,
-  // which we let bubble up — the caller gets a clear message.
-  const identity = loadIdentity(handle);
-  const manifest = readManifest(handle);
-  return loadZoneDoc(handle, zone, identity, manifest);
+  // `storage.loadIdentity` throws `TrackedIdentityError` if any sealed seed is
+  // missing (filesystem backend) — we let it bubble up so the caller gets a
+  // clear message.
+  const identity = await storage.loadIdentity(handle);
+  const manifest = await storage.readManifest(handle);
+  return storage.readZoneDoc(handle, zone, { identity, manifest });
+}
+
+/**
+ * Load the subject identity for a write if the backend has it available
+ * locally. If the caller supplied a delegate (mandate + agentKey), a missing
+ * local identity is not fatal — the storage backend will accept delegate-only
+ * writes (this is the remote-storage shape).
+ */
+async function loadWriteIdentity(
+  storage: AithosStorage,
+  handle: string,
+  auth: ResolvedWriteAuth | null,
+): Promise<Identity | undefined> {
+  try {
+    return await storage.loadIdentity(handle);
+  } catch (e) {
+    if (!auth) throw e;
+    return undefined;
+  }
 }
 
 // ---------- server registration -------------------------------------------
@@ -131,6 +151,11 @@ export interface CreateServerOptions {
   name?: string;
   /** Override the server version that appears in `initialize` results. */
   version?: string;
+  /**
+   * Storage backend for every identity / ethos / mandate read and write.
+   * Defaults to {@link FilesystemStorage} which reads `$AITHOS_HOME`.
+   */
+  storage?: AithosStorage;
 }
 
 export function createServer(opts: CreateServerOptions = {}): McpServer {
@@ -145,6 +170,8 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
+  const storage: AithosStorage = opts.storage ?? new FilesystemStorage();
+
   // ------------------------------------------------------------------ identity
 
   server.registerTool(
@@ -157,20 +184,22 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       inputSchema: {},
     },
     async () => {
-      const handles = listIdentities();
-      const out = handles.map((h) => {
-        try {
-          const meta = loadIdentityMetadata(h);
-          return {
-            handle: meta.handle,
-            did: meta.did,
-            tracked: meta.tracked,
-            spheres: meta.sphereDids,
-          };
-        } catch (e) {
-          return { handle: h, error: (e as Error).message };
-        }
-      });
+      const handles = await storage.listHandles();
+      const out = await Promise.all(
+        handles.map(async (h) => {
+          try {
+            const meta = await storage.loadIdentityMetadata(h);
+            return {
+              handle: meta.handle,
+              did: meta.did,
+              tracked: meta.tracked,
+              spheres: meta.sphereDids,
+            };
+          } catch (e) {
+            return { handle: h, error: (e as Error).message };
+          }
+        }),
+      );
       return ok({ aithos_home: AITHOS_HOME, identities: out });
     },
   );
@@ -190,8 +219,8 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ handle }) => {
-      const h = resolveHandle(handle);
-      const meta = loadIdentityMetadata(h);
+      const h = await resolveHandle(storage, handle);
+      const meta = await storage.loadIdentityMetadata(h);
       return ok({
         handle: meta.handle,
         displayName: meta.displayName,
@@ -218,8 +247,8 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ handle, zone }) => {
-      const h = resolveHandle(handle);
-      const tracked = isTrackedIdentity(h);
+      const h = await resolveHandle(storage, handle);
+      const tracked = await storage.isTrackedIdentity(h);
       const zones: Sphere[] = zone ? [zone] : [...SPHERE_FRAGMENTS];
       const sections: ReturnType<typeof sectionSummary>[] = [];
       const skipped: Array<{ zone: Sphere; reason: string }> = [];
@@ -236,7 +265,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           continue;
         }
         try {
-          const doc = readZone(h, z);
+          const doc = await readZone(storage, h, z);
           for (const s of doc.sections) sections.push(sectionSummary(z, s));
         } catch (e) {
           if (e instanceof TrackedIdentityError) {
@@ -265,17 +294,17 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ handle, zone, sectionId }) => {
-      const h = resolveHandle(handle);
+      const h = await resolveHandle(storage, handle);
       // Short-circuit encrypted zones on a tracked identity with an explicit
       // message — the on-disk ciphertext cannot be read without the sphere key,
       // so there's no point trying and surfacing a generic decryption error.
-      if (isTrackedIdentity(h) && zone !== "public") {
+      if ((await storage.isTrackedIdentity(h)) && zone !== "public") {
         throw new Error(
           `cannot read section in ${zone} zone of "${h}": identity is tracked-only ` +
             `(no sphere key on disk). Only the public zone is readable.`,
         );
       }
-      const doc = readZone(h, zone);
+      const doc = await readZone(storage, h, zone);
       const section = doc.sections.find((s) => s.id === sectionId);
       if (!section) {
         throw new Error(`section ${sectionId} not found in zone ${zone}`);
@@ -312,17 +341,15 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ handle, decrypt }) => {
-      const h = resolveHandle(handle);
-      const didDoc = readJson<DidDocument>(
-        path.join(identityDir(h), "did.json"),
-      );
+      const h = await resolveHandle(storage, handle);
+      const didDoc = await storage.loadDidDocument(h);
       // Tracked identities have no sealed seeds: we transparently downgrade to
       // a public-only verification rather than throwing. The result object
       // already notes which zones were skipped.
-      const tracked = isTrackedIdentity(h);
+      const tracked = await storage.isTrackedIdentity(h);
       const identity =
-        decrypt === false || tracked ? null : loadIdentity(h);
-      const result = verifyEthos(h, identity, didDoc);
+        decrypt === false || tracked ? null : await storage.loadIdentity(h);
+      const result = await storage.verifyEthos(h, identity, didDoc);
       return ok({ tracked, ...result });
     },
   );
@@ -356,9 +383,8 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ handle, zone, title, body, tags, mandate, agentKey }) => {
-      const h = resolveHandle(handle);
-      const identity = loadIdentity(h);
-      const auth = resolveWriteAuth({ mandate, agentKey });
+      const h = await resolveHandle(storage, handle);
+      const auth = await resolveWriteAuth(storage, { mandate, agentKey });
       if (auth) {
         const writeScope = `ethos.write.${zone}`;
         if (!auth.mandate.scopes.includes(writeScope)) {
@@ -367,17 +393,19 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           );
         }
       }
-      const { section, manifest, gammaEntry } = addSection({
-        handle: h,
-        zone,
-        identity,
-        title,
-        body,
-        tags,
-        delegate: auth?.delegate,
-      });
+      const identity = await loadWriteIdentity(storage, h, auth);
+      const { section, manifest, gammaEntry } = await storage.addSection(
+        {
+          handle: h,
+          zone,
+          title,
+          body,
+          tags,
+        },
+        { identity, delegate: auth?.delegate },
+      );
       return ok({
-        section: sectionSummary(zone, section),
+        section: sectionSummary(zone, section as Section),
         manifest_version: manifest.edition.version,
         manifest_height: manifest.edition.height,
         gamma_entry_id: gammaEntry.id,
@@ -426,9 +454,8 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           "aithos_ethos_modify_section: pass at least one of title, body, tags, clearTags",
         );
       }
-      const h = resolveHandle(handle);
-      const identity = loadIdentity(h);
-      const auth = resolveWriteAuth({ mandate, agentKey });
+      const h = await resolveHandle(storage, handle);
+      const auth = await resolveWriteAuth(storage, { mandate, agentKey });
       if (auth) {
         const writeScope = `ethos.write.${zone}`;
         if (!auth.mandate.scopes.includes(writeScope)) {
@@ -437,19 +464,21 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           );
         }
       }
+      const identity = await loadWriteIdentity(storage, h, auth);
       const effectiveTags = clearTags ? [] : tags;
-      const { section, manifest, gammaEntry } = modifySection({
-        handle: h,
-        zone,
-        identity,
-        sectionId,
-        title,
-        body,
-        tags: effectiveTags,
-        delegate: auth?.delegate,
-      });
+      const { section, manifest, gammaEntry } = await storage.modifySection(
+        {
+          handle: h,
+          zone,
+          sectionId,
+          title,
+          body,
+          tags: effectiveTags,
+        },
+        { identity, delegate: auth?.delegate },
+      );
       return ok({
-        section: sectionSummary(zone, section),
+        section: sectionSummary(zone, section as Section),
         manifest_version: manifest.edition.version,
         manifest_height: manifest.edition.height,
         gamma_entry_id: gammaEntry.id,
@@ -483,16 +512,16 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         const p = path.resolve(mandate);
         m = JSON.parse(fs.readFileSync(p, "utf8")) as Mandate;
       } else {
-        m = loadMandate(mandate);
+        m = await storage.loadMandate(mandate);
       }
       // `issuer` is `did:aithos:<mb>` — find the matching local identity (owned
       // or tracked) to load its DID document. Verification only needs public
       // keys, so a tracked identity is perfectly fine as an issuer lookup.
       const subjectDid = m.issuer;
       let didDoc: DidDocument | undefined;
-      for (const h of listIdentities()) {
+      for (const h of await storage.listHandles()) {
         try {
-          const meta = loadIdentityMetadata(h);
+          const meta = await storage.loadIdentityMetadata(h);
           if (meta.did === subjectDid) {
             didDoc = meta.didDocument;
             break;
@@ -524,15 +553,17 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         "JSON index of every identity in $AITHOS_HOME (handle, DID, spheres).",
     },
     async (uri) => {
-      const handles = listIdentities();
-      const list = handles.map((h) => {
-        try {
-          const meta = loadIdentityMetadata(h);
-          return { handle: h, did: meta.did, tracked: meta.tracked };
-        } catch (e) {
-          return { handle: h, error: (e as Error).message };
-        }
-      });
+      const handles = await storage.listHandles();
+      const list = await Promise.all(
+        handles.map(async (h) => {
+          try {
+            const meta = await storage.loadIdentityMetadata(h);
+            return { handle: h, did: meta.did, tracked: meta.tracked };
+          } catch (e) {
+            return { handle: h, error: (e as Error).message };
+          }
+        }),
+      );
       return {
         contents: [
           {
@@ -547,9 +578,9 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
 
   // Helper: enumerate ethos URIs for every local identity (used by the
   // `list` callback on every template). Cheap — just reads the directory.
-  const listEthosResources = () => {
+  const listEthosResources = async () => {
     const out: Array<{ uri: string; name: string; mimeType?: string }> = [];
-    for (const h of listIdentities()) {
+    for (const h of await storage.listHandles()) {
       out.push({
         uri: `aithos://ethos/${h}/manifest`,
         name: `ethos-manifest:${h}`,
@@ -571,7 +602,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     "aithos_ethos_manifest",
     new ResourceTemplate("aithos://ethos/{handle}/manifest", {
       list: async () => ({
-        resources: listEthosResources().filter((r) =>
+        resources: (await listEthosResources()).filter((r) =>
           r.uri.endsWith("/manifest"),
         ),
       }),
@@ -585,7 +616,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     async (uri, { handle }) => {
       const h = Array.isArray(handle) ? handle[0] : handle;
       if (!h) throw new Error(`malformed uri: ${uri.href}`);
-      const m = readManifest(h);
+      const m = await storage.readManifest(h);
       return {
         contents: [
           {
@@ -605,7 +636,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     "aithos_ethos_zone",
     new ResourceTemplate("aithos://ethos/{handle}/{zone}", {
       list: async () => ({
-        resources: listEthosResources().filter(
+        resources: (await listEthosResources()).filter(
           (r) => !r.uri.endsWith("/manifest") && !r.uri.endsWith("/manifest-path"),
         ),
       }),
@@ -625,13 +656,13 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         throw new Error(`malformed uri: ${uri.href}`);
       }
       if (zone === "public") {
-        const p = ethosZoneFile(handle, zone);
+        const bytes = await storage.readZoneBytes(handle, zone);
         return {
           contents: [
             {
               uri: uri.href,
               mimeType: "text/markdown",
-              text: fs.readFileSync(p, "utf8"),
+              text: new TextDecoder("utf-8").decode(bytes),
             },
           ],
         };
@@ -640,9 +671,12 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       // have one, return the ciphertext blob — useful for synchronisation
       // agents that never need plaintext.
       try {
-        const identity = loadIdentity(handle);
-        const manifest = readManifest(handle);
-        const doc = loadZoneDoc(handle, zone, identity, manifest);
+        const identity = await storage.loadIdentity(handle);
+        const manifest = await storage.readManifest(handle);
+        const doc = await storage.readZoneDoc(handle, zone, {
+          identity,
+          manifest,
+        });
         // Re-render markdown using the ethos module's canonical renderer.
         const { renderZoneMarkdown } = await import("@aithos/protocol-core");
         const md = renderZoneMarkdown(zone, doc, {
@@ -661,14 +695,13 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           ],
         };
       } catch {
-        const p = ethosZoneFile(handle, zone);
-        const bytes = fs.readFileSync(p);
+        const bytes = await storage.readZoneBytes(handle, zone);
         return {
           contents: [
             {
               uri: uri.href,
               mimeType: "application/octet-stream",
-              blob: bytes.toString("base64"),
+              blob: Buffer.from(bytes).toString("base64"),
             },
           ],
         };
@@ -676,31 +709,34 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  // `aithos://ethos/{handle}/manifest/path` — absolute on-disk path, useful for
-  // UIs that want to open the file directly. Cheap, diagnostic-only.
-  server.registerResource(
-    "aithos_ethos_manifest_path",
-    new ResourceTemplate("aithos://ethos/{handle}/manifest-path", {
-      list: undefined,
-    }),
-    {
-      title: "Ethos manifest file path",
-      mimeType: "text/plain",
-    },
-    async (uri, { handle }) => {
-      const h = Array.isArray(handle) ? handle[0] : handle;
-      if (!h) throw new Error(`malformed uri: ${uri.href}`);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: "text/plain",
-            text: ethosManifestPath(h),
-          },
-        ],
-      };
-    },
-  );
+  // `aithos://ethos/{handle}/manifest/path` — absolute on-disk path, useful
+  // for UIs that want to open the file directly. Filesystem-only diagnostic;
+  // only registered when the backend is a {@link FilesystemStorage}.
+  if (storage instanceof FilesystemStorage) {
+    server.registerResource(
+      "aithos_ethos_manifest_path",
+      new ResourceTemplate("aithos://ethos/{handle}/manifest-path", {
+        list: undefined,
+      }),
+      {
+        title: "Ethos manifest file path",
+        mimeType: "text/plain",
+      },
+      async (uri, { handle }) => {
+        const h = Array.isArray(handle) ? handle[0] : handle;
+        if (!h) throw new Error(`malformed uri: ${uri.href}`);
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "text/plain",
+              text: ethosManifestPath(h),
+            },
+          ],
+        };
+      },
+    );
+  }
 
   return server;
 }

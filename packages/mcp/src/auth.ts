@@ -4,18 +4,27 @@
  * The MCP server never *creates* mandates — those are minted by `aithos grant`
  * on the subject's machine. At call time we just need to:
  *
- *   1. Locate the mandate JSON (by id in the local store, or at a fixed path).
+ *   1. Locate the mandate JSON (by id via the storage backend, or at a
+ *      filesystem path).
  *   2. Locate an agent keyfile whose public key matches `mandate.grantee.pubkey`.
  *   3. Return both to the caller in a shape the ethos module already accepts.
  *
  * If neither is provided, writes fall back to the subject's own sphere key —
  * which only works when the MCP server is running on the subject's machine
  * (typical for local stdio use).
+ *
+ * The id-form mandate lookup goes through the injected {@link AithosStorage}
+ * so remote backends can resolve mandates against their own store. Path-form
+ * (absolute/relative `.json`) is always the MCP server's own filesystem.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { Buffer } from "node:buffer";
-import { loadMandate, type Mandate, mandatesDir } from "@aithos/protocol-core";
+import {
+  mandatesDir,
+  type AithosStorage,
+  type Mandate,
+} from "@aithos/protocol-core";
 
 export interface AgentKeyFile {
   aithos?: string;
@@ -38,19 +47,23 @@ export interface ResolvedWriteAuth {
 }
 
 /**
- * Resolve a mandate by id or path. Falls back to the local mandates store.
+ * Resolve a mandate by id or path. Id form goes through the storage backend
+ * so remote MCP deployments can resolve against the server's mandate store.
  */
-export function resolveMandate(
+export async function resolveMandate(
+  storage: AithosStorage,
   idOrPath: string,
-): { mandate: Mandate; mandatePath: string } {
+): Promise<{ mandate: Mandate; mandatePath: string }> {
   // Path form (absolute or relative with extension / slash).
   if (idOrPath.includes("/") || idOrPath.endsWith(".json")) {
     const p = path.resolve(idOrPath);
     const raw = fs.readFileSync(p, "utf8");
     return { mandate: JSON.parse(raw) as Mandate, mandatePath: p };
   }
-  // Id form — look it up in the local mandates store.
-  const mandate = loadMandate(idOrPath);
+  // Id form — ask the backend.
+  const mandate = await storage.loadMandate(idOrPath);
+  // `mandatePath` is diagnostic metadata (where the mandate "would" live
+  // on the local filesystem); remote backends may not have a real file there.
   const mandatePath = path.join(mandatesDir(), `${idOrPath}.json`);
   return { mandate, mandatePath };
 }
@@ -74,17 +87,17 @@ export function loadAgentKey(pathOrEnv: string): {
 /**
  * Join a mandate + agent-key pair, validating surface-level consistency.
  */
-export function resolveWriteAuth(args: {
-  mandate?: string;
-  agentKey?: string;
-}): ResolvedWriteAuth | null {
+export async function resolveWriteAuth(
+  storage: AithosStorage,
+  args: { mandate?: string; agentKey?: string },
+): Promise<ResolvedWriteAuth | null> {
   if (!args.mandate && !args.agentKey) return null;
   if (!args.mandate || !args.agentKey) {
     throw new Error(
       "write mandate and agent-key must be provided together (both or neither)",
     );
   }
-  const { mandate, mandatePath } = resolveMandate(args.mandate);
+  const { mandate, mandatePath } = await resolveMandate(storage, args.mandate);
   const { key, path: agentKeyPath } = loadAgentKey(args.agentKey);
   if (
     mandate.grantee.pubkey &&
