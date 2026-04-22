@@ -44,6 +44,10 @@
       "types": "./dist/did.d.ts",
       "import": "./dist/did.js"
     },
+    "./envelope": {
+      "types": "./dist/envelope.d.ts",
+      "import": "./dist/envelope.js"
+    },
     "./ethos": {
       "types": "./dist/ethos.d.ts",
       "import": "./dist/ethos.js"

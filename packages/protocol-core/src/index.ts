@@ -19,3 +19,4 @@ export * from "./bundle.js";
 export * from "./canonical.js";
 export * from "./gamma.js";
 export * from "./author.js";
+export * from "./envelope.js";
