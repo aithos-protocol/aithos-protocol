@@ -22,6 +22,13 @@ command.
   mandates.** The version handshake is widened so a tracked installer can import
   v0.2.1 mandates carrying `grantee.pubkey` and the X25519 DEK wrap needed for
   delegate writes.
+- **`aithos ethos show --mandate <id> --agent-key <path>` on tracked installs.**
+  Closes the read-side asymmetry: delegate writes worked end-to-end in 0.2.1,
+  but reading an encrypted zone on a tracked install still required owner
+  seeds. A delegate carrying an `ethos.read.<zone>` scope can now decrypt
+  the zone via its DEK wrap without ever touching sealed sphere material.
+  Shares the same `resolveAuthor` validation pipeline as write commands
+  (scope match, pubkey match, window, revocation).
 
 ### Changed
 - **`aithos ethos install` now verifies delegate-signed bundles.** The install
