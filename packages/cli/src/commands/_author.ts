@@ -41,10 +41,17 @@ export interface DelegateKeyfile {
 export interface ResolveAuthorOpts {
   handle: string;
   /**
-   * Zone the resolved Author is about to write to. When set, the mandate
-   * must carry `ethos.write.<zone>`. Omit for ops that only read.
+   * Zone the resolved Author is about to act on. When set, the mandate
+   * must carry the matching scope (`ethos.write.<zone>` for `op="write"`,
+   * `ethos.read.<zone>` for `op="read"`). Omit to skip the scope check.
    */
   zone?: Sphere;
+  /**
+   * The kind of operation. Defaults to `"write"` (the historical caller
+   * shape — section add/modify/delete). Pass `"read"` for read-only ops
+   * like `ethos show --zone <z>`, which require `ethos.read.<zone>`.
+   */
+  op?: "read" | "write";
   /** Mandate id — set iff the caller passed `--mandate`. */
   mandate?: string;
   /** Delegate keyfile path — required when `mandate` is set. */
@@ -70,12 +77,17 @@ export function resolveAuthor(opts: ResolveAuthorOpts): ResolvedAuthor {
     const mandate = loadMandate(opts.mandate);
 
     if (opts.zone) {
-      const writeScope = `ethos.write.${opts.zone}` as const;
-      if (!mandate.scopes.includes(writeScope)) {
+      const op = opts.op ?? "write";
+      const requiredScope = `ethos.${op}.${opts.zone}` as const;
+      if (!mandate.scopes.includes(requiredScope)) {
         throw new Error(
-          `Mandate ${opts.mandate} does not include scope ${writeScope}`,
+          `Mandate ${opts.mandate} does not include scope ${requiredScope}`,
         );
       }
+      // The mandate's actor_sphere must match the zone, in both directions:
+      //   - write: the new edition is signed under that sphere key.
+      //   - read:  the DEK wrap that lets the delegate decrypt was created
+      //            under that sphere's wrap recipient list.
       if (mandate.actor_sphere !== opts.zone) {
         throw new Error(
           `Mandate ${opts.mandate} actor_sphere=${mandate.actor_sphere} ` +

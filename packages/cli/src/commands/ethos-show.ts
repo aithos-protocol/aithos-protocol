@@ -17,14 +17,21 @@ import {
   ethosZoneFile,
   loadZoneDoc,
   readManifest,
+  type Author,
+  type Identity,
   type Sphere,
   loadConfig,
 } from "@aithos/protocol-core";
+import { resolveAuthor } from "./_author.js";
 
 export interface EthosShowOpts {
   handle?: string;
   zone?: string;
   section?: string;
+  /** Mandate id — for delegate reads of an encrypted zone on a tracked install. */
+  mandate?: string;
+  /** Delegate keyfile path — required when `mandate` is set. */
+  agentKey?: string;
   json?: boolean;
 }
 
@@ -69,16 +76,41 @@ export function runEthosShow(opts: EthosShowOpts): void {
   }
 
   const zone = ensureZone(opts.zone ?? "public");
-  // Public zone is readable without any sphere key; circle/self require the
-  // subject's sphere secret (present only on owned identities).
-  if (tracked && zone !== "public") {
+  // Three auth paths converge into a single `who: Identity | Author | undefined`
+  // that gets passed into loadZoneDoc:
+  //
+  //   - Public zone, anyone:       no `who` needed (plaintext on disk).
+  //   - Owned identity, any zone:  use the local Identity (full sphere keys).
+  //   - Delegate read (--mandate): build a DelegateAuthor — works on tracked
+  //                                installs because the delegate carries a
+  //                                DEK wrap from grant-time rewrap.
+  let who: Identity | Author | undefined;
+  if (zone === "public") {
+    who = undefined; // plaintext, no auth needed
+    if (opts.mandate) {
+      throw new Error(
+        `--mandate is only meaningful when reading an encrypted zone (circle | self).`,
+      );
+    }
+  } else if (opts.mandate) {
+    const resolved = resolveAuthor({
+      handle,
+      zone,
+      op: "read",
+      mandate: opts.mandate,
+      agentKey: opts.agentKey,
+    });
+    who = resolved.author;
+  } else if (tracked) {
     throw new Error(
       `cannot read ${zone} zone of "${handle}": identity is tracked-only (no sphere key on disk). ` +
-        `Only the public zone is readable.`,
+        `Pass --mandate <id> --agent-key <path> to read via a delegate mandate.`,
     );
+  } else {
+    who = loadIdentity(handle);
   }
-  const identity = tracked ? undefined : loadIdentity(handle);
-  const doc = loadZoneDoc(handle, zone, identity, manifest);
+
+  const doc = loadZoneDoc(handle, zone, who, manifest);
 
   if (opts.section) {
     const sec = doc.sections.find((s) => s.id === opts.section);

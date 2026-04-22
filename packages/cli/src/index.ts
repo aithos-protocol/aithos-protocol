@@ -252,13 +252,28 @@ ethos
   .command("show")
   .description(
     "Show manifest summary, or a zone/section's current content. " +
-      "Section mutation history lives in the gamma log — see `aithos gamma show`.",
+      "Section mutation history lives in the gamma log — see `aithos gamma show`. " +
+      "On a tracked install, encrypted zones (circle | self) are readable via " +
+      "a delegate mandate by passing --mandate <id> --agent-key <path>.",
   )
   .option("--zone <zone>", "public | circle | self")
   .option("--section <id>", "Section id")
+  .option("--mandate <id>", "Delegate mandate (for reads of encrypted zones on tracked installs)")
+  .option("--agent-key <path>", "Agent keyfile (required with --mandate)")
   .option("--handle <h>", "Identity handle")
   .option("--json", "Output JSON")
-  .action((opts) => wrap(() => runEthosShow(opts)));
+  .action((opts) =>
+    wrap(() =>
+      runEthosShow({
+        handle: opts.handle,
+        zone: opts.zone,
+        section: opts.section,
+        mandate: opts.mandate,
+        agentKey: opts.agentKey,
+        json: opts.json,
+      }),
+    ),
+  );
 
 ethos
   .command("list")
