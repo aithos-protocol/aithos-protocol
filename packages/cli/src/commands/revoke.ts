@@ -24,7 +24,11 @@ import {
   loadMandate,
   createRevocation,
   writeRevocation,
+  repinAfterRevocation,
+  ethosDir,
+  type Identity,
   type Mandate,
+  type Revocation,
   readJson,
 } from "@aithos/protocol-core";
 
@@ -86,8 +90,15 @@ export function runRevoke(opts: RevokeOpts): void {
   const rev = createRevocation({ issuer: id, mandate, reason });
   const path = writeRevocation(rev);
 
+  // Repin ethos state if the revoked mandate touched the ethos: rotate the
+  // zone DEKs and reseal the gamma log under the remaining active delegates,
+  // so the revoked delegate can no longer decrypt anything produced from
+  // this point on. The mandate document + revocation document remain on
+  // disk as the audit trail.
+  const repinned = maybeRepin(handle, id, mandate, rev);
+
   if (opts.json) {
-    console.log(JSON.stringify({ revocation: rev, path }, null, 2));
+    console.log(JSON.stringify({ revocation: rev, path, repinned }, null, 2));
     return;
   }
 
@@ -96,6 +107,31 @@ export function runRevoke(opts: RevokeOpts): void {
   console.log(`  Revoked at: ${rev.revoked_at}`);
   console.log(`  Issued by:  ${rev.issued_by_key}`);
   console.log(`  Path:       ${path}`);
+  if (repinned) {
+    console.log(
+      `  Repin:      rotated ethos DEKs (new edition ${repinned.version}, height=${repinned.height}).`,
+    );
+  }
+}
+
+/**
+ * If the revoked mandate authorised ethos writes or reads AND the subject
+ * has an ethos on disk, run `repinAfterRevocation` to rotate DEKs. Returns
+ * the new edition summary, or null when nothing was repinned.
+ */
+function maybeRepin(
+  handle: string,
+  identity: Identity,
+  mandate: Mandate,
+  revocation: Revocation,
+): { version: string; height: number } | null {
+  const touchesEthos = mandate.scopes.some(
+    (s) => s.startsWith("ethos.write.") || s.startsWith("ethos.read."),
+  );
+  if (!touchesEthos) return null;
+  if (!existsSync(ethosDir(handle))) return null;
+  const manifest = repinAfterRevocation({ handle, identity, revocation });
+  return { version: manifest.edition.version, height: manifest.edition.height };
 }
 
 interface RevokeAllOpts {
@@ -174,14 +210,44 @@ function runRevokeAll(
   }
 
   const results: { id: string; path: string }[] = [];
+  let lastRevocation: Revocation | null = null;
+  let touchedEthos = false;
   for (const m of candidates) {
     const rev = createRevocation({ issuer: id, mandate: m, reason: opts.reason });
     const path = writeRevocation(rev);
     results.push({ id: m.id, path });
+    lastRevocation = rev;
+    if (
+      m.scopes.some(
+        (s) => s.startsWith("ethos.write.") || s.startsWith("ethos.read."),
+      )
+    ) {
+      touchedEthos = true;
+    }
+  }
+
+  // One repin for the whole batch: `repinAfterRevocation` re-derives the
+  // active-delegate set from disk, so a single call captures the effect of
+  // every revocation we just wrote.
+  //
+  // The `revocation` argument is only used as a nominal audit anchor on the
+  // manifest — the DEK rotation itself ignores it — so we pass the last one
+  // written.
+  let repinned: { version: string; height: number } | null = null;
+  const handleForRepin = id.handle;
+  if (touchedEthos && lastRevocation && existsSync(ethosDir(handleForRepin))) {
+    const manifest = repinAfterRevocation({
+      handle: handleForRepin,
+      identity: id,
+      revocation: lastRevocation,
+    });
+    repinned = { version: manifest.edition.version, height: manifest.edition.height };
   }
 
   if (opts.json) {
-    console.log(JSON.stringify({ revoked: results, skipped, alreadyRevoked }, null, 2));
+    console.log(
+      JSON.stringify({ revoked: results, skipped, alreadyRevoked, repinned }, null, 2),
+    );
     return;
   }
 
@@ -190,6 +256,12 @@ function runRevokeAll(
   if (alreadyRevoked.length) {
     console.log();
     console.log(`Left untouched (already had a revocation on disk): ${alreadyRevoked.length}`);
+  }
+  if (repinned) {
+    console.log();
+    console.log(
+      `Repin: rotated ethos DEKs once for the batch (new edition ${repinned.version}, height=${repinned.height}).`,
+    );
   }
   console.log();
   console.log(

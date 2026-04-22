@@ -18,12 +18,15 @@
  * or a DID (did:aithos:, did:key:, did:web:).
  */
 
+import { existsSync } from "node:fs";
 import {
   loadIdentity,
   loadConfig,
   createMandate,
   writeMandate,
   parseTtl,
+  issueMandateWithRewrap,
+  ethosDir,
   type MandateConstraints,
   type Sphere,
 } from "@aithos/protocol-core";
@@ -95,8 +98,22 @@ export function runGrant(opts: GrantOpts): void {
 
   const path = writeMandate(m);
 
+  // When the mandate authorises writes to the ethos AND names a grantee
+  // pubkey, we must make the mandate effective on the current state: the
+  // live encrypted zones and the gamma log were sealed under a recipient
+  // set that does NOT yet include this delegate. `issueMandateWithRewrap`
+  // bumps a fresh edition with the delegate added to every relevant wrap
+  // list. Without this, the delegate could read nothing — the mandate would
+  // be a signed grant on paper, mechanically dead.
+  let rewroteManifest = false;
+  const writesEthos = m.scopes.some((s) => s.startsWith("ethos.write."));
+  if (writesEthos && m.grantee.pubkey && existsSync(ethosDir(handle))) {
+    issueMandateWithRewrap({ handle, identity: id, mandate: m });
+    rewroteManifest = true;
+  }
+
   if (opts.json) {
-    console.log(JSON.stringify({ mandate: m, path }, null, 2));
+    console.log(JSON.stringify({ mandate: m, path, rewrapped: rewroteManifest }, null, 2));
     return;
   }
 
@@ -117,4 +134,9 @@ export function runGrant(opts: GrantOpts): void {
     }
   }
   console.log(`  Path:       ${path}`);
+  if (rewroteManifest) {
+    console.log(
+      `  Rewrap:     bumped a new ethos edition with the delegate on every wrap list (gamma + encrypted zones).`,
+    );
+  }
 }

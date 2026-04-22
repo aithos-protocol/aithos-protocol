@@ -8,19 +8,19 @@
  *
  * At least one of --title, --body / --body-file, --tags (or --clear-tags)
  * must be provided.
+ *
+ * Auth: --mandate + --agent-key for delegated writes (works on tracked
+ * installs); otherwise the subject must hold the zone's sphere key.
  */
 
 import { readFileSync, existsSync } from "node:fs";
 import {
-  loadIdentity,
   modifySection,
   ethosDir,
   type Sphere,
   loadConfig,
-  readJson,
-  loadMandate,
-  findRevocation,
 } from "@aithos/protocol-core";
+import { resolveAuthor } from "./_author.js";
 
 export interface EthosModifySectionOpts {
   zone: string;
@@ -52,18 +52,21 @@ export function runEthosModifySection(opts: EthosModifySectionOpts): void {
     );
   }
 
-  const identity = loadIdentity(handle);
-  const delegate = opts.mandate ? resolveDelegate(opts.mandate, opts.agentKey, zone) : undefined;
+  const { author, mandate } = resolveAuthor({
+    handle,
+    zone,
+    mandate: opts.mandate,
+    agentKey: opts.agentKey,
+  });
 
   const { section, manifest, gammaEntry } = modifySection({
     handle,
-    identity,
+    author,
     zone,
     sectionId: opts.sectionId,
     title,
     body,
     tags,
-    delegate,
   });
 
   if (opts.json) {
@@ -80,7 +83,7 @@ export function runEthosModifySection(opts: EthosModifySectionOpts): void {
   console.log(`  gamma:        ${gammaEntry.id}`);
   console.log(`  gamma.head:   ${manifest.gamma?.head ?? "(none)"} (count=${manifest.gamma?.count ?? 0})`);
   console.log(`  edition:      ${manifest.edition.version} (height=${manifest.edition.height})`);
-  if (delegate) console.log(`  authorized:   ${delegate.mandateId}`);
+  if (mandate) console.log(`  authorized:   ${mandate.id}`);
   console.log(`  section.gamma_ref: ${section.gamma_ref}`);
 }
 
@@ -112,42 +115,4 @@ function resolveChanges(opts: EthosModifySectionOpts): {
   }
   if (opts.clearTags) out.tags = [];
   return out;
-}
-
-interface DelegateKeyfile {
-  aithos?: string;
-  id: string;
-  seed_hex: string;
-  pubkey_multibase: string;
-}
-
-function resolveDelegate(mandateId: string, agentKeyPath: string | undefined, zone: Sphere) {
-  if (!agentKeyPath) throw new Error("--mandate requires --agent-key <path>");
-  const key = readJson<DelegateKeyfile>(agentKeyPath);
-  const mandate = loadMandate(mandateId);
-  const writeScope = `ethos.write.${zone}`;
-  if (!mandate.scopes.includes(writeScope)) {
-    throw new Error(`Mandate ${mandateId} does not include scope ${writeScope}`);
-  }
-  if (mandate.grantee.pubkey && mandate.grantee.pubkey !== key.pubkey_multibase) {
-    throw new Error(`Mandate grantee.pubkey does not match agent keyfile`);
-  }
-  const now = new Date();
-  if (now < new Date(mandate.not_before)) {
-    throw new Error(`Mandate ${mandateId} is not yet valid (not_before=${mandate.not_before})`);
-  }
-  if (now >= new Date(mandate.not_after)) {
-    throw new Error(`Mandate ${mandateId} has expired (not_after=${mandate.not_after})`);
-  }
-  const revocation = findRevocation(mandateId);
-  if (revocation) {
-    throw new Error(
-      `Mandate ${mandateId} was revoked at ${revocation.revoked_at} (reason: ${revocation.reason})`,
-    );
-  }
-  return {
-    mandateId,
-    keySeed: Uint8Array.from(Buffer.from(key.seed_hex, "hex")),
-    keyMultibase: key.pubkey_multibase,
-  };
 }
