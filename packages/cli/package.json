@@ -1,6 +1,6 @@
 {
   "name": "aithos",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Reference CLI for the Aithos protocol: create an Aithos identity, grant and revoke mandates, sign actions, author and publish ethos bundles.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
@@ -44,7 +44,7 @@
     "test": "npm run build && node --test --import tsx test/*.test.ts"
   },
   "dependencies": {
-    "@aithos/protocol-core": "^0.2.1",
+    "@aithos/protocol-core": "^0.3.0",
     "@noble/ed25519": "^2.1.0",
     "@noble/hashes": "^1.4.0",
     "adm-zip": "^0.5.17",

@@ -5,6 +5,95 @@ All notable changes to the Aithos reference CLI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-04-22
+
+**Breaking release.** The gamma log switches from a single-file envelope
+(one ciphertext sealed under the self sphere) to **per-entry asymmetric
+envelopes**: each gamma entry carries its own `payload_ct` + a list of
+`envelopes` (X25519-HKDF-SHA256-AEAD + XChaCha20-Poly1305), one per
+recipient on `manifest.gamma.readers`. Bundles produced by `0.2.x` will
+fail to verify against `0.3.0`; re-author under `0.3.0` or keep a pinned
+`0.2.x` toolchain around for legacy bundles.
+
+The whole point of the break is to **decouple zone writes from audit-log
+reads**. In `0.2.x`, any `ethos.write.<zone>` mandate implicitly opened the
+gamma log (the writer needed the log's symmetric key to append). In `0.3.0`
+a mandate with `ethos.write.<zone>` alone can append new gamma entries
+(signed by the delegate under `authorized_by: mandate_…`) but CANNOT read
+any existing entry: every entry comes back with `_access_denied=true`.
+Reading the log requires the new explicit `gamma.read` scope, which is the
+only way to join `manifest.gamma.readers`.
+
+This gives three clean capability profiles:
+
+- `ethos.write.<zone>` — append-only writer. Can emit signed gamma
+  entries but can't read the log or its own writes.
+- `ethos.read.<zone>` — zone reader. Sees current zone content, the
+  audit log stays opaque.
+- `gamma.read` — auditor. Sees decrypted gamma entries (forward-only —
+  envelopes are not retroactively resealed for readers added after the
+  fact). Does not grant zone access by itself.
+
+### Added
+- **`aithos ethos show --mandate / --agent-key` extended to all CRUD ops
+  and to `aithos gamma show/verify`.** Delegates can now walk the gamma
+  log on a tracked install without owner seeds — the command resolves the
+  delegate author, decrypts the envelopes it has a wrap for, and flags
+  the rest with `_access_denied=true` rather than throwing.
+- **New mandate scope `gamma.read`.** Adds the delegate to
+  `manifest.gamma.readers` on `issueMandateWithRewrap`; every subsequent
+  gamma entry seals an envelope for them.
+- **Integrity-tier `gamma verify`.** The chain walk (per-entry hash +
+  Ed25519 signature + manifest anchor) runs without any key material, so
+  an external verifier can validate the log's integrity from a bundle
+  without ever holding a sphere seed or a gamma DEK wrap.
+- **`aithos mandate add` now accepts `aithos-mandate@0.3.0`** alongside
+  `0.1.0` and `0.2.1`.
+
+### Changed
+- **`aithos grant` decouples zone rewrap from gamma readers.** The rewrap
+  step (new edition, zone DEK sealed to the delegate) runs whenever the
+  mandate includes `ethos.read.<zone>` / `ethos.write.<zone>`; the delegate
+  is added to `manifest.gamma.readers` **only** when `gamma.read` is in the
+  scope list. Prior behaviour — where any ethos-touching mandate opened
+  the gamma log — is gone.
+- **Gamma on-disk file format.** `gamma/gamma.jsonl.enc` is now a JSON
+  envelope `{ "aithos-gamma-file": "0.3.0", entries: [ { payload_ct,
+  envelopes, public_header, signature, hash, ... } ] }`. The old flat
+  `{ ciphertext, nonce, ... }` shape is gone.
+- **CLI version stamp bumped to `0.3.0`.**
+
+### Protocol
+- Targets **`@aithos/protocol-core@^0.3.0`**. Picks up: per-entry envelope
+  format (spec §10.5.1′), the `gamma.read` scope (§4), the forward-only
+  readers-list contract on `manifest.gamma.readers` (§10.5.4′), the
+  integrity-only verification tier (§10.14.2′), `hasGammaReadScope()` in
+  `issueMandateWithRewrap`, and the per-entry `_access_denied` marker
+  surfaced by `readGammaLogForAuthor`.
+
+### Tested
+- New E2E scripts under `examples/` pin every scope profile:
+  - `e2e-write-only-mandate.sh` — append-without-read (THE property).
+  - `e2e-read-only-mandate.sh` — zone read, gamma opaque.
+  - `e2e-gamma-read-only-mandate.sh` — auditor.
+  - `e2e-crud-no-gamma-read.sh` — full zone CRUD with opaque audit log.
+  - `e2e-multi-zone-mandate.sh` — `gamma.read` is zone-agnostic.
+  - `e2e-public-read-mandate.sh` — degenerate case (no capability gain).
+  - `e2e-revoke-regrant.sh` — revocation + fresh re-grant cycle.
+- Existing `e2e-gamma-access-control.sh` updated for the v0.3 matrix
+  (cases A–E) including the per-entry `payload_ct` tamper detection.
+
+### Migration
+- `0.2.x` bundles are **not** forward-compatible. An owner upgrading from
+  `0.2.x` should re-author under `0.3.0`:
+
+      aithos init --handle <h> --display-name "<…>"
+      # re-add sections via ethos add-section …
+
+- Existing `0.2.x` mandates remain valid as signed documents, but their
+  DEK wraps target the old gamma format and will not decrypt a `0.3.0`
+  log. Re-issue the mandate with `aithos grant …` under `0.3.0`.
+
 ## [0.2.1] — 2026-04-22
 
 Point release. Closes the loop on **mandate-driven writes against a tracked

@@ -1,6 +1,6 @@
 {
   "name": "@aithos/mcp",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Aithos MCP server — exposes an Aithos identity's ethos and mandates to MCP-speaking agents over stdio or HTTP.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
@@ -30,7 +30,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/bin.js",
@@ -40,7 +41,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@aithos/protocol-core": "^0.2.1",
+    "@aithos/protocol-core": "^0.3.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "zod": "^3.23.0"
