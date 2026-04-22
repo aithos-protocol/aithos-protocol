@@ -694,14 +694,23 @@ export function delegateGammaRecipients(author: Author & { kind: "delegate" }): 
  * Append a gamma entry on behalf of an author. Owner path mirrors the
  * legacy `appendGammaEntry`; delegate path decrypts via their wrap, reseals
  * under the full recipient set reconstructed via `delegateGammaRecipients`.
+ *
+ * `extraRecipients`, when passed on the owner path, extends the default
+ * (three sphere keys) set — used by `issueMandateWithRewrap` to add a
+ * delegate's X25519 pubkey so they can read the log on a tracked install.
  */
 export function appendGammaEntryForAuthor(
   handle: string,
   author: Author,
   entry: GammaEntry,
+  extraRecipients: GammaRecipient[] = [],
 ): void {
   if (author.kind === "owner") {
-    appendGammaEntry(handle, author.identity, entry);
+    const current = readGammaPlaintext(handle, author.identity);
+    const next = current + entryToJsonLine(entry) + "\n";
+    const recipients = [...defaultGammaRecipients(author.identity), ...extraRecipients];
+    const file = sealGammaFile(next, rootDid(author.identity), recipients);
+    writeGammaFile(handle, file);
     return;
   }
   const current = readGammaPlaintextForAuthor(handle, author);
@@ -709,6 +718,27 @@ export function appendGammaEntryForAuthor(
   const recipients = delegateGammaRecipients(author);
   const file = sealGammaFile(next, author.subject.did, recipients);
   writeGammaFile(handle, file);
+}
+
+/**
+ * Reseal the gamma log under a new recipient set WITHOUT appending any new
+ * entry. Used by `issueMandateWithRewrap` (add a delegate wrap) and
+ * `repinAfterRevocation` (drop it again). Owner-only — requires the subject's
+ * sphere seeds to decrypt the current plaintext.
+ *
+ * If there's no log on disk yet, this is a no-op.
+ */
+export function rewrapGammaLog(
+  handle: string,
+  identity: Identity,
+  extraRecipients: GammaRecipient[] = [],
+): void {
+  const file = readGammaFile(handle);
+  if (!file) return;
+  const plaintext = readGammaPlaintext(handle, identity);
+  const recipients = [...defaultGammaRecipients(identity), ...extraRecipients];
+  const next = sealGammaFile(plaintext, rootDid(identity), recipients);
+  writeGammaFile(handle, next);
 }
 
 /* -------------------------------------------------------------------------- */

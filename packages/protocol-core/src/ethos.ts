@@ -38,6 +38,7 @@
 import { join } from "node:path";
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   writeFileSync,
   readdirSync,
@@ -72,7 +73,23 @@ import {
   multibaseToEd25519PublicKey,
   x25519PublicKeyToMultibase,
 } from "./did.js";
-import { ensureDir, identityDir, readJson, writeJson } from "./storage.js";
+import {
+  ensureDir,
+  identityDir,
+  listMandates,
+  listRevocations,
+  mandatesDir,
+  revocationsDir,
+  readJson,
+  writeJson,
+} from "./storage.js";
+import {
+  type Mandate,
+  type Revocation,
+  findRevocation,
+  loadMandate,
+  verifyMandate,
+} from "./mandate.js";
 import {
   appendGammaEntry,
   appendGammaEntryForAuthor,
@@ -83,8 +100,10 @@ import {
   latestGammaForSection,
   readGammaLog,
   readGammaLogForAuthor,
+  rewrapGammaLog,
   sphereGammaSigner,
   type GammaEntry,
+  type GammaRecipient,
   type GammaSigner,
 } from "./gamma.js";
 import {
@@ -386,12 +405,16 @@ export interface EncryptedZone {
 
 export function encryptZone(
   plaintext: string,
-  bundleId: string,
+  subjectDid: string,
   recipients: Array<{ did: string; x25519PublicKey: Uint8Array }>,
 ): EncryptedZone {
   const dek = new Uint8Array(randomBytes(32));
   const nonce = new Uint8Array(randomBytes(24));
-  const aad = Buffer.concat([ZONE_AAD_PREFIX, Buffer.from(bundleId, "utf8")]);
+  // AAD binds to the subject DID (stable across editions). Edition integrity
+  // is already protected by the signed manifest + prev_hash chain, so tying
+  // the ciphertext's AAD to a per-edition bundle_id would force delegates to
+  // re-seal zones they cannot read — breaking carry-forward.
+  const aad = Buffer.concat([ZONE_AAD_PREFIX, Buffer.from(subjectDid, "utf8")]);
   const cipher = new XChaCha20Poly1305(dek);
   const ciphertext = cipher.seal(nonce, new TextEncoder().encode(plaintext), aad);
 
@@ -413,7 +436,7 @@ export function encryptZone(
 export function decryptZone(
   ciphertext: Uint8Array,
   cipher: ZoneCipher,
-  bundleId: string,
+  subjectDid: string,
   myDidUrl: string,
   myX25519Secret: Uint8Array,
 ): string {
@@ -421,7 +444,7 @@ export function decryptZone(
   if (!wrap) throw new Error(`No wrap entry for ${myDidUrl}`);
   const dek = unwrapDek(wrap, myX25519Secret);
   try {
-    const aad = Buffer.concat([ZONE_AAD_PREFIX, Buffer.from(bundleId, "utf8")]);
+    const aad = Buffer.concat([ZONE_AAD_PREFIX, Buffer.from(subjectDid, "utf8")]);
     const aead = new XChaCha20Poly1305(dek);
     const nonce = base64urlDecode(cipher.nonce);
     const plain = aead.open(nonce, ciphertext, aad);
@@ -575,20 +598,36 @@ function ownerSphereX25519Pub(
 
 /**
  * Recipients to include when an author writes (and re-encrypts) an encrypted
- * zone:
- *   - Owner: their own sphere X25519 pubkey (subject-as-recipient, §3.5.1).
+ * zone.
+ *
+ *   - Owner: their own sphere X25519 pubkey (subject-as-recipient, §3.5.1)
+ *     PLUS every active (non-revoked) delegate whose mandate covers this zone.
  *   - Delegate: BOTH the owner's sphere X25519 pubkey (so the owner can
- *     decrypt when the bundle returns) AND the delegate's own X25519 pubkey
- *     (so the delegate can continue reading the zone they just wrote).
+ *     decrypt when the bundle returns) AND the delegate's own X25519 pubkey.
+ *     Other delegates are not re-added by a delegate-side write: the delegate
+ *     can't reconstruct their pubkeys without consulting their mandate files,
+ *     which exist on disk only for authors who ran `issueMandateWithRewrap`.
+ *
+ * Revoked mandates are filtered out so a post-revocation re-render excludes
+ * the delegate from the recipient set — which is exactly what
+ * `repinAfterRevocation` leverages.
  */
 export function authorZoneWriteRecipients(
   subject: Identity | Author,
   zone: "circle" | "self",
+  subjectDid?: string,
 ): Array<{ did: string; x25519PublicKey: Uint8Array }> {
   const author = toAuthor(subject);
   if (author.kind === "owner") {
     const r = subjectRecipientFor(author.identity, zone);
-    return [{ did: r.did, x25519PublicKey: r.x25519PublicKey }];
+    const out: Array<{ did: string; x25519PublicKey: Uint8Array }> = [
+      { did: r.did, x25519PublicKey: r.x25519PublicKey },
+    ];
+    const did = subjectDid ?? rootDid(author.identity);
+    for (const del of activeDelegatesForZone(did, zone)) {
+      out.push(del);
+    }
+    return out;
   }
   const ownerPk = ownerSphereX25519Pub(author.subject, zone);
   const ownerDid = didUrlForKex(author.subject.did, zone);
@@ -600,6 +639,53 @@ export function authorZoneWriteRecipients(
       x25519PublicKey: delegatePk,
     },
   ];
+}
+
+/**
+ * Enumerate delegate recipients authorised to read/write a given zone of a
+ * specific subject. Returns { did: "<granteeId>#<pubkeyMb>", x25519PublicKey }
+ * pairs, excluding any mandate that has a matching local revocation.
+ *
+ * This is the cornerstone of `issueMandateWithRewrap` / `repinAfterRevocation`:
+ * the live mandate directory is the source of truth for who can decrypt the
+ * current edition.
+ */
+export function activeDelegatesForZone(
+  subjectDid: string,
+  zone: Sphere,
+): Array<{ did: string; x25519PublicKey: Uint8Array }> {
+  const out: Array<{ did: string; x25519PublicKey: Uint8Array }> = [];
+  if (!existsSync(mandatesDir())) return out;
+  const readScope = `ethos.read.${zone}` as const;
+  const writeScope = `ethos.write.${zone}` as const;
+  for (const fn of listMandates()) {
+    let m: Mandate;
+    try {
+      m = readJson<Mandate>(join(mandatesDir(), fn));
+    } catch {
+      continue;
+    }
+    if (m.issuer !== subjectDid) continue;
+    const covers =
+      m.scopes.includes(writeScope) ||
+      m.scopes.includes(readScope) ||
+      m.scopes.includes("ethos.read.all");
+    if (!covers) continue;
+    if (!m.grantee.pubkey) continue;
+    if (findRevocation(m.id)) continue;
+    let edPub: Uint8Array;
+    try {
+      edPub = multibaseToEd25519PublicKey(m.grantee.pubkey);
+    } catch {
+      continue;
+    }
+    const xPub = ed25519PubToX25519Pub(edPub);
+    out.push({
+      did: delegateWrapDid(m.grantee.id, m.grantee.pubkey),
+      x25519PublicKey: xPub,
+    });
+  }
+  return out;
 }
 
 /**
@@ -876,28 +962,46 @@ export function loadZoneDoc(
 ): ZoneDoc {
   const bodyPath = ethosZoneFile(handle, zone);
   if (!existsSync(bodyPath)) return { sections: [] };
+  return parseZoneMarkdown(loadZonePlaintext(handle, zone, who, manifest), zone);
+}
+
+/**
+ * Return the raw plaintext markdown for a zone (decrypted if necessary),
+ * without parsing it into a `ZoneDoc`. Used by `verifyEthos` to hash the
+ * exact bytes that were written at edition-creation time, instead of
+ * re-rendering them — re-rendering embeds the current manifest's edition
+ * version in the frontmatter, which breaks hash equality for zones that
+ * were carried forward from a previous edition.
+ *
+ * Returns "" for a zone that has no on-disk file (empty ethos).
+ */
+export function loadZonePlaintext(
+  handle: string,
+  zone: Sphere,
+  who?: Identity | Author,
+  manifest?: Manifest,
+): string {
+  const bodyPath = ethosZoneFile(handle, zone);
+  if (!existsSync(bodyPath)) return "";
 
   const m = manifest ?? readManifest(handle);
   const zm = m.zones[zone];
-  let plaintext: string;
   if (!zm.encrypted) {
-    plaintext = readFileSync(bodyPath, "utf8");
-  } else {
-    if (!who) throw new Error(`Identity or Author required to decrypt ${zone}`);
-    if (zone === "public") throw new Error(`public zone should never be encrypted`);
-    const author = toAuthor(who);
-    const recipient = authorZoneDecryptRecipient(author, zone as "circle" | "self");
-    const ct = readFileSync(bodyPath);
-    if (!zm.cipher) throw new Error(`Manifest missing cipher for ${zone}`);
-    plaintext = decryptZone(
-      new Uint8Array(ct),
-      zm.cipher,
-      m.bundle_id,
-      recipient.did,
-      recipient.x25519Secret,
-    );
+    return readFileSync(bodyPath, "utf8");
   }
-  return parseZoneMarkdown(plaintext, zone);
+  if (!who) throw new Error(`Identity or Author required to decrypt ${zone}`);
+  if (zone === "public") throw new Error(`public zone should never be encrypted`);
+  const author = toAuthor(who);
+  const recipient = authorZoneDecryptRecipient(author, zone as "circle" | "self");
+  const ct = readFileSync(bodyPath);
+  if (!zm.cipher) throw new Error(`Manifest missing cipher for ${zone}`);
+  return decryptZone(
+    new Uint8Array(ct),
+    zm.cipher,
+    m.subject_did,
+    recipient.did,
+    recipient.x25519Secret,
+  );
 }
 
 export function writeZoneToDisk(
@@ -906,7 +1010,7 @@ export function writeZoneToDisk(
   doc: ZoneDoc,
   subject: Identity | Author,
   ctx: RenderContext,
-  bundleId: string,
+  subjectDid: string,
 ): { sha256Hex: string; cipher?: ZoneCipher; signature: ZoneSignature; sectionTitles: string[] } {
   const author = toAuthor(subject);
   const md = renderZoneMarkdown(zone, doc, ctx);
@@ -923,7 +1027,7 @@ export function writeZoneToDisk(
   }
 
   const recipients = authorZoneWriteRecipients(author, zone as "circle" | "self");
-  const { ciphertext, cipher } = encryptZone(md, bundleId, recipients);
+  const { ciphertext, cipher } = encryptZone(md, subjectDid, recipients);
   writeFileSync(filePath, ciphertext, { mode: 0o600 });
   chmodSync(filePath, 0o600);
   return { sha256Hex: plaintextHashHex, cipher, signature, sectionTitles };
@@ -986,7 +1090,7 @@ export function persistEdition(
       continue;
     }
 
-    const out = writeZoneToDisk(handle, z, zones[z], author, ctx, bundleId);
+    const out = writeZoneToDisk(handle, z, zones[z], author, ctx, subjectDid);
     const entry: ZoneManifest = {
       file: z === "public" ? "public.md" : `${z}.md.enc`,
       encrypted: z !== "public",
@@ -1076,24 +1180,25 @@ function safeReadGammaAnchor(
   author: Author,
   prevManifest?: Manifest | null,
 ): GammaManifestAnchor | null {
-  if (author.kind === "owner") {
-    try {
-      const entries = readGammaLog(handle, author.identity);
-      if (entries.length === 0) return null;
-      return {
-        head: entries[entries.length - 1].hash,
-        count: entries.length,
-      };
-    } catch {
-      return null;
-    }
+  // Delegates whose mandate includes a gamma.read scope (or whose sphere wrap
+  // has been issued via `issueMandateWithRewrap`) can walk the log through
+  // `readGammaLogForAuthor`. When that path succeeds we anchor to the live
+  // tail so manifest.gamma stays consistent with the log after a delegate
+  // append. If it fails (no wrap for the delegate, truncated log, etc.) we
+  // fall back to the previous manifest's anchor so carry-forward still works.
+  try {
+    const entries =
+      author.kind === "owner"
+        ? readGammaLog(handle, author.identity)
+        : readGammaLogForAuthor(handle, author);
+    if (entries.length === 0) return prevManifest?.gamma ?? null;
+    return {
+      head: entries[entries.length - 1].hash,
+      count: entries.length,
+    };
+  } catch {
+    return prevManifest?.gamma ?? null;
   }
-  // Delegate path: no sphere key held — carry forward the previous manifest's
-  // anchor. A delegate that wants to advance the gamma log must go through
-  // `issueMandateWithRewrap` (which rewraps the log's DEK for the delegate)
-  // plus an append path that updates the anchor separately; this helper only
-  // provides the default byte-preserving behaviour.
-  return prevManifest?.gamma ?? null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1385,6 +1490,251 @@ export function deleteSection(
  * authority to re-sign them. `persistEdition` carries those zones' manifest
  * entries forward from the previous manifest untouched.
  */
+/* -------------------------------------------------------------------------- */
+/*  Mandate lifecycle — rewrap on issue / repin on revocation                 */
+/* -------------------------------------------------------------------------- */
+
+export interface IssueMandateWithRewrapArgs {
+  handle: string;
+  /** Owner of the subject — must hold the sphere seeds of the mandate's zone. */
+  identity: Identity;
+  /** Freshly-issued mandate. Assumed to already be on disk (writeMandate). */
+  mandate: Mandate;
+  at?: Date;
+}
+
+/**
+ * Make a freshly-issued mandate effective on the current encrypted state.
+ *
+ * The mandate alone is only a signed grant on paper — it doesn't change the
+ * zone ciphertext or the gamma log ciphertext. A delegate handed the bundle
+ * as-is couldn't decrypt anything, because their X25519 pubkey isn't on any
+ * wrap list yet. This function repairs that: it re-renders the subject's
+ * zones under a recipient set that now includes the delegate, and reseals
+ * the gamma log with the same delegate added.
+ *
+ * Owner-only: the subject must hold the sphere seeds. Call AFTER
+ * `writeMandate(mandate)` so that `authorZoneWriteRecipients` / the gamma
+ * rewrap helper can see the live mandate.
+ */
+export function issueMandateWithRewrap(args: IssueMandateWithRewrapArgs): Manifest {
+  const author = ownerAuthor(args.identity);
+  const zones = loadAllZones(args.handle, author);
+  const manifest = persistEdition(args.handle, author, zones, { now: args.at });
+
+  // Add the delegate as a wrap recipient on the gamma log too, so they can
+  // read the signed mutation history from the bundle.
+  if (args.mandate.grantee.pubkey) {
+    const subjectDid = rootDid(args.identity);
+    const extra: GammaRecipient[] = [
+      {
+        did: delegateWrapDid(args.mandate.grantee.id, args.mandate.grantee.pubkey),
+        x25519PublicKey: ed25519PubToX25519Pub(
+          multibaseToEd25519PublicKey(args.mandate.grantee.pubkey),
+        ),
+      },
+    ];
+    // Include any OTHER live delegates too, so we don't lose them on rewrap.
+    for (const z of SPHERE_FRAGMENTS) {
+      for (const d of activeDelegatesForZone(subjectDid, z)) {
+        if (!extra.some((x) => x.did === d.did)) {
+          extra.push({ did: d.did, x25519PublicKey: d.x25519PublicKey });
+        }
+      }
+    }
+    rewrapGammaLog(args.handle, args.identity, extra);
+  }
+
+  return manifest;
+}
+
+export interface RepinAfterRevocationArgs {
+  handle: string;
+  identity: Identity;
+  revocation: Revocation;
+  at?: Date;
+}
+
+/**
+ * Rotate the DEKs so a revoked delegate can no longer decrypt the current
+ * edition. The revocation must already be on disk (writeRevocation) so that
+ * `activeDelegatesForZone` / the gamma rewrap helper omits the revoked key
+ * from the new recipient set.
+ *
+ * Owner-only. Note this does NOT affect previously-shipped bundles — those
+ * ciphertexts remain decryptable by the delegate. The protocol's safety
+ * boundary is "from this edition onward".
+ */
+export function repinAfterRevocation(args: RepinAfterRevocationArgs): Manifest {
+  const author = ownerAuthor(args.identity);
+  const zones = loadAllZones(args.handle, author);
+  const manifest = persistEdition(args.handle, author, zones, { now: args.at });
+
+  // Rewrap the gamma log under the new, narrower recipient set. Active
+  // delegates (other than the just-revoked one) remain on the recipient list;
+  // the revoked one is filtered out because `findRevocation` returns non-null
+  // for its mandate id.
+  const subjectDid = rootDid(args.identity);
+  const extra: GammaRecipient[] = [];
+  for (const z of SPHERE_FRAGMENTS) {
+    for (const d of activeDelegatesForZone(subjectDid, z)) {
+      if (!extra.some((x) => x.did === d.did)) {
+        extra.push({ did: d.did, x25519PublicKey: d.x25519PublicKey });
+      }
+    }
+  }
+  rewrapGammaLog(args.handle, args.identity, extra);
+
+  return manifest;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Pack / install primitives (flat-bundle layout — see bundle.ts)            */
+/* -------------------------------------------------------------------------- */
+
+export interface PackEthosToDirArgs {
+  handle: string;
+  /** Owner identity (legacy shape) OR v0.2.1 Author. `author` wins if both set. */
+  identity?: Identity;
+  author?: Author;
+  /** Destination directory — will be created if it doesn't exist. */
+  outDir: string;
+}
+
+/**
+ * Copy the installed-ethos layout into the flat bundle layout that
+ * `installBundleFromDir` and `verifyBundleAtPath` understand:
+ *
+ *   <outDir>/
+ *   ├── manifest.json
+ *   ├── did.json
+ *   ├── public.md
+ *   ├── circle.md.enc         (if present)
+ *   ├── self.md.enc           (if present)
+ *   └── gamma.jsonl.enc       (if present)
+ *
+ * `author` is accepted for API symmetry with the mutation calls; today the
+ * pack operation only touches on-disk bytes (no re-signing), so any valid
+ * author is fine. We just need exactly one of `identity` / `author` so the
+ * call shape matches the rest of the Author-taking APIs.
+ */
+export function packEthosToDir(args: PackEthosToDirArgs): void {
+  // Force consistent arg shape — we don't actually use the resolved author,
+  // but rejecting calls with neither `identity` nor `author` keeps API usage
+  // disciplined and matches the mutation-call convention.
+  resolveAuthorArg(args);
+
+  mkdirSync(args.outDir, { recursive: true });
+
+  const srcDir = ethosDir(args.handle);
+  const copyIfExists = (src: string, dst: string): void => {
+    if (!existsSync(src)) return;
+    copyFileSync(src, dst);
+    chmodSync(dst, 0o644);
+  };
+
+  copyIfExists(join(srcDir, "manifest.json"), join(args.outDir, "manifest.json"));
+  copyIfExists(join(srcDir, "did.json"), join(args.outDir, "did.json"));
+  copyIfExists(
+    join(ethosZoneDir(args.handle, "public"), "public.md"),
+    join(args.outDir, "public.md"),
+  );
+  copyIfExists(
+    join(ethosZoneDir(args.handle, "circle"), "circle.md.enc"),
+    join(args.outDir, "circle.md.enc"),
+  );
+  copyIfExists(
+    join(ethosZoneDir(args.handle, "self"), "self.md.enc"),
+    join(args.outDir, "self.md.enc"),
+  );
+  copyIfExists(
+    join(srcDir, "gamma", "gamma.jsonl.enc"),
+    join(args.outDir, "gamma.jsonl.enc"),
+  );
+}
+
+export interface InstallBundleFromDirArgs {
+  bundleDir: string;
+  /** Local handle to install under. */
+  as: string;
+  /**
+   * Overwrite an existing install when true. Preserves `*.sealed.json` seed
+   * files so an owner can re-install their own bundle without losing keys.
+   */
+  force?: boolean;
+}
+
+/**
+ * Import a flat bundle directory (as produced by `packEthosToDir`) into the
+ * local keystore as handle `as`. Result is a tracked install: `did.json` and
+ * `ethos/*` present, but no sealed seed files — unless an owner install
+ * already exists at that handle and `force: true` was passed, in which case
+ * the existing sealed seeds are preserved.
+ */
+export function installBundleFromDir(args: InstallBundleFromDirArgs): void {
+  const bundleDir = args.bundleDir;
+  if (!existsSync(bundleDir)) {
+    throw new Error(`installBundleFromDir: bundle dir not found: ${bundleDir}`);
+  }
+  const manifestSrc = join(bundleDir, "manifest.json");
+  const didSrc = join(bundleDir, "did.json");
+  if (!existsSync(manifestSrc) || !existsSync(didSrc)) {
+    throw new Error(
+      `installBundleFromDir: bundle at ${bundleDir} is missing manifest.json or did.json`,
+    );
+  }
+
+  const targetDir = identityDir(args.as);
+  const targetEthos = ethosDir(args.as);
+
+  if (existsSync(targetDir) && !args.force) {
+    throw new Error(
+      `installBundleFromDir: identity "${args.as}" already exists at ${targetDir}. ` +
+        `Pass { force: true } to overwrite (sealed seeds are preserved).`,
+    );
+  }
+
+  ensureDir(targetDir);
+  ensureEthosLayout(args.as);
+
+  // Install top-level files.
+  copyFileSync(didSrc, join(targetDir, "did.json"));
+  chmodSync(join(targetDir, "did.json"), 0o644);
+  copyFileSync(didSrc, join(targetEthos, "did.json"));
+  chmodSync(join(targetEthos, "did.json"), 0o644);
+
+  copyFileSync(manifestSrc, join(targetEthos, "manifest.json"));
+  chmodSync(join(targetEthos, "manifest.json"), 0o600);
+
+  const copyIfPresent = (src: string, dst: string, mode: number): void => {
+    if (!existsSync(src)) return;
+    copyFileSync(src, dst);
+    chmodSync(dst, mode);
+  };
+
+  copyIfPresent(
+    join(bundleDir, "public.md"),
+    join(ethosZoneDir(args.as, "public"), "public.md"),
+    0o600,
+  );
+  copyIfPresent(
+    join(bundleDir, "circle.md.enc"),
+    join(ethosZoneDir(args.as, "circle"), "circle.md.enc"),
+    0o600,
+  );
+  copyIfPresent(
+    join(bundleDir, "self.md.enc"),
+    join(ethosZoneDir(args.as, "self"), "self.md.enc"),
+    0o600,
+  );
+  ensureDir(join(ethosDir(args.as), "gamma"));
+  copyIfPresent(
+    join(bundleDir, "gamma.jsonl.enc"),
+    join(ethosDir(args.as), "gamma", "gamma.jsonl.enc"),
+    0o600,
+  );
+}
+
 export function loadAllZones(handle: string, who: Identity | Author): Zones {
   const author = toAuthor(who);
   if (author.kind === "owner") {
@@ -1459,8 +1809,32 @@ export function verifyEthos(
     }
   }
 
+  // Delegate-aware signature resolver: looks up the mandate keyed by
+  // `authorized_by`, re-verifies its signature against the DID doc, enforces
+  // the local revocation list, and returns the raw Ed25519 public key to
+  // verify with. Signatures from an unknown, revoked, or mis-scoped mandate
+  // are rejected as "delegate key resolution failed".
+  const opts: VerifySignatureOpts = {
+    resolveDelegatePubkey: (keyId, mandateId) => {
+      const m = loadMandate(mandateId);
+      const mv = verifyMandate(m, didDoc);
+      if (!mv.ok) {
+        throw new Error(`mandate ${mandateId} invalid: ${mv.errors.join("; ")}`);
+      }
+      if (findRevocation(mandateId)) {
+        throw new Error(`mandate ${mandateId} has been revoked`);
+      }
+      if (!m.grantee.pubkey || m.grantee.pubkey !== keyId) {
+        throw new Error(
+          `signature key ${keyId} does not match mandate grantee.pubkey=${m.grantee.pubkey ?? "<unset>"}`,
+        );
+      }
+      return multibaseToEd25519PublicKey(keyId);
+    },
+  };
+
   // Check 6: manifest signature.
-  const manSig = verifyManifestSignature(manifest, didDoc);
+  const manSig = verifyManifestSignature(manifest, didDoc, opts);
   if (!manSig.ok) errors.push(manSig.error ?? "manifest signature failed");
 
   // Collect gamma_refs we've seen in the live doc so we can cross-check
@@ -1480,11 +1854,24 @@ export function verifyEthos(
     }
     const doc = loaded.doc;
 
-    // 5: plaintext hash.
-    const md = renderZoneMarkdownFromDoc(z, doc, manifest);
-    const hex = Buffer.from(sha256fn(new TextEncoder().encode(md))).toString("hex");
-    if (hex !== zm.sha256_of_plaintext) {
-      errors.push(`zone ${z}: sha256_of_plaintext mismatch (rendered=${hex} manifest=${zm.sha256_of_plaintext})`);
+    // 5: plaintext hash. We hash the actual on-disk plaintext (decrypted for
+    // private zones) rather than re-rendering `doc`, because the rendered
+    // frontmatter embeds edition metadata — a carry-forward zone authored in
+    // edition N but present in manifest N+k would fail equality if we
+    // re-rendered with edition N+k's context. The bytes written at write
+    // time are the bytes hashed into `sha256_of_plaintext`.
+    try {
+      const plaintext = loadZonePlaintext(handle, z, identity ?? undefined, manifest);
+      const hex = Buffer.from(
+        sha256fn(new TextEncoder().encode(plaintext)),
+      ).toString("hex");
+      if (hex !== zm.sha256_of_plaintext) {
+        errors.push(
+          `zone ${z}: sha256_of_plaintext mismatch (on-disk=${hex} manifest=${zm.sha256_of_plaintext})`,
+        );
+      }
+    } catch (e) {
+      errors.push(`zone ${z}: failed to hash plaintext (${(e as Error).message})`);
     }
 
     // section_titles consistency.
@@ -1493,8 +1880,9 @@ export function verifyEthos(
       errors.push(`zone ${z}: section_titles mismatch`);
     }
 
-    // Zone signature.
-    const zs = verifyZoneSignature(doc, zm.signature, didDoc);
+    // Zone signature. Pass the mandate-aware resolver so delegate-signed
+    // zones verify when the issuing mandate is on disk and not revoked.
+    const zs = verifyZoneSignature(doc, zm.signature, didDoc, opts);
     if (!zs.ok) errors.push(`zone ${z}: ${zs.error}`);
 
     // Every section must name a gamma_ref.
