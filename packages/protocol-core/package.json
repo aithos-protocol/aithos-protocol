@@ -32,6 +32,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./backend": {
+      "types": "./dist/backend.d.ts",
+      "import": "./dist/backend.js"
+    },
     "./bundle": {
       "types": "./dist/bundle.d.ts",
       "import": "./dist/bundle.js"
