@@ -8,6 +8,13 @@
  *   - `--id <gamma_id>`: show a single entry in full JSON.
  *   - `--head`: just print "<head>\tcount=<N>" (quick manifest cross-check).
  *   - `--json`: machine-readable JSON (array of entries, or a single entry).
+ *
+ * Auth paths:
+ *   - Owner (default): uses `loadIdentity()` — requires sealed seeds.
+ *   - Delegate (`--mandate <id> --agent-key <path>`): works on tracked
+ *     installs. The delegate must be on the gamma DEK wrap list, which
+ *     `issueMandateWithRewrap` arranges at grant time for any write mandate
+ *     bound to a pubkey (spec §10 + §4).
  */
 
 import { existsSync } from "node:fs";
@@ -15,17 +22,22 @@ import {
   loadIdentity,
   loadConfig,
   ethosDir,
-  readGammaLog,
-  gammaHead,
+  readGammaLogForAuthor,
+  gammaHeadForAuthor,
   readManifest,
+  ownerAuthor,
+  type Author,
   type GammaEntry,
 } from "@aithos/protocol-core";
+import { resolveAuthor } from "./_author.js";
 
 export interface GammaShowOpts {
   handle?: string;
   section?: string;
   id?: string;
   head?: boolean;
+  mandate?: string;
+  agentKey?: string;
   json?: boolean;
 }
 
@@ -35,12 +47,13 @@ export function runGammaShow(opts: GammaShowOpts): void {
   if (!existsSync(ethosDir(handle))) {
     throw new Error(`No ethos for "${handle}".`);
   }
-  const identity = loadIdentity(handle);
+
+  const { author, isDelegate } = resolveGammaAuthor(handle, opts);
 
   // `--head`: cheapest mode, works even when the log is absent.
   if (opts.head) {
-    const head = gammaHead(handle, identity);
-    const entries = readGammaLog(handle, identity);
+    const head = gammaHeadForAuthor(handle, author);
+    const entries = readGammaLogForAuthor(handle, author);
     if (opts.json) {
       console.log(JSON.stringify({ head, count: entries.length }, null, 2));
     } else {
@@ -49,7 +62,7 @@ export function runGammaShow(opts: GammaShowOpts): void {
     return;
   }
 
-  const entries = readGammaLog(handle, identity);
+  const entries = readGammaLogForAuthor(handle, author);
 
   // `--id`: single-entry lookup.
   if (opts.id) {
@@ -85,7 +98,10 @@ export function runGammaShow(opts: GammaShowOpts): void {
   const manifestHead = manifest?.gamma?.head ?? null;
   const actualHead = entries.length > 0 ? entries[entries.length - 1].hash : null;
 
-  console.log(`[handle=${handle}] gamma log (${filtered.length} of ${entries.length} entries)`);
+  const authLabel = isDelegate ? ` [via mandate ${opts.mandate}]` : "";
+  console.log(
+    `[handle=${handle}] gamma log (${filtered.length} of ${entries.length} entries)${authLabel}`,
+  );
   for (const e of filtered) {
     console.log(formatIndexLine(e));
   }
@@ -98,6 +114,32 @@ export function runGammaShow(opts: GammaShowOpts): void {
   } else if (manifest) {
     console.log(`  manifest:   (no gamma anchor)`);
   }
+}
+
+/**
+ * Build an Author for gamma reads, supporting both paths:
+ *
+ *   - owner: no --mandate; loadIdentity requires sealed seeds.
+ *   - delegate: --mandate + --agent-key; works on tracked installs.
+ *
+ * We don't enforce a specific scope here — the cryptographic wrap list on
+ * the gamma DEK is the real access-control boundary. If the delegate wasn't
+ * rewrapped in, decryption fails downstream with a clear "no matching
+ * recipient" error.
+ */
+function resolveGammaAuthor(
+  handle: string,
+  opts: GammaShowOpts,
+): { author: Author; isDelegate: boolean } {
+  if (opts.mandate) {
+    if (!opts.agentKey) {
+      throw new Error("--mandate requires --agent-key <path>");
+    }
+    const { author } = resolveAuthor({ handle, mandate: opts.mandate, agentKey: opts.agentKey });
+    return { author, isDelegate: true };
+  }
+  const identity = loadIdentity(handle);
+  return { author: ownerAuthor(identity), isDelegate: false };
 }
 
 function formatIndexLine(e: GammaEntry): string {

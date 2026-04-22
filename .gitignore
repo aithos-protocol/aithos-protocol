@@ -24,3 +24,6 @@ packages/*/dist/commands/*.removed
 
 # npm pack outputs (published via npm publish, never committed)
 *.tgz
+
+# incremental TypeScript build cache (local artifact, regenerated on build)
+*.tsbuildinfo

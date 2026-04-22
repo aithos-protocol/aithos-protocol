@@ -341,11 +341,14 @@ gamma
   .description(
     "Print the gamma log (one line per entry). Use --section to filter to " +
       "a single section's history, --id to show one entry in full, or --head " +
-      "to print just the head hash and count.",
+      "to print just the head hash and count. On a tracked install, pass " +
+      "--mandate + --agent-key to read the log via a delegate mandate.",
   )
   .option("--section <id>", "Filter to entries touching this section id")
   .option("--id <gamma_id>", "Show a single entry in full")
   .option("--head", "Print only the current head hash and count")
+  .option("--mandate <id>", "Delegate mandate (for gamma reads on tracked installs)")
+  .option("--agent-key <path>", "Agent keyfile (required with --mandate)")
   .option("--handle <h>", "Identity handle")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runGammaShow(opts)));
@@ -354,8 +357,12 @@ gamma
   .command("verify")
   .description(
     "Verify hash integrity, chain linkage, signatures, and the manifest " +
-      "anchor (manifest.gamma.head must equal the on-disk head).",
+      "anchor (manifest.gamma.head must equal the on-disk head). On a " +
+      "tracked install, pass --mandate + --agent-key to verify via a " +
+      "delegate mandate.",
   )
+  .option("--mandate <id>", "Delegate mandate (for gamma verify on tracked installs)")
+  .option("--agent-key <path>", "Agent keyfile (required with --mandate)")
   .option("--handle <h>", "Identity handle")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runGammaVerify(opts)));

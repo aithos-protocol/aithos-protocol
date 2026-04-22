@@ -87,23 +87,25 @@ import {
   type Mandate,
   type Revocation,
   findRevocation,
+  hasGammaReadScope,
   loadMandate,
   verifyMandate,
 } from "./mandate.js";
 import {
-  appendGammaEntry,
-  appendGammaEntryForAuthor,
-  buildGammaEntry,
+  appendGammaEntryOnDisk,
+  buildGammaEntryV03,
+  defaultGammaReaderKeys,
+  delegateGammaRecipient,
   delegateGammaSigner,
   gammaHead,
   gammaHeadForAuthor,
-  latestGammaForSection,
+  latestGammaIdForSection,
+  readGammaHeaders,
   readGammaLog,
-  readGammaLogForAuthor,
-  rewrapGammaLog,
   sphereGammaSigner,
   type GammaEntry,
-  type GammaRecipient,
+  type GammaEntryV03,
+  type GammaReaderKey,
   type GammaSigner,
 } from "./gamma.js";
 import {
@@ -224,10 +226,36 @@ export interface ZoneCipher {
  * Off-box delivery (e.g. an S3 URL for the encrypted .jsonl.enc) can
  * populate `url`; otherwise the log lives purely local.
  */
+/**
+ * A party authorized to read gamma entries in the v0.3 format.
+ *
+ * On every v0.3 append, the writer seals the entry's per-entry symmetric key
+ * to each reader in this list (using each reader's X25519 public key). Readers
+ * added after an entry was appended cannot decrypt that entry — seal is
+ * forward-only. Subject sphere keys are always present; delegate readers are
+ * added by grant when a mandate carries `gamma.read`.
+ */
+export interface GammaReader {
+  /** Stable identifier — `did:aithos:*#<sphere>` for subject, `urn:aithos:agent:*` for delegates. */
+  recipient: string;
+  /** Multibase-encoded X25519 public key this reader decrypts with. */
+  pubkey: string;
+  /** Mandate id that authorized this delegate reader. Absent for subject spheres. */
+  via_mandate?: string;
+  /** ISO-8601 timestamp the reader was added. Informative. */
+  added_at: string;
+}
+
 export interface GammaManifestAnchor {
   head: string | null;   // sha256:<hex> of latest entry, null if log is empty
   count: number;         // total number of entries in the log
   url?: string;          // optional off-box location of the encrypted log
+  /**
+   * v0.3+ — recipients sealed into every future entry's envelopes list.
+   * OPTIONAL for backward compatibility with v0.2 manifests. A v0.3 writer
+   * populates this on every edition.
+   */
+  readers?: GammaReader[];
 }
 
 /**
@@ -1046,7 +1074,21 @@ export function persistEdition(
   handle: string,
   subject: Identity | Author,
   zones: Zones,
-  opts: { now?: Date; prevManifest?: Manifest | null } = {},
+  opts: {
+    now?: Date;
+    prevManifest?: Manifest | null;
+    /**
+     * v0.3 — override the `gamma.readers` recorded in the new manifest
+     * anchor. Use cases:
+     *   - `issueMandateWithRewrap`: add a delegate reader when the mandate
+     *     carries `gamma.read`.
+     *   - `repinAfterRevocation`: filter out revoked delegate readers.
+     *
+     * When omitted, the new anchor carries forward `prevManifest.gamma.readers`
+     * (or bootstraps from the owner's sphere keys on a fresh v0.3 identity).
+     */
+    gammaReadersOverride?: GammaReader[];
+  } = {},
 ): Manifest {
   const author = toAuthor(subject);
   const now = opts.now ?? new Date();
@@ -1114,7 +1156,17 @@ export function persistEdition(
   // the current head. In v0.2.0 the log IS the history; an ethos with any
   // section necessarily has a non-empty log. The anchor is omitted only
   // when the log is empty (fresh identity with no sections yet).
-  const gammaAnchor = safeReadGammaAnchor(handle, author, prevManifest);
+  //
+  // v0.3: the anchor also records `readers` — callers pass an override here
+  // when the new edition changes the authorised reader set (grant with
+  // `gamma.read`, or post-revocation repin).
+  const gammaAnchor = safeReadGammaAnchor(
+    handle,
+    author,
+    prevManifest,
+    opts.gammaReadersOverride,
+    now,
+  );
 
   const unsignedSigKey =
     author.kind === "owner"
@@ -1170,35 +1222,137 @@ function safeLoadPreviousManifest(handle: string): Manifest | null {
 }
 
 /**
+ * Compute the `GammaReader[]` list that the current edition should seal
+ * future gamma entries to, and that `manifest.gamma.readers` should record.
+ *
+ * Precedence (highest first):
+ *   1. Explicit `override` — used by `issueMandateWithRewrap` (add a
+ *      delegate reader for a mandate with `gamma.read`) and by
+ *      `repinAfterRevocation` (drop revoked delegate readers).
+ *   2. Previous manifest's `gamma.readers` — the steady-state carry-forward
+ *      path. Already filtered / augmented by the grant/revoke lifecycle.
+ *   3. Bootstrap from `defaultGammaReaderKeys(identity)` — the three sphere
+ *      X25519 pubkeys. Only the owner can bootstrap, because only the owner
+ *      knows the sphere seeds. A delegate writing on a readers-less manifest
+ *      is a bug (the owner must have bootstrapped on the previous edition).
+ *
+ * Returned list is never empty: either the prev manifest has readers, the
+ * owner bootstraps to three, or the override was supplied explicitly. An
+ * empty override is rejected because that would make every future gamma
+ * entry unreadable by anyone.
+ */
+function computeGammaReaders(
+  author: Author,
+  prevManifest: Manifest | null | undefined,
+  override?: GammaReader[],
+  now: Date = new Date(),
+): GammaReader[] {
+  if (override) {
+    if (override.length === 0) {
+      throw new Error(
+        "computeGammaReaders: override must not be empty — gamma entries would be unreadable",
+      );
+    }
+    return override;
+  }
+  if (prevManifest?.gamma?.readers && prevManifest.gamma.readers.length > 0) {
+    return prevManifest.gamma.readers;
+  }
+  if (author.kind !== "owner") {
+    throw new Error(
+      "computeGammaReaders: delegate cannot bootstrap gamma readers — " +
+        "prev manifest must carry a non-empty gamma.readers list",
+    );
+  }
+  const addedAt = now.toISOString();
+  return defaultGammaReaderKeys(author.identity).map((k) => ({
+    recipient: k.recipient,
+    pubkey: k.pubkey,
+    added_at: addedAt,
+  }));
+}
+
+/**
+ * Build a `GammaReader` entry for a mandate that carries `gamma.read`. The
+ * mandate's `grantee.pubkey` is an Ed25519 multibase; we derive the matching
+ * X25519 pubkey (same trick as zone DEK wraps, spec §3.5.2) and label the
+ * recipient with the stable `<granteeId>#<pubkeyMb>` form so the envelope
+ * lookup in `readGammaLogForAuthor` is deterministic.
+ */
+function gammaReaderFromMandate(m: Mandate, now: Date): GammaReader {
+  if (!m.grantee.pubkey) {
+    throw new Error(
+      `gammaReaderFromMandate: mandate ${m.id} has no grantee.pubkey — nothing to seal to`,
+    );
+  }
+  const edPub = multibaseToEd25519PublicKey(m.grantee.pubkey);
+  const xPub = ed25519PubToX25519Pub(edPub);
+  return {
+    recipient: delegateGammaRecipient(m.grantee.id, m.grantee.pubkey),
+    pubkey: x25519PublicKeyToMultibase(xPub),
+    via_mandate: m.id,
+    added_at: now.toISOString(),
+  };
+}
+
+/**
  * Best-effort read of the gamma log to produce a manifest anchor. Returns
- * `null` when no log is present (the common case for pre-gamma identities),
- * so `persistEdition` can omit the `gamma` field entirely and stay
- * byte-compatible with v0.1.0 manifests.
+ * `null` when no log is present AND the caller did not request a readers
+ * override (fresh identity, pre-gamma bundle, etc.), so `persistEdition`
+ * can omit the `gamma` field entirely and stay byte-compatible with v0.1.0
+ * manifests.
+ *
+ * v0.3: the anchor also carries `readers` — the authoritative list of
+ * reader keys to seal every future gamma entry to. When a new edition is
+ * persisted without appending any gamma entry (grant rewrap, revoke
+ * repin), the anchor updates the readers list without touching `head` or
+ * `count`.
  */
 function safeReadGammaAnchor(
   handle: string,
   author: Author,
-  prevManifest?: Manifest | null,
+  prevManifest: Manifest | null | undefined,
+  readersOverride?: GammaReader[],
+  now: Date = new Date(),
 ): GammaManifestAnchor | null {
-  // Delegates whose mandate includes a gamma.read scope (or whose sphere wrap
-  // has been issued via `issueMandateWithRewrap`) can walk the log through
-  // `readGammaLogForAuthor`. When that path succeeds we anchor to the live
-  // tail so manifest.gamma stays consistent with the log after a delegate
-  // append. If it fails (no wrap for the delegate, truncated log, etc.) we
-  // fall back to the previous manifest's anchor so carry-forward still works.
+  // No decryption required: head/count come from the plaintext header list.
+  let head: string | null;
+  let count: number;
   try {
-    const entries =
-      author.kind === "owner"
-        ? readGammaLog(handle, author.identity)
-        : readGammaLogForAuthor(handle, author);
-    if (entries.length === 0) return prevManifest?.gamma ?? null;
-    return {
-      head: entries[entries.length - 1].hash,
-      count: entries.length,
-    };
+    const headers = readGammaHeaders(handle);
+    head = headers.length === 0 ? null : headers[headers.length - 1].hash;
+    count = headers.length;
   } catch {
+    // Log unreadable or absent: fall back to prev anchor values.
+    if (!prevManifest?.gamma && !readersOverride) return null;
+    head = prevManifest?.gamma?.head ?? null;
+    count = prevManifest?.gamma?.count ?? 0;
+  }
+
+  // Determine the readers list.
+  let readers: GammaReader[] | undefined;
+  if (readersOverride) {
+    readers = readersOverride;
+  } else if (prevManifest?.gamma?.readers) {
+    readers = prevManifest.gamma.readers;
+  } else if (head !== null && author.kind === "owner") {
+    // v0.3 log exists on disk but prev manifest predates v0.3 readers —
+    // bootstrap from the owner's sphere keys. Happens exactly once on the
+    // first owner write after a v0.3 upgrade or a fresh identity's first
+    // section.
+    readers = computeGammaReaders(author, prevManifest, undefined, now);
+  }
+
+  // If the log is empty AND we have no readers info, keep legacy semantics.
+  if (head === null && count === 0 && !readers) {
     return prevManifest?.gamma ?? null;
   }
+
+  return {
+    head,
+    count,
+    ...(readers ? { readers } : {}),
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1264,7 +1418,9 @@ export function addSection(
     ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
     : authorGammaSigner(author, args.zone);
   const prevGammaHash = gammaHeadForAuthor(args.handle, author);
-  const gammaEntry = buildGammaEntry({
+  const prevManifest = safeLoadPreviousManifest(args.handle);
+  const readers = computeGammaReaders(author, prevManifest, undefined, at);
+  const gammaEntryV03 = buildGammaEntryV03({
     subjectDid: authorSubjectDid(author),
     zone: args.zone,
     op: "section.add",
@@ -1276,21 +1432,71 @@ export function addSection(
     },
     prevGammaHash,
     signer: gammaSigner,
+    readers,
     at,
   });
-  appendGammaEntryForAuthor(args.handle, author, gammaEntry);
+  appendGammaEntryOnDisk(args.handle, gammaEntryV03);
 
   const section: Section = {
     id: sectionId,
     title: args.title,
     body: args.body,
-    gamma_ref: gammaEntry.id,
+    gamma_ref: gammaEntryV03.public_header.id,
     ...(args.tags && args.tags.length > 0 ? { tags: args.tags } : {}),
   };
   zones[args.zone].sections.push(section);
 
-  const manifest = persistEdition(args.handle, author, zones, { now: at });
+  const manifest = persistEdition(args.handle, author, zones, {
+    now: at,
+    prevManifest,
+    gammaReadersOverride: readers,
+  });
+  const gammaEntry = gammaEntryV03ToLogical(gammaEntryV03, args.body, args.title, args.tags);
   return { section, manifest, gammaEntry };
+}
+
+/**
+ * Convert a freshly-built v0.3 entry to the logical `GammaEntry` shape
+ * returned by the mutation APIs. The writer has the plaintext payload on
+ * hand, so this is a direct assembly — no decryption needed.
+ *
+ * Used by `addSection`/`modifySection`/`deleteSection` to keep their return
+ * shape unchanged across the v0.2 → v0.3 cutover.
+ */
+function gammaEntryV03ToLogical(
+  entry: GammaEntryV03,
+  _body?: string,
+  _title?: string,
+  _tags?: string[],
+): GammaEntry {
+  // The payload on a v0.3 on-disk record is already encrypted; we can't
+  // invert that here. But for the mutation-call return value, callers only
+  // rely on { id, at, subject_did, zone, op, target, hash, signature,
+  // prev_gamma_hash, prev_section_gamma? } — none of which are in the
+  // ciphertext. So we return a logical view with payload={} and no
+  // _access_denied marker (the caller's just-written plaintext is trivially
+  // re-accessible; this return shape is for inspection, not authoritative
+  // payload fetch).
+  const h = entry.public_header;
+  return {
+    "aithos-gamma": h["aithos-gamma"],
+    id: h.id,
+    at: h.at,
+    subject_did: h.subject_did,
+    zone: h.zone,
+    op: h.op,
+    target: h.target,
+    payload: {},
+    prev_gamma_hash: h.prev_gamma_hash,
+    ...(h.prev_section_gamma ? { prev_section_gamma: h.prev_section_gamma } : {}),
+    hash: h.hash,
+    signature: {
+      alg: entry.signature.alg,
+      key: entry.signature.key,
+      value: entry.signature.value,
+    },
+    ...(entry.signature.authorized_by ? { authorized_by: entry.signature.authorized_by } : {}),
+  };
 }
 
 /**
@@ -1367,26 +1573,32 @@ export function modifySection(
   if (args.body !== undefined) payload.body = args.body;
   if (args.tags !== undefined) payload.tags = args.tags;
 
-  const existingLog = readGammaLogForAuthor(args.handle, author);
-  const priorOnSection = latestGammaForSection(existingLog, args.sectionId);
+  // Walk headers (plaintext) — no envelope lookup needed to find the latest
+  // gamma entry for a given section id. This is append-without-read-friendly:
+  // a delegate with `ethos.write.<zone>` but no `gamma.read` can still chain
+  // correctly to the prior on-section entry.
+  const prevSectionGammaId = latestGammaIdForSection(args.handle, args.sectionId);
 
   const gammaSigner: GammaSigner = args.delegate
     ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
     : authorGammaSigner(author, args.zone);
   const prevGammaHash = gammaHeadForAuthor(args.handle, author);
 
-  const gammaEntry = buildGammaEntry({
+  const prevManifest = safeLoadPreviousManifest(args.handle);
+  const readers = computeGammaReaders(author, prevManifest, undefined, at);
+  const gammaEntryV03 = buildGammaEntryV03({
     subjectDid: authorSubjectDid(author),
     zone: args.zone,
     op: "section.modify",
     target: { section_id: args.sectionId },
     payload,
     prevGammaHash,
-    ...(priorOnSection ? { prevSectionGamma: priorOnSection.id } : {}),
+    ...(prevSectionGammaId ? { prevSectionGamma: prevSectionGammaId } : {}),
     signer: gammaSigner,
+    readers,
     at,
   });
-  appendGammaEntryForAuthor(args.handle, author, gammaEntry);
+  appendGammaEntryOnDisk(args.handle, gammaEntryV03);
 
   // Apply the change to the in-memory section.
   if (args.title !== undefined) section.title = args.title;
@@ -1395,9 +1607,14 @@ export function modifySection(
     if (args.tags.length === 0) delete section.tags;
     else section.tags = args.tags;
   }
-  section.gamma_ref = gammaEntry.id;
+  section.gamma_ref = gammaEntryV03.public_header.id;
 
-  const manifest = persistEdition(args.handle, author, zones, { now: at });
+  const manifest = persistEdition(args.handle, author, zones, {
+    now: at,
+    prevManifest,
+    gammaReadersOverride: readers,
+  });
+  const gammaEntry = gammaEntryV03ToLogical(gammaEntryV03);
   return { section, manifest, gammaEntry };
 }
 
@@ -1449,17 +1666,19 @@ export function deleteSection(
 
   // Build the gamma entry. `prev_section_gamma` points at the most recent
   // gamma entry for this section (usually its own add, but could be a prior
-  // modify). This lets per-section walks skip the global chain.
+  // modify). This lets per-section walks skip the global chain. Resolved
+  // from headers only — no decryption required.
   const at = args.at ?? new Date();
-  const existingLog = readGammaLogForAuthor(args.handle, author);
-  const priorOnSection = latestGammaForSection(existingLog, args.sectionId);
+  const prevSectionGammaId = latestGammaIdForSection(args.handle, args.sectionId);
 
   const gammaSigner: GammaSigner = args.delegate
     ? delegateGammaSigner(args.delegate.mandateId, args.delegate.keySeed, args.delegate.keyMultibase)
     : authorGammaSigner(author, args.zone);
 
   const prevGammaHash = gammaHeadForAuthor(args.handle, author);
-  const gammaEntry = buildGammaEntry({
+  const prevManifest = safeLoadPreviousManifest(args.handle);
+  const readers = computeGammaReaders(author, prevManifest, undefined, at);
+  const gammaEntryV03 = buildGammaEntryV03({
     subjectDid: authorSubjectDid(author),
     zone: args.zone,
     op: "section.delete",
@@ -1468,13 +1687,19 @@ export function deleteSection(
       ...(args.reason ? { reason: args.reason } : {}),
     },
     prevGammaHash,
-    ...(priorOnSection ? { prevSectionGamma: priorOnSection.id } : {}),
+    ...(prevSectionGammaId ? { prevSectionGamma: prevSectionGammaId } : {}),
     signer: gammaSigner,
+    readers,
     at,
   });
-  appendGammaEntryForAuthor(args.handle, author, gammaEntry);
+  appendGammaEntryOnDisk(args.handle, gammaEntryV03);
 
-  const manifest = persistEdition(args.handle, author, zones, { now: at });
+  const manifest = persistEdition(args.handle, author, zones, {
+    now: at,
+    prevManifest,
+    gammaReadersOverride: readers,
+  });
+  const gammaEntry = gammaEntryV03ToLogical(gammaEntryV03);
   return { manifest, gammaEntry, deletedTitle: deleted.title };
 }
 
@@ -1507,45 +1732,64 @@ export interface IssueMandateWithRewrapArgs {
  * Make a freshly-issued mandate effective on the current encrypted state.
  *
  * The mandate alone is only a signed grant on paper — it doesn't change the
- * zone ciphertext or the gamma log ciphertext. A delegate handed the bundle
- * as-is couldn't decrypt anything, because their X25519 pubkey isn't on any
- * wrap list yet. This function repairs that: it re-renders the subject's
- * zones under a recipient set that now includes the delegate, and reseals
- * the gamma log with the same delegate added.
+ * zone ciphertext. A delegate handed the bundle as-is couldn't decrypt
+ * their zone because their X25519 pubkey isn't on the DEK wrap list yet.
+ * This function repairs that: it re-renders the subject's zones under a
+ * recipient set that now includes the delegate.
+ *
+ * v0.3 (gamma): the gamma log is NOT rewrapped. Every gamma entry is sealed
+ * per-entry to a fixed recipient set at append time, and the rewrap idea
+ * from v0.2 (single DEK for the whole log → every delegate gets full
+ * history) is gone by design. Instead, if the mandate carries `gamma.read`,
+ * we add the grantee to `manifest.gamma.readers` so that FUTURE gamma
+ * entries will be sealed to them. Past entries remain unreadable — the
+ * protocol only grants forward-looking read access.
+ *
+ * Without `gamma.read` in the mandate's scopes, the grantee never appears
+ * on any gamma envelope. A write-only delegate can append correct, signed
+ * entries using only `manifest.gamma.readers` (the public reader list) +
+ * their Ed25519 seed — no plaintext ever crosses their process.
  *
  * Owner-only: the subject must hold the sphere seeds. Call AFTER
- * `writeMandate(mandate)` so that `authorZoneWriteRecipients` / the gamma
- * rewrap helper can see the live mandate.
+ * `writeMandate(mandate)` so that `activeDelegatesForZone` can see the
+ * live mandate.
  */
 export function issueMandateWithRewrap(args: IssueMandateWithRewrapArgs): Manifest {
   const author = ownerAuthor(args.identity);
   const zones = loadAllZones(args.handle, author);
-  const manifest = persistEdition(args.handle, author, zones, { now: args.at });
+  const now = args.at ?? new Date();
+  const prevManifest = safeLoadPreviousManifest(args.handle);
 
-  // Add the delegate as a wrap recipient on the gamma log too, so they can
-  // read the signed mutation history from the bundle.
-  if (args.mandate.grantee.pubkey) {
-    const subjectDid = rootDid(args.identity);
-    const extra: GammaRecipient[] = [
-      {
-        did: delegateWrapDid(args.mandate.grantee.id, args.mandate.grantee.pubkey),
-        x25519PublicKey: ed25519PubToX25519Pub(
-          multibaseToEd25519PublicKey(args.mandate.grantee.pubkey),
-        ),
-      },
-    ];
-    // Include any OTHER live delegates too, so we don't lose them on rewrap.
-    for (const z of SPHERE_FRAGMENTS) {
-      for (const d of activeDelegatesForZone(subjectDid, z)) {
-        if (!extra.some((x) => x.did === d.did)) {
-          extra.push({ did: d.did, x25519PublicKey: d.x25519PublicKey });
-        }
-      }
+  // Compute gamma readers override only when the mandate carries gamma.read.
+  // Write-only mandates do NOT grant any gamma access — that's the core
+  // cryptographic property of the v0.3 format.
+  let gammaReadersOverride: GammaReader[] | undefined;
+  if (hasGammaReadScope(args.mandate.scopes) && args.mandate.grantee.pubkey) {
+    const existing = prevManifest?.gamma?.readers ?? [];
+    let base: GammaReader[];
+    if (existing.length > 0) {
+      base = [...existing];
+    } else {
+      // No prior readers list (fresh v0.3 bootstrap) — seed with the owner's
+      // three sphere keys so the new reader joins an already-complete base.
+      base = defaultGammaReaderKeys(args.identity).map((k) => ({
+        recipient: k.recipient,
+        pubkey: k.pubkey,
+        added_at: now.toISOString(),
+      }));
     }
-    rewrapGammaLog(args.handle, args.identity, extra);
+    const newReader = gammaReaderFromMandate(args.mandate, now);
+    if (!base.some((r) => r.recipient === newReader.recipient)) {
+      base.push(newReader);
+    }
+    gammaReadersOverride = base;
   }
 
-  return manifest;
+  return persistEdition(args.handle, author, zones, {
+    now,
+    prevManifest,
+    ...(gammaReadersOverride ? { gammaReadersOverride } : {}),
+  });
 }
 
 export interface RepinAfterRevocationArgs {
@@ -1568,24 +1812,33 @@ export interface RepinAfterRevocationArgs {
 export function repinAfterRevocation(args: RepinAfterRevocationArgs): Manifest {
   const author = ownerAuthor(args.identity);
   const zones = loadAllZones(args.handle, author);
-  const manifest = persistEdition(args.handle, author, zones, { now: args.at });
+  const now = args.at ?? new Date();
+  const prevManifest = safeLoadPreviousManifest(args.handle);
 
-  // Rewrap the gamma log under the new, narrower recipient set. Active
-  // delegates (other than the just-revoked one) remain on the recipient list;
-  // the revoked one is filtered out because `findRevocation` returns non-null
-  // for its mandate id.
-  const subjectDid = rootDid(args.identity);
-  const extra: GammaRecipient[] = [];
-  for (const z of SPHERE_FRAGMENTS) {
-    for (const d of activeDelegatesForZone(subjectDid, z)) {
-      if (!extra.some((x) => x.did === d.did)) {
-        extra.push({ did: d.did, x25519PublicKey: d.x25519PublicKey });
-      }
+  // Drop revoked delegate readers from the gamma readers list. Subject sphere
+  // readers (no `via_mandate`) are always kept.
+  //
+  // Note: this only affects FUTURE gamma entries. Past entries were sealed
+  // at append time under the then-valid reader set — the revoked delegate
+  // can still decrypt entries they received before revocation from any
+  // bundle copy they kept. That's a fundamental limit of any copy-permitting
+  // system and matches the zone DEK behaviour.
+  let gammaReadersOverride: GammaReader[] | undefined;
+  const prev = prevManifest?.gamma?.readers;
+  if (prev && prev.length > 0) {
+    const filtered = prev.filter(
+      (r) => !r.via_mandate || !findRevocation(r.via_mandate),
+    );
+    if (filtered.length !== prev.length) {
+      gammaReadersOverride = filtered;
     }
   }
-  rewrapGammaLog(args.handle, args.identity, extra);
 
-  return manifest;
+  return persistEdition(args.handle, author, zones, {
+    now,
+    prevManifest,
+    ...(gammaReadersOverride ? { gammaReadersOverride } : {}),
+  });
 }
 
 /* -------------------------------------------------------------------------- */

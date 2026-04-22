@@ -117,17 +117,25 @@ say "15. tamper with the encrypted gamma log"
 GAMMA_FILE="$AITHOS_HOME/identities/$HANDLE/ethos/gamma/gamma.jsonl.enc"
 [[ -f "$GAMMA_FILE" ]] || fail "expected $GAMMA_FILE to exist"
 cp "$GAMMA_FILE" "$GAMMA_FILE.bak"
-# Corrupt a single ciphertext byte by flipping a char inside the base64 payload.
+# v0.3: the file is a JSON envelope { 'aithos-gamma-file': '0.3.0', entries: [...] }
+# where each entry carries its own payload_ct. Corrupt the first entry's
+# ciphertext — any entry works; we just need one byte flip to break the
+# XChaCha20-Poly1305 tag AND the per-entry hash commitment.
 node -e "
 const fs = require('fs');
 const p = process.argv[1];
 const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-const ct = j.ciphertext;
-// Flip one char near the middle of the ciphertext (still a valid base64
-// char, just wrong — will fail the poly1305 tag).
+if (!Array.isArray(j.entries) || j.entries.length === 0) {
+  throw new Error('expected v0.3 gamma file with non-empty entries[]');
+}
+const e = j.entries[0];
+const ct = e.payload_ct;
+// Flip one char near the middle of the ciphertext (still a valid base64url
+// char, just wrong — will fail the entry hash check BEFORE we even get to
+// the AEAD tag).
 const mid = Math.floor(ct.length / 2);
 const flipped = ct.slice(0, mid) + (ct[mid] === 'A' ? 'B' : 'A') + ct.slice(mid + 1);
-j.ciphertext = flipped;
+e.payload_ct = flipped;
 fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
 " "$GAMMA_FILE"
 

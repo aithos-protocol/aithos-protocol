@@ -1,5 +1,14 @@
 # 12 · Platform MCP — converse
 
+> **Status at spec v0.2.0 — DEFERRED.** The converse endpoint is specified
+> but **not scheduled for the current hosting MVP**. The MVP ships only the
+> primitives endpoints of §10 (read + write) and the CLI-equivalent cockpit.
+> Converse is a parallel surface that can be layered on top later without
+> touching §10 semantics; it is kept in the spec as the canonical design so
+> implementers do not re-invent it when they get there. Treat every "MUST"
+> in this chapter as *"MUST when this endpoint is offered"*, not as an MVP
+> requirement.
+
 ## 12.1 Overview
 
 Chapter 10 specifies a **primitives** endpoint: sharp, technical tools that

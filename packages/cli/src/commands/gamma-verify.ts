@@ -10,6 +10,11 @@
  *   3. Anchor: the manifest's `gamma.head` equals the on-disk log's head
  *      hash, and `gamma.count` matches the number of entries.
  *
+ * Auth paths:
+ *   - Owner (default): uses `loadIdentity()` — requires sealed seeds.
+ *   - Delegate (`--mandate <id> --agent-key <path>`): works on tracked
+ *     installs, as long as the delegate is on the gamma DEK wrap list.
+ *
  * Exit codes:
  *   - 0 → valid
  *   - 1 → one or more checks failed
@@ -24,15 +29,18 @@ import {
   ethosDir,
   identityDir,
   readJson,
-  readGammaLog,
+  readGammaEntriesOnDisk,
   verifyGammaLog,
   readManifest,
   loadMandate,
   type DidDocument,
 } from "@aithos/protocol-core";
+import { resolveAuthor } from "./_author.js";
 
 export interface GammaVerifyOpts {
   handle?: string;
+  mandate?: string;
+  agentKey?: string;
   json?: boolean;
 }
 
@@ -42,9 +50,15 @@ export function runGammaVerify(opts: GammaVerifyOpts): void {
   if (!existsSync(ethosDir(handle))) {
     throw new Error(`No ethos for "${handle}".`);
   }
-  const identity = loadIdentity(handle);
+
+  const { isDelegate } = resolveVerifyAuthor(handle, opts);
   const didDoc = readJson<DidDocument>(join(identityDir(handle), "did.json"));
-  const entries = readGammaLog(handle, identity);
+  // v0.3: integrity verification is per-entry envelope-independent. We read
+  // the on-disk form directly — no decryption, no reader envelope required.
+  // The `--mandate` / `--agent-key` flags remain accepted for UX parity
+  // (they let a delegate invoke `gamma verify` without holding sphere seeds)
+  // but the ciphertext is never opened here.
+  const entries = readGammaEntriesOnDisk(handle);
 
   const chain = verifyGammaLog(entries, didDoc, {
     resolveDelegatePubkey: (_keyId, mandateId) => {
@@ -60,7 +74,8 @@ export function runGammaVerify(opts: GammaVerifyOpts): void {
 
   // Anchor check against the manifest.
   const manifest = safeReadManifest(handle);
-  const actualHead = entries.length > 0 ? entries[entries.length - 1].hash : null;
+  const actualHead =
+    entries.length > 0 ? entries[entries.length - 1].public_header.hash : null;
   const manifestHead = manifest?.gamma?.head ?? null;
   const manifestCount = manifest?.gamma?.count ?? null;
 
@@ -92,6 +107,7 @@ export function runGammaVerify(opts: GammaVerifyOpts): void {
           manifest: manifest?.gamma ?? null,
           chain_errors: chain.errors,
           anchor_errors: anchorErrors,
+          via_mandate: isDelegate ? opts.mandate : undefined,
         },
         null,
         2,
@@ -101,7 +117,8 @@ export function runGammaVerify(opts: GammaVerifyOpts): void {
     return;
   }
 
-  console.log(`[handle=${handle}] gamma verify`);
+  const authLabel = isDelegate ? ` [via mandate ${opts.mandate}]` : "";
+  console.log(`[handle=${handle}] gamma verify${authLabel}`);
   console.log(`  entries:  ${entries.length}`);
   console.log(`  head:     ${actualHead ?? "(none)"}`);
   if (manifest?.gamma) {
@@ -130,6 +147,39 @@ export function runGammaVerify(opts: GammaVerifyOpts): void {
   if (!ok) process.exit(1);
 }
 
+/**
+ * Validate the auth flags and report whether this invocation is owner or
+ * delegate-flavored.
+ *
+ * v0.3: integrity verification doesn't need any key material (ciphertexts
+ * are not opened). `--mandate` / `--agent-key` are still accepted so that
+ * a delegate can run `gamma verify` symmetrically and get the `[via mandate
+ * …]` output label, but the flags are validated rather than dereferenced.
+ * Owner-mode still requires a sealed-seed install so the call matches the
+ * conventions of the other CLI verbs (`ethos verify`, etc.).
+ */
+function resolveVerifyAuthor(
+  handle: string,
+  opts: GammaVerifyOpts,
+): { isDelegate: boolean } {
+  if (opts.mandate) {
+    if (!opts.agentKey) {
+      throw new Error("--mandate requires --agent-key <path>");
+    }
+    // Validate the mandate/agent-key by resolving an Author — but we
+    // discard it; the verify walk doesn't need it. Raises a clear error
+    // when the key file or mandate id is wrong.
+    resolveAuthor({
+      handle,
+      mandate: opts.mandate,
+      agentKey: opts.agentKey,
+    });
+    return { isDelegate: true };
+  }
+  loadIdentity(handle);
+  return { isDelegate: false };
+}
+
 function safeReadManifest(handle: string) {
   try {
     return readManifest(handle);
@@ -141,9 +191,6 @@ function safeReadManifest(handle: string) {
 /**
  * Decode a multibase-encoded Ed25519 public key (as used in mandate grantee
  * pubkey fields) into raw 32 bytes.
- *
- * The canonical helper lives in protocol-core but is not re-exported; we
- * duplicate a minimal base58 decoder here to keep the CLI dependency-light.
  */
 function multibaseToRaw(mb: string): Uint8Array {
   if (!mb.startsWith("z")) throw new Error(`Expected multibase z-prefix: ${mb}`);

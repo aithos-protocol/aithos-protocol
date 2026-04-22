@@ -1,5 +1,19 @@
 # 10 · Platform MCP — primitives
 
+> **Revision note (v0.2.0).** This chapter was first written against the
+> v0.1.x wire format. It is realigned here to match the gamma-authoritative
+> section model of chapter 10 (the deep-memory log) and the delegate-on-
+> tracked flow shipped in v0.2.1. The bumps tracked below are not
+> backward-compatible with the v0.1.x draft of this chapter:
+>
+> - `experimental.aithos.spec` on this endpoint is `"0.2.0"`.
+> - `aithos.publish_ethos_edition` now takes a `new_gamma_entries` array
+>   (§10.6.3).
+> - Signed objects surface an optional `authorized_by` mandate id whenever
+>   the underlying signature was produced by a delegate key (§10.4.3).
+> - A new §10.11 describes the **write-only gamma** hosting mode a platform
+>   may adopt.
+
 ## 10.1 Overview
 
 Chapter 6 specifies a **per-subject local MCP server** that exposes one
@@ -42,16 +56,19 @@ The server's `initialize` response MUST declare:
 
 ```json
 {
-  "serverInfo": { "name": "aithos-platform", "version": "0.1.0" },
+  "serverInfo": { "name": "aithos-platform", "version": "0.2.0" },
   "capabilities": {
     "tools": {},
-    "experimental": { "aithos": { "spec": "0.1.0", "role": "primitives" } }
+    "experimental": { "aithos": { "spec": "0.2.0", "role": "primitives" } }
   }
 }
 ```
 
-Clients MUST verify `experimental.aithos.role === "primitives"` before calling
-the tools specified here.
+Clients MUST verify `experimental.aithos.role === "primitives"` and that
+`experimental.aithos.spec` starts with `"0.2."` before calling the tools
+specified here — a server still advertising `"0.1.x"` is running the
+pre-gamma wire format and its `publish_ethos_edition` surface is incompatible
+with this revision.
 
 ### 10.2.3 Authentication
 
@@ -116,16 +133,27 @@ interface SignedObject<T> {
   object: T;                    // the payload (manifest, DID doc, mandate, …)
   signature: {                  // detached proof, per spec §5
     proofValue: string;         // base64url(Ed25519)
-    verificationMethod: string; // did:aithos:…#<sphere>
+    verificationMethod: string; // did:aithos:…#<sphere> OR delegate multibase key
     created: string;            // RFC 3339
+    authorized_by?: string;     // mandate id, when verificationMethod is a
+                                //   delegate key (spec §4.5.4). Absent when
+                                //   the signer is the subject's sphere key.
   };
   fetched_at: string;           // RFC 3339; server's observation time, not signed
 }
 ```
 
+When `authorized_by` is present, the caller resolves the mandate (via
+`aithos.get_mandate`) to verify that the delegate was within scope and window
+at the `created` timestamp. Verification remains stateless on the platform
+side — the server MUST return the raw signature object as stored; it is not
+allowed to strip, rewrite, or annotate the proof.
+
 For compound objects (an edition = manifest + zone docs + per-zone
 signatures), the wrapper SHOULD carry the signature of the manifest and an
-array of zone signatures; see `aithos.get_ethos_edition`.
+array of zone signatures; see `aithos.get_ethos_edition`. Any of those
+inner signatures MAY independently carry `authorized_by` — a single edition
+can mix subject-signed zones with delegate-signed zones.
 
 ### 10.4.4 `Pagination`
 
@@ -189,6 +217,12 @@ Errors: `AITHOS_NOT_FOUND` (§10.9).
 Input: `{ "did": DidRef, "edition"?: EditionRef }`. Default `edition = latest`.
 
 Output: `SignedObject<Manifest>` per spec §2.6.
+
+The returned `Manifest` carries `gamma.head` and `gamma.count` (spec §10.7 of
+the gamma chapter) whenever the subject has ever authored a section. Callers
+that want to verify history independently walk the gamma log starting from
+`gamma.head`; see §10.11 for how a platform may choose to serve (or not
+serve) those gamma entries.
 
 ### 10.5.4 `aithos.get_ethos_zone`
 
@@ -399,45 +433,102 @@ reserve handles; not normative).
 ### 10.6.3 `aithos.publish_ethos_edition`
 
 Publish a new edition at height `latest_height + 1` (or height 1 for a
-first edition).
+first edition), together with the **new gamma entries** that produced the
+edition's section state.
 
 Input:
 
 ```ts
 interface PublishEthosEditionInput {
   did: DidRef;
-  manifest: Manifest;                            // signed
+  manifest: Manifest;                            // signed; carries gamma.head
   zones: {
     public:  ZonePayload;
     circle?: ZonePayload;
     self?:   ZonePayload;
   };
+  new_gamma_entries: SignedGammaEntry[];         // chronological, chained
 }
 
 interface ZonePayload {
   content:   { kind: "plaintext"; markdown: string }
            | { kind: "ciphertext"; wire: CipherEnvelope };
-  signature: Signature;                           // over the zone doc per §2.4
+  signature: ZoneSignature;                       // per §2.4;
+                                                   //   MAY carry authorized_by
+}
+
+type SignedGammaEntry = GammaEntry;               // per the gamma chapter §10.4:
+                                                   //   id, at, prev_hash, hash,
+                                                   //   op, signature{ key, sig,
+                                                   //   authorized_by? }
+```
+
+`new_gamma_entries` MUST contain every gamma entry produced since the
+previous edition's `manifest.gamma.head`. Empty array is valid only when
+the edition produces no section-level change (rare; typically a metadata-
+only republish).
+
+**Signer of the envelope.** The write-path envelope (§11) MUST be signed
+either:
+
+- by one of the subject's sphere keys whose sphere covers every zone
+  touched by this edition (in practice `#root` when multiple zones change,
+  or the matching `#public`/`#circle`/`#self` when only one does), OR
+- by a delegate key whose mandate (inside the envelope per §11.6) grants
+  `ethos.write.<zone>` for every zone touched. In this case every gamma
+  entry in `new_gamma_entries` that mutates such a zone MUST carry
+  `signature.authorized_by == envelope.mandate.id`, and at least one zone
+  signature in `zones` MUST likewise carry `authorized_by == envelope.mandate.id`.
+
+Server MUST, in order, before any write lands:
+
+1. Resolve `ethos-index` for `did`; read `latest_height`, `latest_gamma_head`,
+   `latest_gamma_count`.
+2. Verify `manifest.edition.height == latest_height + 1` (or `1` when
+   `latest_height` is absent).
+3. Verify `manifest.edition.prev_hash == sha256(canonical(prev_manifest))`
+   (or `null` for the first edition).
+4. Walk `new_gamma_entries` in order; for each entry verify:
+   - Its `prev_hash` equals the hash of the previous entry in the list, or
+     equals `latest_gamma_head` for the first entry (or `null` for the very
+     first edition).
+   - Its `hash` is `sha256(canonical(entry without hash + signature))`
+     per gamma §10.4.
+   - Its `signature` verifies (sphere-key path or delegate+mandate path).
+   - When `authorized_by` is set, the mandate exists, is not revoked, and
+     is within its time window at the entry's `at`.
+5. Verify that the last new entry's `hash` equals `manifest.gamma.head`, and
+   that `manifest.gamma.count == latest_gamma_count + new_gamma_entries.length`.
+6. Verify every zone signature per §5 (sphere-key or delegate+mandate),
+   and that each section's `gamma_ref` in the zone doc resolves to either
+   an entry in `new_gamma_entries` or an earlier entry already anchored by
+   the previous `gamma.head`.
+7. Store, atomically:
+   - `s3://…/ethos/{did}/editions/{height}/manifest.json` + zones under the
+     same prefix (spec §3 layout);
+   - each `new_gamma_entries[i]` at
+     `s3://…/ethos/{did}/gamma/{entry.id}.json` (write-once; see §10.11).
+8. Update the `ethos-index` entry's `latest_height`, `latest_gamma_head`,
+   `latest_gamma_count` atomically.
+
+Output:
+
+```ts
+interface PublishEthosEditionResult {
+  bundle_id: string;
+  height: number;
+  canonical_url: string;
+  gamma_head: string;            // sha256:<hex>, identical to manifest.gamma.head
+  gamma_count: number;
+  authorized_by?: string;         // mandate id, when the edition was delegate-signed
 }
 ```
 
-The envelope MUST be signed either:
-- by the sphere key matching each zone being written — i.e. a single
-  envelope signed by the root key authorizing the edition, OR
-- by a delegate key holding a write mandate whose scopes cover every zone
-  in `zones` (§4.4).
-
-Server MUST:
-1. Verify `manifest.edition.height == latest_height + 1` (or 1 for first).
-2. Verify `manifest.edition.prev_hash` matches `sha256(prev_manifest_canonical)`.
-3. Verify all signatures per spec §5.
-4. Store under `s3://…/ethos/{did}/editions/{height}/`.
-5. Update the `ethos-index` entry's `latest_height` atomically.
-
-Output: `{ bundle_id: string; height: number; canonical_url: string }`.
-
 Errors: `AITHOS_EDITION_HEIGHT_CONFLICT`, `AITHOS_PREV_HASH_MISMATCH`,
-`AITHOS_BAD_SIGNATURE`, `AITHOS_IDENTITY_TOMBSTONED`.
+`AITHOS_GAMMA_CHAIN_BROKEN` (new; §10.9), `AITHOS_GAMMA_HEAD_MISMATCH` (new;
+§10.9), `AITHOS_BAD_SIGNATURE`, `AITHOS_MANDATE_INVALID`,
+`AITHOS_MANDATE_REVOKED`, `AITHOS_INSUFFICIENT_SCOPE`,
+`AITHOS_IDENTITY_TOMBSTONED`.
 
 ### 10.6.4 `aithos.publish_mandate`
 
@@ -561,6 +652,8 @@ JSON-RPC errors use the standard envelope. Aithos-specific codes live in
 | -32030  | `AITHOS_EDITION_HEIGHT_CONFLICT`  | Submitted height is not `latest_height + 1`. |
 | -32031  | `AITHOS_PREV_HASH_MISMATCH`       | `manifest.edition.prev_hash` does not match previous edition. |
 | -32032  | `AITHOS_BUNDLE_INVALID`           | Bundle failed a §3.8 check. |
+| -32033  | `AITHOS_GAMMA_CHAIN_BROKEN`       | A `new_gamma_entries` item's `prev_hash` does not match its predecessor (or the stored `latest_gamma_head`). |
+| -32034  | `AITHOS_GAMMA_HEAD_MISMATCH`      | The last new gamma entry's hash does not equal `manifest.gamma.head`, or `manifest.gamma.count` disagrees with the stored count plus the new entries. |
 | -32040  | `AITHOS_MANDATE_INVALID`          | Mandate structure, signature, or time window invalid. |
 | -32041  | `AITHOS_MANDATE_REVOKED`          | Mandate presented is revoked. |
 | -32042  | `AITHOS_INSUFFICIENT_SCOPE`       | Presented mandate does not cover the requested operation. |
@@ -583,3 +676,87 @@ without either:
 
 Between `experimental.aithos.spec` `0.1.x` and `1.0.0`, breaking changes are
 permitted on minor bumps; after `1.0.0` they require a major.
+
+## 10.11 Hosting modes for the gamma log
+
+The gamma log (the gamma chapter, §10.3) is authoritative for section
+mutation history. A bundle anchors to it via `manifest.gamma.head`, but the
+log content itself lives *outside* the bundle. A platform that accepts
+`aithos.publish_ethos_edition` with `new_gamma_entries` therefore has a
+choice about what to do with those entries after verification.
+
+### 10.11.1 Mode A — append-only, not re-served (write-only)
+
+The platform stores each accepted gamma entry at
+`s3://…/ethos/{did}/gamma/{entry.id}.json` (or equivalent write-once object
+store), but does **not** expose any read tool for them. Readers who need
+history obtain the log from the subject out-of-band (e.g. the `.gamma`
+companion artifact the subject keeps locally, or a `gamma.url` the subject
+publishes in the manifest pointing to their own host).
+
+This mode is explicitly permitted. A platform operating in Mode A:
+
+- MAY omit `aithos.get_gamma_entry` / `aithos.list_gamma_entries` entirely.
+- MUST still accept and validate `new_gamma_entries` on writes (the chain
+  integrity checks in §10.6.3 step 4 are non-negotiable — they protect
+  against a later rug-pull where the subject claims a different history).
+- SHOULD persist the entries even though it never serves them back. A
+  platform that accepts but discards gamma entries loses the audit trail
+  that justifies the write-path rigor and SHOULD NOT be advertised as
+  conformant.
+- SHOULD document its mode in the `initialize` response under
+  `experimental.aithos.gamma_mode: "write-only"` (see §10.11.3).
+
+**Rationale.** A light consumer (gamma chapter §10.2) only needs the bundle
+and its `gamma.head` anchor — it does not need to walk the log to use the
+ethos. Write-only gamma matches that reality and reduces the platform's
+surface area. Full-consumer audit remains possible via the subject's own
+copy of the log.
+
+### 10.11.2 Mode B — readable gamma (full history)
+
+The platform additionally exposes:
+
+- `aithos.get_gamma_entry` — `{ did: DidRef, entry_id: string }` →
+  `SignedObject<GammaEntry>` (§10.4 of the gamma chapter).
+- `aithos.list_gamma_entries` — `{ did: DidRef, from_id?: string, limit?: number,
+  cursor?: string }` → `Page<GammaEntry>`, oldest-first by default, with
+  an option to walk backwards from a given entry.
+
+These tools are **RECOMMENDED but not REQUIRED**. A platform implementing
+them MUST:
+
+- Serve the raw stored entry bytes — no re-signing, no re-canonicalization.
+- Refuse to serve an entry for a tombstoned subject unless the caller
+  carries a signed read envelope whose subject is the tombstoned identity
+  (out-of-band audit path).
+
+In Mode B, the platform SHOULD declare `experimental.aithos.gamma_mode:
+"readable"` in the `initialize` response.
+
+### 10.11.3 Mode discovery
+
+The `initialize` response's `capabilities.experimental.aithos` object
+SHOULD carry a `gamma_mode` field:
+
+```json
+{
+  "aithos": {
+    "spec": "0.2.0",
+    "role": "primitives",
+    "gamma_mode": "write-only" | "readable"
+  }
+}
+```
+
+Absent `gamma_mode` is equivalent to `"write-only"`. Clients that require
+readable gamma for their flow MUST check this field and refuse servers
+that cannot serve history.
+
+### 10.11.4 Relationship to the subject's own host
+
+Nothing in this chapter constrains where else a subject may publish their
+gamma log. A subject running their own `gamma.url` endpoint, or sharing a
+`.gamma.enc` file peer-to-peer, is compatible with either Mode A or Mode B
+on the platform — the bundle's `gamma.head` anchor is the single source of
+truth, and any number of readable copies may exist downstream.

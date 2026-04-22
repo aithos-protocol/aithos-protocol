@@ -98,16 +98,28 @@ export function runGrant(opts: GrantOpts): void {
 
   const path = writeMandate(m);
 
-  // When the mandate authorises writes to the ethos AND names a grantee
-  // pubkey, we must make the mandate effective on the current state: the
-  // live encrypted zones and the gamma log were sealed under a recipient
-  // set that does NOT yet include this delegate. `issueMandateWithRewrap`
-  // bumps a fresh edition with the delegate added to every relevant wrap
-  // list. Without this, the delegate could read nothing — the mandate would
-  // be a signed grant on paper, mechanically dead.
+  // When the mandate authorises access to the current encrypted state, we
+  // must make it effective — the mandate alone is a signed grant on paper,
+  // with no cryptographic effect on existing zones / the gamma readers list.
+  // `issueMandateWithRewrap` bumps a fresh edition:
+  //
+  //   - `ethos.write.<zone>` / `ethos.read.<zone>` (or `ethos.read.all`) →
+  //     the target zone is re-encrypted with the delegate on the DEK wrap
+  //     list.
+  //   - `gamma.read` → the delegate is added to `manifest.gamma.readers`
+  //     so FUTURE gamma entries will seal an envelope for them. Past entries
+  //     stay unreadable (per-entry seal is forward-only, spec §10.5.4').
+  //
+  // Without `gamma.read`, a write-only mandate NEVER grants any gamma access.
+  // That's the whole point of the v0.3 per-entry envelope format.
   let rewroteManifest = false;
-  const writesEthos = m.scopes.some((s) => s.startsWith("ethos.write."));
-  if (writesEthos && m.grantee.pubkey && existsSync(ethosDir(handle))) {
+  const touchesEthos = m.scopes.some(
+    (s) =>
+      s.startsWith("ethos.write.") ||
+      s.startsWith("ethos.read.") ||
+      s === "gamma.read",
+  );
+  if (touchesEthos && m.grantee.pubkey && existsSync(ethosDir(handle))) {
     issueMandateWithRewrap({ handle, identity: id, mandate: m });
     rewroteManifest = true;
   }

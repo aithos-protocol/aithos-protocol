@@ -58,11 +58,18 @@ export interface MandateConstraints {
  * `0.2.1` — adds forbidden-scope enforcement (mandate.issue, mandate.revoke,
  *           identity.rotate-keys, identity.destroy) and the explicit
  *           `ethos.read.{public,circle,self}` scope family.
+ * `0.3.0` — introduces the `gamma.read` scope. Decouples gamma read access
+ *           from `ethos.write.*`: possession of a write scope no longer
+ *           implies visibility of the gamma log. A mandate carrying
+ *           `gamma.read` adds its grantee pubkey to `manifest.gamma.readers`;
+ *           future gamma entries seal their per-entry key to that pubkey.
+ *           See `spec/drafts/gamma-v0.3-per-entry-envelopes.md`.
  *
- * New mandates are minted at the latest version; the verifier accepts both.
+ * New mandates are minted at the latest version; the verifier accepts all
+ * three past envelopes for backward compatibility.
  */
-export const MANDATE_VERSION_CURRENT = "0.2.1" as const;
-export type MandateVersion = "0.1.0" | "0.2.1";
+export const MANDATE_VERSION_CURRENT = "0.3.0" as const;
+export type MandateVersion = "0.1.0" | "0.2.1" | "0.3.0";
 
 export interface Mandate {
   "aithos-mandate": MandateVersion;
@@ -250,10 +257,11 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
       const ok =
         s === "ethos.read.public" ||
         s === "ethos.read.all" ||
-        s === "ethos.write.public";
+        s === "ethos.write.public" ||
+        s === "gamma.read";
       if (!ok) {
         throw new Error(
-          `Scope ${s} is not permitted for the public sphere. Only ethos.read.public, ethos.read.all, and ethos.write.public are allowed.`,
+          `Scope ${s} is not permitted for the public sphere. Only ethos.read.public, ethos.read.all, ethos.write.public, and gamma.read are allowed.`,
         );
       }
     }
@@ -271,6 +279,18 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
 /** Identify whether any of the given scopes is a write scope. */
 export function hasWriteScope(scopes: string[]): boolean {
   return scopes.some((s) => s.startsWith("ethos.write."));
+}
+
+/**
+ * Identify whether the scope set grants gamma read access.
+ *
+ * In v0.3, gamma read is explicit — `ethos.write.*` no longer implies it.
+ * A delegate with a write scope alone can append gamma entries (via per-entry
+ * envelope seal to `manifest.gamma.readers`, no decryption needed) but cannot
+ * read past history.
+ */
+export function hasGammaReadScope(scopes: string[]): boolean {
+  return scopes.includes("gamma.read");
 }
 
 export function writeMandate(m: Mandate): string {
@@ -308,6 +328,7 @@ export function verifyMandate(
 
   if (
     mandate["aithos-mandate"] !== "0.1.0" &&
+    mandate["aithos-mandate"] !== "0.2.1" &&
     mandate["aithos-mandate"] !== MANDATE_VERSION_CURRENT
   ) {
     errors.push(`Unsupported mandate version: ${mandate["aithos-mandate"]}`);

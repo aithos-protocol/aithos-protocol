@@ -1,5 +1,15 @@
 # 11 · Signed requests
 
+> **Revision note (spec v0.2.0).** The envelope format itself is stable — no
+> field has been added, removed, or renamed since v0.1.x — so the
+> `"aithos-envelope"` version stays at `"0.1.0"`. What changed at spec v0.2.0
+> is *what can travel inside* a mandate-authorized envelope: delegate writes
+> may now carry `new_gamma_entries` (§10.6.3) whose chain is signed by the
+> delegate key, and §10 outputs may echo back `authorized_by` when a delegate
+> signed. Those are payload-level concerns and are covered by `params_hash`
+> without touching the envelope schema. Chapter text below is reviewed and
+> remains normative at spec v0.2.0.
+
 ## 11.1 Overview
 
 Every write to a platform endpoint (§10.6, §12 where applicable) is signed
