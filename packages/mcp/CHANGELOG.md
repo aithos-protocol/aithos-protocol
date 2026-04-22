@@ -5,6 +5,15 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-04-22
+
+### Fixed
+- Republish of the 0.4.0 release after the original `npm publish` was
+  interrupted mid-upload and the `0.4.0` version slot became unusable on
+  the registry. No functional changes vs. 0.4.0 — same `AithosStorage`
+  injection surface, same auth flow, same tool and resource set. Only a
+  cosmetic docstring touch in `src/server.ts` to produce a fresh tarball.
+
 ## [0.4.0] — 2026-04-22
 
 ### Added

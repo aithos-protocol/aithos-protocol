@@ -1,5 +1,7 @@
 /**
- * Aithos MCP server.
+ * Aithos MCP server (v0.4.1 republish — content identical to 0.4.0, the
+ * original tarball upload was interrupted and the registry slot became
+ * unusable; no behavioural change).
  *
  * Wraps the protocol-core primitives (identity / ethos / mandate) as MCP tools
  * and resources so LLM agents speaking the Model Context Protocol can:
