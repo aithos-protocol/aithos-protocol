@@ -1,6 +1,6 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Aithos protocol — reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",

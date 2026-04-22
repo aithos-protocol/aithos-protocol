@@ -5,6 +5,34 @@ All notable changes to `@aithos/protocol-core` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-04-22
+
+Purely additive point release. No behaviour changes on existing APIs; new
+exports unlock the pluggable-backend story for `@aithos/mcp@0.4.0` and the
+remote-platform adapter `@innoesate/aithos-platform-mcp-remote`.
+
+### Added
+- **Signed-envelope helpers** (spec §11). `signEnvelope`,
+  `signEnvelopeWithMandate`, and `verifyEnvelope` (the 9-step §11.4 check).
+  `envelopeParamsHash`, `ENVELOPE_VERSION`, `ROOT_ONLY_DIRECT_METHODS`,
+  `NEVER_DELEGABLE_METHODS`, and `delegateMultibaseFromSeed` are also
+  exported. Pure logic: replay state, DID resolution and revocation lookups
+  are injected through a `VerifyEnvelopeContext`, so the same code runs in
+  the CLI, the reference Lambda, and any other host.
+- **Pluggable storage backend** — `AithosStorage` interface (resource-oriented,
+  async, handle-based) lets hosts that embed the protocol swap the default
+  filesystem keystore for a remote or in-memory implementation.
+- **`FilesystemStorage`** — the default backend that wraps the existing
+  `~/.aithos/` helpers. Re-exports cover every existing CLI entry point, so
+  no behaviour change for current consumers.
+- **Write-auth plumbing** — `WriteAuth`, `SectionWriteResult`,
+  `AddSectionArgs`, `ModifySectionArgs` types are promoted to public exports
+  so pluggable storage implementations can type their own write paths.
+
+### Protocol
+- No spec change. §11 envelope logic was spec-first; this release just
+  provides the reference implementation.
+
 ## [0.3.0] — 2026-04-22
 
 **Breaking release.** Gamma log format break: per-entry asymmetric envelopes
