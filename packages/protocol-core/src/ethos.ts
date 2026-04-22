@@ -1763,6 +1763,39 @@ export interface VerifyEthosResult {
 }
 
 /**
+ * Build a delegate-key resolver that consults the local keystore. Looks up the
+ * mandate keyed by `authorized_by`, re-verifies its signature against the DID
+ * doc, enforces the local revocation list, and returns the raw Ed25519 public
+ * key to verify against. Signatures from an unknown, revoked, or mis-scoped
+ * mandate cause the resolver to throw, which the calling verify-* function
+ * surfaces as a "delegate key resolution failed" error.
+ *
+ * Pass this to {@link verifyManifestSignature} / {@link verifyZoneSignature}
+ * (and {@link verifyBundleAtPath}) any time the receiving keystore has the
+ * mandates installed locally.
+ */
+export function keystoreDelegateResolver(
+  didDoc: DidDocument,
+): (keyId: string, mandateId: string) => Uint8Array {
+  return (keyId, mandateId) => {
+    const m = loadMandate(mandateId);
+    const mv = verifyMandate(m, didDoc);
+    if (!mv.ok) {
+      throw new Error(`mandate ${mandateId} invalid: ${mv.errors.join("; ")}`);
+    }
+    if (findRevocation(mandateId)) {
+      throw new Error(`mandate ${mandateId} has been revoked`);
+    }
+    if (!m.grantee.pubkey || m.grantee.pubkey !== keyId) {
+      throw new Error(
+        `signature key ${keyId} does not match mandate grantee.pubkey=${m.grantee.pubkey ?? "<unset>"}`,
+      );
+    }
+    return multibaseToEd25519PublicKey(keyId);
+  };
+}
+
+/**
  * Verify an installed ethos.
  *
  * In v0.2.0 the history of a section lives in the gamma log, not in the
@@ -1809,28 +1842,9 @@ export function verifyEthos(
     }
   }
 
-  // Delegate-aware signature resolver: looks up the mandate keyed by
-  // `authorized_by`, re-verifies its signature against the DID doc, enforces
-  // the local revocation list, and returns the raw Ed25519 public key to
-  // verify with. Signatures from an unknown, revoked, or mis-scoped mandate
-  // are rejected as "delegate key resolution failed".
+  // Delegate-aware signature resolver — see {@link keystoreDelegateResolver}.
   const opts: VerifySignatureOpts = {
-    resolveDelegatePubkey: (keyId, mandateId) => {
-      const m = loadMandate(mandateId);
-      const mv = verifyMandate(m, didDoc);
-      if (!mv.ok) {
-        throw new Error(`mandate ${mandateId} invalid: ${mv.errors.join("; ")}`);
-      }
-      if (findRevocation(mandateId)) {
-        throw new Error(`mandate ${mandateId} has been revoked`);
-      }
-      if (!m.grantee.pubkey || m.grantee.pubkey !== keyId) {
-        throw new Error(
-          `signature key ${keyId} does not match mandate grantee.pubkey=${m.grantee.pubkey ?? "<unset>"}`,
-        );
-      }
-      return multibaseToEd25519PublicKey(keyId);
-    },
+    resolveDelegatePubkey: keystoreDelegateResolver(didDoc),
   };
 
   // Check 6: manifest signature.

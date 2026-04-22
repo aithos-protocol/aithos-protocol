@@ -40,7 +40,8 @@
     "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
     "dev": "tsx src/index.ts",
     "check-types": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "npm run build && node --test --import tsx test/*.test.ts"
   },
   "dependencies": {
     "@aithos/protocol-core": "^0.2.0",

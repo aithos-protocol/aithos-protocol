@@ -43,7 +43,9 @@ import AdmZip from "adm-zip";
 
 import {
   verifyBundleAtPath,
+  keystoreDelegateResolver,
   type Manifest,
+  type DidDocument,
   ethosDir,
   ethosZoneDir,
   ethosZoneFile,
@@ -74,11 +76,20 @@ export function runEthosInstall(opts: EthosInstallOpts): void {
   const src = materialize(opts.path);
 
   try {
-    /* 2 — verify statelessly. Refuse to install an invalid bundle. */
-    const result = verifyBundleAtPath(src.dir);
+    /* 2 — verify the bundle. We have local state (the keystore) so we can
+     * resolve `authorized_by` references on delegate-signed manifests / zones
+     * via locally-installed mandates. A pure stateless caller would skip the
+     * resolver and fail closed; install-time we expect to know the mandates,
+     * so we wire it up. */
+    const bundleDidDoc = JSON.parse(
+      readFileSync(join(src.dir, "did.json"), "utf8"),
+    ) as DidDocument;
+    const result = verifyBundleAtPath(src.dir, {
+      resolveDelegatePubkey: keystoreDelegateResolver(bundleDidDoc),
+    });
     if (!result.ok) {
       throw new Error(
-        `bundle failed stateless verification; refusing to install:\n  - ` +
+        `bundle failed verification; refusing to install:\n  - ` +
           result.errors.join("\n  - "),
       );
     }
@@ -108,21 +119,25 @@ export function runEthosInstall(opts: EthosInstallOpts): void {
           );
         }
       }
-      // Same DID — check that we are not shadowing an *owned* identity (which
-      // has sealed seeds we must never clobber).
+      // Same DID — check whether we're shadowing an *owned* identity (which
+      // has sealed seeds we must never clobber). With --force we still allow
+      // the install: `installIntoKeystore` only writes did.json, manifest.json,
+      // zone files, and the gamma log — sealed seeds are left alone. This is
+      // the path an owner takes to pull a delegate-produced edition back into
+      // their own keystore.
       const hasSealedSeeds = ["root", "public", "circle", "self"].some((r) =>
         existsSync(join(targetDir, `${r}.sealed.json`)),
       );
-      if (hasSealedSeeds) {
+      if (hasSealedSeeds && !opts.force) {
         throw new Error(
           `identity "${handle}" is owned locally (sealed seeds present). ` +
-            `Refusing to overwrite. If you want to upgrade the ethos in the ` +
-            `owned identity, use 'aithos ethos pack/unpack' internally — not install.`,
+            `Pass --force to overwrite the ethos files (sealed seeds are preserved). ` +
+            `Use this to pull back an edition produced by one of your delegates.`,
         );
       }
       // Same DID, tracked-only already. Allow only with --force to avoid
       // accidentally rolling back to an older edition.
-      if (!opts.force) {
+      if (!hasSealedSeeds && !opts.force) {
         throw new Error(
           `identity "${handle}" is already installed (tracked). ` +
             `Re-run with --force to overwrite with the bundle's edition.`,

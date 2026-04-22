@@ -61,9 +61,11 @@ export function runMandateAdd(opts: MandateAddOpts): void {
     throw new Error(`Not valid JSON: ${(e as Error).message}`);
   }
 
-  if (mandate["aithos-mandate"] !== "0.1.0") {
+  // Accept both the pre-E2E envelope (0.1.0) and the delegate-aware envelope
+  // (0.2.1) — protocol-core's `verifyMandate` enforces the same set.
+  if (mandate["aithos-mandate"] !== "0.1.0" && mandate["aithos-mandate"] !== "0.2.1") {
     throw new Error(
-      `Unsupported mandate version "${mandate["aithos-mandate"]}" (expected 0.1.0)`,
+      `Unsupported mandate version "${mandate["aithos-mandate"]}" (expected 0.1.0 or 0.2.1)`,
     );
   }
   if (!mandate.id || !mandate.issuer) {

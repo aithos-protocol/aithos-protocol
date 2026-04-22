@@ -41,7 +41,6 @@ import {
   verifyManifestSignature,
   verifyZoneSignature,
   parseZoneMarkdown,
-  renderZoneMarkdown,
   canonicalManifestHashHex,
 } from "./ethos.js";
 import { type DidDocument, verifyDidDocument } from "./identity.js";
@@ -59,19 +58,38 @@ export interface BundleVerifyResult extends VerifyEthosResult {
 }
 
 /**
+ * Optional knobs for {@link verifyBundleAtPath}.
+ *
+ * `resolveDelegatePubkey` lets a caller (typically `aithos ethos install` or a
+ * keystore-aware verifier) resolve `authorized_by` references on the zone or
+ * manifest signature to the delegate's raw Ed25519 public key. The pure
+ * stateless caller — a stranger verifying a bundle on a fresh machine — has
+ * no such resolver and so will fail closed on delegate-signed bundles.
+ */
+export interface BundleVerifyOpts {
+  resolveDelegatePubkey?: (keyId: string, mandateId: string) => Uint8Array;
+}
+
+/**
  * Verify a bundle at a filesystem path. `pathArg` may be either:
  *   - a directory containing the flat unpacked layout, or
  *   - a `.ethos` zip file (any extension is accepted — detection is by header).
  *
- * Stateless: does not touch `~/.aithos/`, does not require any sealed seed.
- * Encrypted zones have their content checks recorded as `skipped`.
+ * Stateless by default: does not touch `~/.aithos/`, does not require any
+ * sealed seed. Encrypted zones have their content checks recorded as
+ * `skipped`. Callers that DO have local state (e.g. installed mandates) can
+ * pass `opts.resolveDelegatePubkey` to enable verification of delegate-signed
+ * bundles.
  *
  * The caller should distinguish exit codes:
  *   - ok=true  → exit 0 (valid; may have warnings)
  *   - ok=false → exit 1 (parsed but invalid signatures / chains)
  *   - exceptions thrown → exit 2 (unparseable; caller wraps)
  */
-export function verifyBundleAtPath(pathArg: string): BundleVerifyResult {
+export function verifyBundleAtPath(
+  pathArg: string,
+  opts: BundleVerifyOpts = {},
+): BundleVerifyResult {
   if (!existsSync(pathArg)) {
     throw new Error(`Bundle path not found: ${pathArg}`);
   }
@@ -105,7 +123,7 @@ export function verifyBundleAtPath(pathArg: string): BundleVerifyResult {
   }
 
   try {
-    return verifyBundleDir(dir);
+    return verifyBundleDir(dir, opts);
   } finally {
     if (cleanup) cleanup();
   }
@@ -115,7 +133,7 @@ export function verifyBundleAtPath(pathArg: string): BundleVerifyResult {
 /*  Directory-level verifier (flat layout)                                    */
 /* -------------------------------------------------------------------------- */
 
-function verifyBundleDir(dir: string): BundleVerifyResult {
+function verifyBundleDir(dir: string, opts: BundleVerifyOpts): BundleVerifyResult {
   const errors: string[] = [];
   const warnings: string[] = [];
   const zonesSkipped: Sphere[] = [];
@@ -186,8 +204,12 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
     errors.push(`manifest.subject_did (${manifest.subject_did}) differs from did.json id (${didDoc.id})`);
   }
 
-  // Check 6: manifest signature.
-  const manSig = verifyManifestSignature(manifest, didDoc);
+  // Check 6: manifest signature. Pass through the optional delegate resolver
+  // so install-time callers (which have the local mandate set) can verify
+  // bundles re-packed by a delegate.
+  const manSig = verifyManifestSignature(manifest, didDoc, {
+    resolveDelegatePubkey: opts.resolveDelegatePubkey,
+  });
   if (!manSig.ok) errors.push(manSig.error ?? "manifest signature failed");
 
   // Per-zone checks (5, 7).
@@ -210,7 +232,11 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
       continue;
     }
 
-    // Plaintext zone (public). Read, parse, hash, verify zone signature.
+    // Plaintext zone (public). Read the on-disk bytes; they ARE the canonical
+    // plaintext that was hashed into the manifest at persist time. Hashing a
+    // re-render here would diverge any time the renderer's edition-dependent
+    // metadata moves (e.g. when a later edition carries forward an unchanged
+    // public zone), even though the bytes on disk haven't changed.
     const zonePath = join(dir, "public.md");
     if (!existsSync(zonePath)) {
       errors.push(`zone ${z}: public.md missing`);
@@ -226,19 +252,11 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
       continue;
     }
 
-    // 5: plaintext hash. Re-render and compare to manifest declaration.
-    // Re-rendering from the parsed doc gives us the canonical zone markdown
-    // that the manifest's sha256_of_plaintext should match.
-    const md = renderZoneMarkdown(z, doc, {
-      subjectDid: manifest.subject_did,
-      subjectHandle: manifest.subject_handle,
-      editionVersion: manifest.edition.version,
-      createdAt: manifest.edition.created_at,
-    });
-    const hex = Buffer.from(sha256fn(new TextEncoder().encode(md))).toString("hex");
+    // 5: plaintext hash — direct over the on-disk bytes.
+    const hex = Buffer.from(sha256fn(new TextEncoder().encode(markdown))).toString("hex");
     if (hex !== zm.sha256_of_plaintext) {
       errors.push(
-        `zone ${z}: sha256_of_plaintext mismatch (rendered=${hex} manifest=${zm.sha256_of_plaintext})`,
+        `zone ${z}: sha256_of_plaintext mismatch (on-disk=${hex} manifest=${zm.sha256_of_plaintext})`,
       );
     }
 
@@ -248,8 +266,10 @@ function verifyBundleDir(dir: string): BundleVerifyResult {
       errors.push(`zone ${z}: section_titles mismatch`);
     }
 
-    // Zone signature (§3.3.1).
-    const zs = verifyZoneSignature(doc, zm.signature, didDoc);
+    // Zone signature (§3.3.1). Same delegate-resolver passthrough as above.
+    const zs = verifyZoneSignature(doc, zm.signature, didDoc, {
+      resolveDelegatePubkey: opts.resolveDelegatePubkey,
+    });
     if (!zs.ok) errors.push(`zone ${z}: ${zs.error}`);
 
     // Every live section must carry a gamma_ref — the signed gamma entry
