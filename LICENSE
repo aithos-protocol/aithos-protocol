@@ -1,0 +1,45 @@
+# Aithos Protocol — licensing
+
+This monorepo mixes **software** and **documentation** under different terms.
+
+## Software (BSL 1.1 → Apache-2.0)
+
+The following npm workspaces are licensed under the **Business Source License 1.1**
+(**BUSL-1.1**):
+
+- `packages/protocol-core` — `@aithos/protocol-core`
+- `packages/cli` — `aithos`
+- `packages/mcp` — `@aithos/mcp`
+
+Each package ships a self-contained `LICENSE` file with the parameterized BSL text.
+
+**Change Date:** 2030-12-31 (calendar year end).
+
+**Change License:** Apache License, Version 2.0 — full text in this repository at
+`LICENSES/Apache-2.0.txt` and at https://www.apache.org/licenses/LICENSE-2.0.txt
+
+**Important:** npm artifacts that were **published and distributed** under a
+previous license (for example Apache-2.0) remain available under that license
+for anyone who obtained those versions. Only **new releases** published under
+BUSL-1.1 are governed by BUSL-1.1.
+
+**Commercial licensing:** mathieucolla@gmail.com
+
+## Documentation (CC BY 4.0)
+
+Unless a file states otherwise, **normative and narrative documentation** in:
+
+- `spec/`
+- `SPEC.md`
+- `WHITEPAPER.md`
+
+is licensed under **Creative Commons Attribution 4.0 International** (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/legalcode
+
+This keeps the protocol specification readable and reusable independently of
+the reference implementation’s commercial license.
+
+## See also
+
+- `ARCHITECTURE-DECISIONS.md` — ADR-0006 documents this stratification.
+- https://mariadb.com/bsl11/ — Business Source License 1.1 FAQ.

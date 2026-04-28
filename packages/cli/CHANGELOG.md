@@ -5,6 +5,20 @@ All notable changes to the Aithos reference CLI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-04-28
+
+### License
+- Switched from **Apache-2.0** to **Business Source License 1.1** (**BUSL-1.1**).
+  **Change Date:** 2030-12-31. **Change License:** Apache-2.0. See `LICENSE`.
+  Artifacts previously published under Apache-2.0 remain under that license for
+  anyone who obtained those versions.
+
+### Changed
+- `aithos --version` reports `0.4.0` (aligned with this package release).
+
+### Protocol
+- Targets **`@aithos/protocol-core@^0.4.0`** (license-only bump in the library).
+
 ## [0.3.0] — 2026-04-22
 
 **Breaking release.** The gamma log switches from a single-file envelope

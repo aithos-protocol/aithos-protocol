@@ -301,7 +301,7 @@ The root sphere key is compromised. This is the worst case. Defense: the root si
 - Not a memory layer. Aithos is what agents *read*, not how they *remember*.
 - Not an identity provider in the OAuth sense. There is no Aithos sign-in button. Authentication between you and an agent is done via your sphere keys, on your hardware.
 - Not a legal framework. A mandate is cryptographically verifiable but not legally binding by virtue of being signed. The legal weight of a digital mandate is jurisdictional and is the job of policy, not of this protocol. The protocol provides the substrate; the law catches up.
-- Not a walled garden. The reference implementations are Apache-2.0, the spec is open, the bundle format is a zip you can extract with `unzip`.
+- Not a walled garden. The normative spec and this paper are **CC BY 4.0**; the reference TypeScript (CLI, library, MCP) is **BUSL-1.1** with automatic conversion to **Apache-2.0** on 2030-12-31 — see [LICENSE](./LICENSE). The bundle format remains a zip you can extract with `unzip`.
 
 ---
 
@@ -365,4 +365,4 @@ Aithos is its own thing, but it is built out of pieces other people made well.
 
 ---
 
-*This white paper is licensed Apache-2.0 and may be redistributed, quoted, and built upon. The latest version is at [getaithos.org](https://getaithos.org) (forthcoming).*
+*This white paper is licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) and may be redistributed, quoted, and built upon with attribution. The latest version is at [getaithos.org](https://getaithos.org) (forthcoming).*

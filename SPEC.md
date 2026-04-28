@@ -3,7 +3,7 @@
 **Version:** 0.2.0 (draft)
 **Status:** Under active development. Breaking changes expected until 1.0.0. v0.2.0 is a breaking change from v0.1.x — section history moves from embedded `revisions[]` (v0.1.x) to a separate gamma log (§10).
 **Editors:** Mathieu Colla <mathieu.colla.pro@gmail.com>
-**License:** Apache-2.0
+**License:** CC BY 4.0 (documentation). Reference software in this repository is BUSL-1.1; see [LICENSE](./LICENSE).
 
 ---
 

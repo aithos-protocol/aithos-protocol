@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Mathieu Colla. Licensed under the Business Source License 1.1;
+// see LICENSE in this package. Change Date: 2030-12-31; Change License: Apache-2.0.
+
 /**
  * `aithos show [handle]` — print identity info. If no handle is given, shows
  * the current default. Works for both owned and tracked identities — tracked

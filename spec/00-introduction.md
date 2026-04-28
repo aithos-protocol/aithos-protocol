@@ -110,7 +110,10 @@ This protocol does **not**:
 
 ## 0.9 License
 
-This specification is licensed under the [Apache License 2.0](../LICENSE). Implementations are free to be any license, proprietary or open.
+Normative specification text in `spec/` (and [SPEC.md](../SPEC.md)) is licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The reference TypeScript
+implementation in this repository (`packages/*`) is under **BUSL-1.1** (see [LICENSE](../LICENSE));
+other implementations may use any license.
 
 ---
 

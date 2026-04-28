@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Mathieu Colla. Licensed under the Business Source License 1.1;
+// see LICENSE in this package. Change Date: 2030-12-31; Change License: Apache-2.0.
+
 /**
  * Aithos reference CLI entry point.
  *
@@ -47,7 +51,7 @@ const program = new Command();
 program
   .name("aithos")
   .description("Aithos reference CLI — identities, mandates, signatures.")
-  .version("0.2.1");
+  .version("0.4.0");
 
 program
   .command("init")

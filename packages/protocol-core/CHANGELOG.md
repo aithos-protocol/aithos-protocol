@@ -5,6 +5,14 @@ All notable changes to `@aithos/protocol-core` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-04-28
+
+### License
+- Switched from **Apache-2.0** to **Business Source License 1.1** (**BUSL-1.1**).
+  **Change Date:** 2030-12-31. **Change License:** Apache-2.0. See `LICENSE`.
+  Artifacts previously published under Apache-2.0 remain under that license for
+  anyone who obtained those versions.
+
 ## [0.3.1] — 2026-04-22
 
 Purely additive point release. No behaviour changes on existing APIs; new

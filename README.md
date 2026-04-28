@@ -76,7 +76,7 @@ Aithos-protocol/
 │   └── src/
 ├── examples/              # sample mandates, action artifacts, etc.
 ├── ROADMAP.md
-└── LICENSE                # Apache-2.0
+└── LICENSE                # licensing overview (code: BUSL-1.1 → Apache-2.0 on 2030-12-31)
 ```
 
 ## Relationship to the POC editor
@@ -91,7 +91,13 @@ The repository at `mnt/aithos/` is the Aithos product workspace — it holds the
 
 ## License
 
-Apache License 2.0 — see [LICENSE](./LICENSE).
+**Software** in `packages/protocol-core`, `packages/cli`, and `packages/mcp` is under the
+[Business Source License 1.1](https://mariadb.com/bsl11/) (**BUSL-1.1**) with **Change Date**
+2030-12-31 and **Change License** Apache-2.0. See [LICENSE](./LICENSE) and each package’s
+`LICENSE` file. Releases previously distributed under Apache-2.0 remain under that license
+for recipients who obtained those versions.
+
+**Documentation** in `spec/`, `SPEC.md`, and `WHITEPAPER.md` is under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## The name
 

@@ -121,3 +121,8 @@ location /mcp {
 - v0.2.x stores private sphere-key seeds as plaintext JSON files under
   `$AITHOS_HOME` (mode 0600). Treat that directory as a credential store.
   The gamma log itself is sealed at rest under the self sphere key.
+
+## License
+
+Business Source License 1.1 (**BUSL-1.1**), **Change Date** 2030-12-31, **Change License**
+Apache-2.0. See [LICENSE](./LICENSE) in this package and the [repository overview](../../LICENSE).

@@ -56,4 +56,5 @@ resolver lets stateless verifiers accept delegate-signed bundles.
 
 ## License
 
-[Apache-2.0](./LICENSE) © Mathieu Colla.
+Business Source License 1.1 (**BUSL-1.1**), **Change Date** 2030-12-31, **Change License**
+Apache-2.0. See [LICENSE](./LICENSE) and the [repository overview](../../LICENSE).

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2026 Mathieu Colla. Licensed under the Business Source License 1.1;
+// see LICENSE in this package. Change Date: 2030-12-31; Change License: Apache-2.0.
+
 /**
  * Aithos MCP server.
  *
@@ -162,7 +166,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   const server = new McpServer(
     {
       name: opts.name ?? "aithos-mcp",
-      version: opts.version ?? "0.1.0",
+      version: opts.version ?? "0.5.0",
     },
     {
       // We expose tools + resources, not prompts.
