@@ -9,7 +9,7 @@ The choice of ZIP is deliberate. ZIP is understood everywhere, has good tooling,
 ## 3.2 Layout
 
 ```
-mathieu.ethos
+john-doe.ethos
 ├── manifest.json                     (UTF-8 JSON, §3.3)
 ├── did.json                          (signed DID document, chapter 1)
 ├── public.md                         (plaintext markdown, §2.6)
@@ -96,14 +96,14 @@ Readers reconstitute the full document-form revision objects (§2.5.1) by combin
 ```json
 {
   "aithos": "0.1.0",
-  "bundle_id": "urn:aithos:mathieu:2026.04.19-1",
+  "bundle_id": "urn:aithos:john-doe:2026.04.19-1",
   "subject_did": "did:aithos:z6Mkr…",
-  "subject_handle": "mathieu",
-  "display_name": "Mathieu Colla",
+  "subject_handle": "john-doe",
+  "display_name": "John Doe",
   "edition": {
     "version": "2026.04.19-1",
     "created_at": "2026-04-19T08:14:23Z",
-    "supersedes": "urn:aithos:mathieu:2026.04.10-1",
+    "supersedes": "urn:aithos:john-doe:2026.04.10-1",
     "prev_hash": "sha256:b47c91ad4e20f6…",
     "height": 14
   },
@@ -205,7 +205,7 @@ A subject MAY include a `migrated_from` field when starting a new chain on a new
   "version": "2027.01.01-1",
   "prev_hash": null,
   "height": 1,
-  "migrated_from": "urn:aithos:mathieu:2026.12.30-3"
+  "migrated_from": "urn:aithos:john-doe:2026.12.30-3"
 }
 ```
 

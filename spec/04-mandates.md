@@ -25,8 +25,8 @@ This chapter defines the mandate format, the scope vocabulary, the revocation fo
   "issuer": "did:aithos:z6Mkr…",
   "issued_by_key": "did:aithos:z6Mkr…#circle",
   "grantee": {
-    "id": "urn:aithos:agent:gmail-agent@macbook-mathieu",
-    "label": "Personal Gmail agent (local install on macbook-mathieu)",
+    "id": "urn:aithos:agent:gmail-agent@macbook-john-doe",
+    "label": "Personal Gmail agent (local install on macbook-john-doe)",
     "pubkey": "z6MkageEd25519KeyIfAgentHasOne…"
   },
   "actor_sphere": "circle",
@@ -327,7 +327,7 @@ gmail-agent reply --to msg-42 --draft-file reply.json
 # 4. Bob's agent receives the reply. It fetches alice's DID document,
 #    fetches her revocation list, and validates the chain.
 # If everything checks out, Bob's UI shows "reply is attributable to Alice's
-# circle sphere, via agent gmail-agent@macbook-mathieu".
+# circle sphere, via agent gmail-agent@macbook-john-doe".
 
 # 5. A week later the TTL expires. The mandate is no longer valid.
 #    Alice may or may not choose to re-issue.

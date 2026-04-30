@@ -99,7 +99,7 @@ The bundle manifest (§3.3) carries a top-level `gamma` object:
   "gamma": {
     "head": "sha256:…",
     "count": 247,
-    "url": "https://aithos.example/u/mathieu.gamma"
+    "url": "https://aithos.example/u/john-doe.gamma"
   }
 }
 ```
@@ -223,7 +223,7 @@ A light reader fetches the bundle and:
 2. Verifies the manifest signature (§3.3).
 3. Treats `gamma.head` as an opaque anchor — does **not** retrieve the log.
 
-The reader knows the bundle is authentic at time of retrieval. It cannot independently confirm history. This is sufficient for "brief the agent about who Mathieu is now."
+The reader knows the bundle is authentic at time of retrieval. It cannot independently confirm history. This is sufficient for "brief the agent about who John is now."
 
 ### 10.7.2 Full (bundle + gamma)
 

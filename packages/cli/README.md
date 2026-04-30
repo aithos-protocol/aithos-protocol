@@ -27,14 +27,14 @@ node dist/index.js <command> …
 # 1. Create an identity (root + three sphere keys + signed DID document)
 #    AND its live ethos in one step. Pass --no-ethos for headless/service
 #    identities that will only sign mandates.
-aithos init --handle mathieu --display-name "Mathieu Colla"
+aithos init --handle john-doe --display-name "John Doe"
 
 # 2. Inspect.
 aithos show
 aithos list identities
 
 # 3. Grant a weekly read+reply mandate to a local Gmail agent.
-aithos grant urn:aithos:agent:gmail-agent@macbook-mathieu \
+aithos grant urn:aithos:agent:gmail-agent@macbook-john-doe \
   --sphere circle \
   --scope ethos.read.public,ethos.read.circle,email.reply \
   --ttl 7d \
@@ -90,7 +90,7 @@ Run `aithos <cmd> --help` for per-command flags.
 ~/.aithos/
 ├── config.json
 ├── identities/
-│   └── mathieu/
+│   └── john-doe/
 │       ├── did.json
 │       ├── root.sealed.json
 │       ├── public.sealed.json

@@ -14,17 +14,17 @@ The two forms are isomorphic. The document form is normative for signing; the bu
 ```json
 {
   "aithos": "0.2.0",
-  "id": "urn:aithos:mathieu:2026.04.19-1",
+  "id": "urn:aithos:john-doe:2026.04.19-1",
   "subject": {
     "did": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9",
-    "handle": "mathieu",
-    "display_name": "Mathieu Colla"
+    "handle": "john-doe",
+    "display_name": "John Doe"
   },
   "edition": {
     "version": "2026.04.19-1",
     "created_at": "2026-04-19T08:14:23Z",
-    "supersedes": "urn:aithos:mathieu:2026.04.10-1",
-    "canonical_url": "https://aithos.example/u/mathieu.ethos"
+    "supersedes": "urn:aithos:john-doe:2026.04.10-1",
+    "canonical_url": "https://aithos.example/u/john-doe.ethos"
   },
   "zones": {
     "public": { "sections": [ … ] },
@@ -55,8 +55,8 @@ Implementations MAY add fields under a `x-` prefix for experimental extensions (
 ```json
 {
   "did": "did:aithos:z6Mkr…",
-  "handle": "mathieu",
-  "display_name": "Mathieu Colla"
+  "handle": "john-doe",
+  "display_name": "John Doe"
 }
 ```
 
@@ -70,8 +70,8 @@ Implementations MAY add fields under a `x-` prefix for experimental extensions (
 {
   "version": "2026.04.19-1",
   "created_at": "2026-04-19T08:14:23Z",
-  "supersedes": "urn:aithos:mathieu:2026.04.10-1",
-  "canonical_url": "https://aithos.example/u/mathieu.ethos"
+  "supersedes": "urn:aithos:john-doe:2026.04.10-1",
+  "canonical_url": "https://aithos.example/u/john-doe.ethos"
 }
 ```
 
@@ -154,7 +154,7 @@ The bundle form is one markdown file per zone (§3.2). A zone file has a YAML fr
 aithos: "0.2.0"
 zone: public
 subject_did: did:aithos:z6Mkr…
-subject_handle: mathieu
+subject_handle: john-doe
 edition: 2026.04.19-3
 created_at: 2026-04-19T08:14:23Z
 ---
