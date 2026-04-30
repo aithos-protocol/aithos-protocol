@@ -130,7 +130,7 @@ Resolving a `did:aithos` returns a DID document of the shape:
     { "id": "did:aithos:z6Mkr…#self",   "type": "Ed25519VerificationKey2020", "controller": "did:aithos:z6Mkr…", "publicKeyMultibase": "z6Mk…" }
   ],
   "service": [
-    { "id": "#ethos", "type": "EthosBundle", "serviceEndpoint": "https://aithos.example/u/mathieu.ethos" }
+    { "id": "#ethos", "type": "EthosBundle", "serviceEndpoint": "https://aithos.example/u/john-doe.ethos" }
   ]
 }
 ```
@@ -146,7 +146,7 @@ The DID document is itself signed by the root key. A verifier resolves the docum
 A published ethos is a `.ethos` file: a ZIP archive carrying the ethos document, the encrypted zones, and the manifest. The format is deliberately ordinary — same shape as `.docx`, `.apk`, `.epub` — so any tool can inspect it.
 
 ```
-mathieu.ethos
+john-doe.ethos
 ├── manifest.json     (metadata, key references, salt, hashes, section index)
 ├── public.md         (plaintext markdown, frontmatter + free-form sections)
 ├── circle.md.enc     (XChaCha20-Poly1305 ciphertext over markdown)
@@ -199,7 +199,7 @@ A mandate is a JSON object signed by one of the subject's sphere keys. It declar
   "issued_by_key": "did:aithos:z6Mkr…#circle",
   "grantee": {
     "id": "urn:aithos:agent:gmail-agent@local",
-    "label": "Personal Gmail agent (local install on macbook-mathieu)"
+    "label": "Personal Gmail agent (local install on macbook-john-doe)"
   },
   "actor_sphere": "circle",
   "scopes": ["ethos.read.public", "ethos.read.circle", "email.reply"],
@@ -301,7 +301,7 @@ The root sphere key is compromised. This is the worst case. Defense: the root si
 - Not a memory layer. Aithos is what agents *read*, not how they *remember*.
 - Not an identity provider in the OAuth sense. There is no Aithos sign-in button. Authentication between you and an agent is done via your sphere keys, on your hardware.
 - Not a legal framework. A mandate is cryptographically verifiable but not legally binding by virtue of being signed. The legal weight of a digital mandate is jurisdictional and is the job of policy, not of this protocol. The protocol provides the substrate; the law catches up.
-- Not a walled garden. The normative spec and this paper are **CC BY 4.0**; the reference TypeScript (CLI, library, MCP) is **BUSL-1.1** with automatic conversion to **Apache-2.0** on 2030-12-31 — see [LICENSE](./LICENSE). The bundle format remains a zip you can extract with `unzip`.
+- Not a walled garden. The normative spec and this paper are **CC BY 4.0**; the reference TypeScript (CLI, library, MCP) is **Apache-2.0** — see [LICENSE](./LICENSE). The bundle format remains a zip you can extract with `unzip`.
 
 ---
 

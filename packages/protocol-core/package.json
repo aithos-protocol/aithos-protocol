@@ -2,7 +2,7 @@
   "name": "@aithos/protocol-core",
   "version": "0.4.0",
   "description": "Aithos protocol — reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
-  "license": "BUSL-1.1",
+  "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
   "homepage": "https://github.com/Math1987/aithos-protocol#readme",
   "repository": {
