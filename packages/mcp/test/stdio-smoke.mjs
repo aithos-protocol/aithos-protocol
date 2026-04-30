@@ -6,9 +6,9 @@
  *
  *   node test/stdio-smoke.mjs tools
  *   node test/stdio-smoke.mjs resources
- *   node test/stdio-smoke.mjs read aithos://ethos/mathieu/manifest
+ *   node test/stdio-smoke.mjs read aithos://ethos/john-doe/manifest
  *   node test/stdio-smoke.mjs call aithos_list_identities
- *   node test/stdio-smoke.mjs call aithos_show_identity '{"handle":"mathieu"}'
+ *   node test/stdio-smoke.mjs call aithos_show_identity '{"handle":"john-doe"}'
  *
  * The script spawns `node dist/bin.js --transport stdio`, performs the
  * initialize handshake via the official MCP client SDK, runs the requested
