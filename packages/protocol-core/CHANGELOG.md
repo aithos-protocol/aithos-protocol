@@ -5,6 +5,15 @@ All notable changes to `@aithos/protocol-core` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-05-01
+
+### Fixed
+- `package.json` `homepage`, `repository.url`, and `bugs.url` now point at
+  `github.com/aithos-protocol/aithos-protocol` (the canonical org-level repo).
+  Previous releases lingered on `github.com/Math1987/aithos-protocol` from a
+  transient state of the move into the `aithos-protocol` GitHub org. This is
+  metadata-only — no code changes.
+
 ## [0.5.0] — 2026-04-30
 
 ### License
