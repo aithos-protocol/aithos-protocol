@@ -5,7 +5,7 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] — 2026-04-30
 
 ### License
 - Reverted from **BUSL-1.1** back to **Apache-2.0**. The reference packages
@@ -16,8 +16,11 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   See ADR-0007 in `ARCHITECTURE-DECISIONS.md`.
 - Source-file SPDX headers, package.json `license` fields, and per-package
   `LICENSE` files are all aligned on `Apache-2.0`.
-- Versions previously published under BUSL-1.1 remain under BUSL-1.1 for
-  anyone who already obtained them.
+- Version 0.5.0 (published under BUSL-1.1) remains under BUSL-1.1 for anyone
+  who already obtained it.
+
+### Protocol
+- Targets **`@aithos/protocol-core@^0.5.0`** (license-only bump in the library).
 
 ## [0.5.0] — 2026-04-28
 
