@@ -124,7 +124,7 @@ Resolving a `did:aithos` DID yields a DID document of the following shape. The d
     {
       "id": "did:aithos:z6Mkr…#ethos",
       "type": "EthosBundle",
-      "serviceEndpoint": "https://aithos.example/u/mathieu.ethos"
+      "serviceEndpoint": "https://aithos.example/u/john-doe.ethos"
     }
   ],
   "aithos": {
@@ -211,7 +211,7 @@ The reference CLI stores identity material under `~/.aithos/` as follows. This l
 ~/.aithos/
 ├── config.json                   # { default_handle, version }
 ├── identities/
-│   └── mathieu/
+│   └── john-doe/
 │       ├── did.json              # signed DID document
 │       ├── root.sealed.json      # sealed root seed
 │       ├── public.sealed.json    # sealed public-sphere seed
@@ -231,7 +231,7 @@ Sealed blobs use the format defined in §1.4.3.
 The protocol does not mandate a resolver. Two common resolver strategies are anticipated:
 
 - **Well-known URL.** The subject publishes `did.json` at `https://<host>/.well-known/did-aithos/<handle>` and advertises the handle through social channels.
-- **Companion `did:web`.** The subject publishes a `did:web` DID document that itself contains a reference to the `did:aithos`. Clients resolve `@mathieu.example.com` → `did:web:mathieu.example.com` → `did:aithos:z6Mkr…`.
+- **Companion `did:web`.** The subject publishes a `did:web` DID document that itself contains a reference to the `did:aithos`. Clients resolve `@john-doe.example.com` → `did:web:john-doe.example.com` → `did:aithos:z6Mkr…`.
 
 Discovery is explicitly deferred to a future version of the spec.
 

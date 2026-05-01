@@ -1,7 +1,11 @@
+<a href="https://www.aithos.be"><img src="./assets/logo.svg" alt="" align="right" width="64" height="64"></a>
+
 # Aithos Protocol
 
 > **An open protocol for portable digital ethos.**
 > One human. One digital incarnation. Owned by no platform.
+
+Project home: <https://www.aithos.be>
 
 Aithos lets a person publish a signed, versioned, zone-partitioned description of themselves — their *ethos* — that any AI agent can read, under rules the person sets. The person can grant a time-bounded, scoped mandate to a specific agent and revoke it. The agent's actions, when taken under that mandate, are cryptographically attributable.
 
@@ -22,7 +26,7 @@ An **ethos** is a versioned document describing a person in three zones: `public
 
 ```bash
 # Generate a new Aithos identity (three sphere keys → ~/.aithos/)
-aithos init --handle mathieu
+aithos init --handle john-doe
 
 # Inspect
 aithos show
@@ -76,7 +80,7 @@ Aithos-protocol/
 │   └── src/
 ├── examples/              # sample mandates, action artifacts, etc.
 ├── ROADMAP.md
-└── LICENSE                # licensing overview (code: BUSL-1.1 → Apache-2.0 on 2030-12-31)
+└── LICENSE                # Apache-2.0 (software) · CC BY 4.0 (documentation)
 ```
 
 ## Relationship to the POC editor
@@ -92,12 +96,22 @@ The repository at `mnt/aithos/` is the Aithos product workspace — it holds the
 ## License
 
 **Software** in `packages/protocol-core`, `packages/cli`, and `packages/mcp` is under the
-[Business Source License 1.1](https://mariadb.com/bsl11/) (**BUSL-1.1**) with **Change Date**
-2030-12-31 and **Change License** Apache-2.0. See [LICENSE](./LICENSE) and each package’s
-`LICENSE` file. Releases previously distributed under Apache-2.0 remain under that license
-for recipients who obtained those versions.
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [LICENSE](./LICENSE)
+and each package’s `LICENSE` file.
 
 **Documentation** in `spec/`, `SPEC.md`, and `WHITEPAPER.md` is under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+## Governance & future versions
+
+The `0.x` line — the current evolving wire format — will remain under Apache-2.0
+forever; the grant is irrevocable. Reaching `1.0` will likely involve breaking
+changes to the wire format, and the project reserves the right to publish major
+versions (`1.0+`) under a different license at the maintainers’ discretion. Any
+such change will be telegraphed in advance and will not affect prior releases.
+
+External contributions are accepted under a Contributor License Agreement (CLA)
+that grants the project the right to relicense future versions; see
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## The name
 

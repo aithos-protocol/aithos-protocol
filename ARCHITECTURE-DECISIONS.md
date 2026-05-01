@@ -107,12 +107,16 @@ plus haut, au niveau du client fonctionnel et de l'hébergement.
 ## ADR-0004 — Licence : Business Source License 1.1
 
 **Date :** 2026-04-24  
-**Statut :** Accepté
+**Statut :** ~~Accepté~~ — **Superseded by ADR-0007 (2026-04-30)**
 
 > **Révision (2026-04-28).** Les paramètres concrets (Licensor, Change Date, périmètre des
 > packages) pour le code déjà dans ce dépôt sont ceux d’**ADR-0006**. Le texte ci-dessous
 > reste la justification du choix BSL ; les dates et le nom du Licensor dans l’extrait
 > paramétré ne sont plus à jour.
+>
+> **Révision (2026-04-30).** Cette décision est supplantée par **ADR-0007**, qui ramène
+> les packages référence sous **Apache-2.0** dès maintenant pour favoriser l’adoption.
+> Le texte ci-dessous est conservé pour l’historique uniquement.
 
 ### Décision
 
@@ -188,7 +192,7 @@ de lui confier leurs données.
 ## ADR-0006 — BSL 1.1 sur les packages référence du monorepo
 
 **Date :** 2026-04-28  
-**Statut :** Accepté
+**Statut :** ~~Accepté~~ — **Superseded by ADR-0007 (2026-04-30)**
 
 ### Décision
 
@@ -227,4 +231,55 @@ forkant la référence, tout en conservant une **conversion automatique** vers A
 
 ---
 
-*Dernière mise à jour : 2026-04-28 — BSL sur protocol-core, CLI, MCP + spec en CC BY 4.0*
+## ADR-0007 — Retour à Apache-2.0 sur les packages référence
+
+**Date :** 2026-04-30  
+**Statut :** Accepté — supersede ADR-0004 et ADR-0006
+
+### Décision
+
+Les packages **`@aithos/protocol-core`**, **`aithos`** (CLI) et **`@aithos/mcp`** sont
+publiés sous **Apache License 2.0**, immédiatement, et non plus sous BUSL-1.1 avec
+conversion programmée en 2030.
+
+La spécification (`spec/`, `SPEC.md`, `WHITEPAPER.md`) reste sous **CC BY 4.0**.
+
+### Pourquoi revenir en arrière sur la BSL ?
+
+- **Le bénéfice de la BSL est nul à ce stade.** La protection contre un AWS qui forkerait
+  le serveur de référence ne vaut quelque chose qu’à partir d’une certaine traction. À
+  zéro stars / zéro adoption, la BSL ne fait que payer son coût (exclusion des distros,
+  méfiance des entreprises avec policy OSI-only, friction permanente avec une frange de
+  la communauté open source).
+- **Pour un protocole, l’adoption *est* la valeur.** Les standards qui ont émergé (HTTP,
+  OAuth, ActivityPub, MCP) sont tous sous licence permissive. Aucun protocole ne s’est
+  imposé sous une licence restrictive.
+- **La spec étant déjà sous CC BY 4.0**, n’importe qui peut implémenter Aithos sans
+  permission. La BSL ne protégeait donc que l’implémentation de référence — sans réelle
+  valeur stratégique aujourd’hui.
+- **Apache-2.0 reste la norme** pour les protocoles ouverts ; OSI-approuvée, FSF-libre,
+  acceptée par tous les écosystèmes.
+
+### Réversibilité maîtrisée
+
+Pour préserver la possibilité de basculer une **future version majeure (`1.0+`)** vers
+une licence plus restrictive si la traction l’exige :
+
+- Les contributions externes sont acceptées sous **Contributor License Agreement (CLA)**
+  qui octroie aux mainteneurs le droit de relicensier (voir `CONTRIBUTING.md`).
+- Le `0.x` reste sous Apache-2.0 à perpétuité — la grant est irrévocable.
+- Toute relicense future fera l’objet d’une annonce préalable (pas de surprise façon
+  Elastic / Redis / HashiCorp).
+
+### Conséquences immédiates
+
+- `LICENSE` racine et `packages/*/LICENSE` → texte canonique Apache-2.0.
+- `package.json` des trois packages → `"license": "Apache-2.0"`.
+- En-têtes des fichiers `.ts` / `.mjs` → `SPDX-License-Identifier: Apache-2.0`.
+- Annotation des ADR-0004 et ADR-0006 comme *superseded*.
+- Republication des packages npm en versions bumpées sous la nouvelle licence.
+- Mise à jour du copy de la landing (`open-source` au lieu de `BUSL-1.1`).
+
+---
+
+*Dernière mise à jour : 2026-04-30 — Retour Apache-2.0 sur protocol-core, CLI, MCP + spec en CC BY 4.0 + CLA pour contributions externes*

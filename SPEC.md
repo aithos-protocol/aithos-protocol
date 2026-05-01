@@ -3,7 +3,7 @@
 **Version:** 0.2.0 (draft)
 **Status:** Under active development. Breaking changes expected until 1.0.0. v0.2.0 is a breaking change from v0.1.x — section history moves from embedded `revisions[]` (v0.1.x) to a separate gamma log (§10).
 **Editors:** Mathieu Colla <mathieu.colla.pro@gmail.com>
-**License:** CC BY 4.0 (documentation). Reference software in this repository is BUSL-1.1; see [LICENSE](./LICENSE).
+**License:** CC BY 4.0 (documentation). Reference software in this repository is Apache-2.0; see [LICENSE](./LICENSE).
 
 ---
 
@@ -51,7 +51,7 @@ The following are known open questions and are explicitly not yet normative. The
 - **Section-title encryption.** The current manifest exposes section titles even for encrypted zones. Should v0.2 offer an opt-in to encrypt the section index? See §3.7.
 - **Binding actions.** Which scope classes require a counter-signature from the mandated sphere key at action time, and which are fire-and-forget? See §5.4.
 - **Root-key recovery.** The protocol currently has none. Whether to add a t-of-n social recovery layer is undecided. See §7.5.
-- **Discovery.** How a counterparty resolves `@mathieu` to `did:aithos:z6Mkr…`. Most likely a companion `did:web` record; to be specified in v0.2. See §6.3.
+- **Discovery.** How a counterparty resolves `@john-doe` to `did:aithos:z6Mkr…`. Most likely a companion `did:web` record; to be specified in v0.2. See §6.3.
 
 ## Errata
 

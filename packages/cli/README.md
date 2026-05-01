@@ -27,14 +27,14 @@ node dist/index.js <command> …
 # 1. Create an identity (root + three sphere keys + signed DID document)
 #    AND its live ethos in one step. Pass --no-ethos for headless/service
 #    identities that will only sign mandates.
-aithos init --handle mathieu --display-name "Mathieu Colla"
+aithos init --handle john-doe --display-name "John Doe"
 
 # 2. Inspect.
 aithos show
 aithos list identities
 
 # 3. Grant a weekly read+reply mandate to a local Gmail agent.
-aithos grant urn:aithos:agent:gmail-agent@macbook-mathieu \
+aithos grant urn:aithos:agent:gmail-agent@macbook-john-doe \
   --sphere circle \
   --scope ethos.read.public,ethos.read.circle,email.reply \
   --ttl 7d \
@@ -90,7 +90,7 @@ Run `aithos <cmd> --help` for per-command flags.
 ~/.aithos/
 ├── config.json
 ├── identities/
-│   └── mathieu/
+│   └── john-doe/
 │       ├── did.json
 │       ├── root.sealed.json
 │       ├── public.sealed.json
@@ -156,5 +156,8 @@ A subsequent minor release MUST add passphrase-sealed seeds using Argon2id + XCh
 
 ## License
 
-Business Source License 1.1 (**BUSL-1.1**), **Change Date** 2030-12-31, **Change License**
-Apache-2.0. See [LICENSE](./LICENSE) in this package and the [repository overview](../../LICENSE).
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [LICENSE](./LICENSE)
+in this package and the [repository overview](../../LICENSE).
+
+The protocol specification (`spec/`, `SPEC.md`, `WHITEPAPER.md`) is under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

@@ -124,7 +124,7 @@ This commits to the set of recipients of this entry without committing to the wr
   "gamma": {
     "head": "sha256:…",
     "count": 248,
-    "url": "https://aithos.example/u/mathieu.gamma",
+    "url": "https://aithos.example/u/john-doe.gamma",
     "readers": [
       {
         "recipient": "did:aithos:z6Mkr…#public",

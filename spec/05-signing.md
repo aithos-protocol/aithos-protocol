@@ -34,7 +34,7 @@ The zone document is:
 {
   "aithos": "0.1.0",
   "subject_did": "did:aithos:z6Mkr…",
-  "subject_handle": "mathieu",
+  "subject_handle": "john-doe",
   "edition": { "version": "2026.04.19-1", "created_at": "…", "supersedes": "…" },
   "zone": "circle",
   "sections": [ … ]
@@ -88,7 +88,7 @@ When an agent acts under a mandate (chapter 4), it MUST emit an **action artifac
   "mandate_id": "mandate_01JG4X7RABCDXYZ123",
   "issued_at": "2026-04-19T14:22:11Z",
   "actor": {
-    "id": "urn:aithos:agent:gmail-agent@macbook-mathieu",
+    "id": "urn:aithos:agent:gmail-agent@macbook-john-doe",
     "pubkey": "z6MkAgentEdKey…"
   },
   "action": {

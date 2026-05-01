@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Aithos protocol monorepo: protocol-core library, CLI, and MCP server.",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
   "type": "module",
   "workspaces": [

@@ -161,7 +161,7 @@ A delegate keyfile binds a local Ed25519 private key to an agent identifier (mat
 ```json
 {
   "aithos-delegate-key": "0.1.0",
-  "id": "urn:aithos:agent:laptop@mac-mathieu",
+  "id": "urn:aithos:agent:laptop@mac-john-doe",
   "public_multibase": "z6Mk…",
   "seed_hex": "…",
   "created_at": "2026-04-19T08:14:23Z"

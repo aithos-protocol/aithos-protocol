@@ -112,7 +112,8 @@ This protocol does **not**:
 
 Normative specification text in `spec/` (and [SPEC.md](../SPEC.md)) is licensed under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The reference TypeScript
-implementation in this repository (`packages/*`) is under **BUSL-1.1** (see [LICENSE](../LICENSE));
+implementation in this repository (`packages/*`) is under
+[Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) (see [LICENSE](../LICENSE));
 other implementations may use any license.
 
 ---

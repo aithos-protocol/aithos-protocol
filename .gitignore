@@ -27,3 +27,18 @@ packages/*/dist/commands/*.removed
 
 # incremental TypeScript build cache (local artifact, regenerated on build)
 *.tsbuildinfo
+
+# FUSE filesystem ghost files (created by sandboxed mounts when files are deleted while open)
+.fuse_hidden*
+**/.fuse_hidden*
+
+# Office app lock files (LibreOffice / OpenOffice / MS Office)
+.~lock.*#
+~$*
+
+# Local-only operational / strategic / outreach material — never commit to the public repo
+MIGRATION-APACHE-2.0.md
+marketing/
+aithos_competitive_map.md
+aithos_outreach_devs.xlsx
+aithos_outreach_*.xlsx
