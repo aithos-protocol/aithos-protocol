@@ -5,6 +5,41 @@ All notable changes to `@aithos/protocol-core` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Protocol — mandate envelope `0.4.0`
+- **New scope `compute.invoke`** — opt-in, stand-alone capability that
+  authorizes a delegate to spend the subject's compute credits via the
+  Aithos compute proxy. NEVER implied by any `ethos.*` or `gamma.*`
+  scope. A read-only mandate carries no token-spending authority,
+  guaranteed at the protocol level.
+- **New shape `constraints.compute`** — required when the scope is
+  granted. Fields: `daily_cap_microcredits`, `total_cap_microcredits`,
+  `max_credits_per_call`, `allowed_models`. At least one of the daily
+  or total caps MUST be set — an unbounded compute mandate is
+  rejected at mint AND at verify time. This is the "in conscience,
+  voluntarily" invariant: a subject who authorizes spending is
+  required to also bound it.
+- **Mandate envelope bumped to `0.4.0`**. The verifier accepts
+  `0.1.0`, `0.2.1`, `0.3.0`, and `0.4.0` for backward compatibility.
+- **Compute mandates require `grantee.pubkey`**, like write mandates —
+  bearer compute capabilities are forbidden by construction.
+
+### Added
+- `COMPUTE_INVOKE_SCOPE` constant (= `"compute.invoke"`).
+- `ComputeConstraints` interface.
+- `hasComputeInvokeScope(scopes)` predicate.
+- `validateComputeAuthorization(scopes, constraints?)` — the
+  protocol-level enforcement of the cap-required invariant. Called
+  by `createMandate` and `verifyMandate`; also exported for hosts
+  that build mandates outside the reference factory.
+
+### Migration
+- Existing 0.3.0 mandates without compute remain valid — the new
+  invariant only fires when `compute.invoke` is present.
+- Servers MUST refuse compute invocations under a mandate that does
+  NOT carry `compute.invoke`. The compute-proxy patch lands separately.
+
 ## [0.5.1] — 2026-05-01
 
 ### Fixed

@@ -48,10 +48,45 @@ export interface Grantee {
   pubkey?: string; // multibase z… Ed25519 key
 }
 
+/**
+ * Per-mandate cost ceilings for the `compute.invoke` scope.
+ *
+ * A mandate carrying `compute.invoke` MUST also carry `constraints.compute`
+ * with at least one of `daily_cap_microcredits` or `total_cap_microcredits`
+ * — see {@link validateComputeAuthorization}. This is the "in conscience,
+ * voluntarily" property: a mandate that authorizes spending is required
+ * to also bound it. Servers honouring the scope MUST enforce these caps
+ * (atomic mandate-usage debit) on top of the wallet balance check.
+ *
+ * Fields are independent. Common combinations:
+ *   - daily_cap only: spending allowed across the mandate lifetime, but
+ *     no more than `daily_cap_microcredits` per UTC day.
+ *   - total_cap only: a single envelope of credits the agent may consume,
+ *     no further limits — useful for one-shot delegations.
+ *   - both: belt-and-suspenders.
+ *
+ * `max_credits_per_call` is a per-invocation safety net for runaway
+ * single requests. `allowed_models` restricts which Bedrock model ids the
+ * delegate may target — empty/undefined means no model restriction (the
+ * server's own allowlist still applies).
+ */
+export interface ComputeConstraints {
+  /** Hard cap on credits debited per UTC day under this mandate. */
+  daily_cap_microcredits?: number;
+  /** Hard cap on credits debited over the whole mandate lifetime. */
+  total_cap_microcredits?: number;
+  /** Hard cap on credits debited by any single invocation. */
+  max_credits_per_call?: number;
+  /** Allowlist of Bedrock model ids the delegate may invoke. */
+  allowed_models?: string[];
+}
+
 export interface MandateConstraints {
   domains?: string[];
   rate_limit?: Record<string, number>;
   require_counter_sign?: string[];
+  /** Required when `scopes` contains `compute.invoke`. */
+  compute?: ComputeConstraints;
 }
 
 /**
@@ -67,12 +102,27 @@ export interface MandateConstraints {
  *           `gamma.read` adds its grantee pubkey to `manifest.gamma.readers`;
  *           future gamma entries seal their per-entry key to that pubkey.
  *           See `spec/drafts/gamma-v0.3-per-entry-envelopes.md`.
+ * `0.4.0` — introduces the `compute.invoke` scope (token-spending capability)
+ *           and the matching `constraints.compute` shape (daily / total /
+ *           per-call caps + model allowlist). The scope MUST NOT be granted
+ *           implicitly: it is its own family, never a side-effect of any
+ *           ethos / gamma scope. A mandate carrying `compute.invoke`
+ *           without at least one cap in `constraints.compute` is rejected
+ *           at mint AND at verify time. See `validateComputeAuthorization`.
  *
  * New mandates are minted at the latest version; the verifier accepts all
- * three past envelopes for backward compatibility.
+ * past envelopes for backward compatibility.
  */
-export const MANDATE_VERSION_CURRENT = "0.3.0" as const;
-export type MandateVersion = "0.1.0" | "0.2.1" | "0.3.0";
+export const MANDATE_VERSION_CURRENT = "0.4.0" as const;
+export type MandateVersion = "0.1.0" | "0.2.1" | "0.3.0" | "0.4.0";
+
+/**
+ * The single scope that authorizes a delegate to spend the subject's
+ * compute credits via the Aithos compute proxy. Designed as an opt-in,
+ * stand-alone capability — never implied by ethos/gamma scopes, and
+ * never granted without a matching `constraints.compute` budget.
+ */
+export const COMPUTE_INVOKE_SCOPE = "compute.invoke" as const;
 
 export interface Mandate {
   "aithos-mandate": MandateVersion;
@@ -168,11 +218,23 @@ export interface CreateMandateArgs {
 
 export function createMandate(args: CreateMandateArgs): Mandate {
   validateScopesAgainstSphere(args.scopes, args.actorSphere);
+  validateComputeAuthorization(args.scopes, args.constraints);
 
   // Write mandates MUST bind to a specific delegate key (§4.5.4).
   if (hasWriteScope(args.scopes) && !args.grantee.pubkey) {
     throw new Error(
       `Write mandate requires grantee.pubkey (the delegate key). Generate one with \`aithos delegate-key\` and pass it via --pubkey.`,
+    );
+  }
+
+  // Compute mandates MUST also bind to a specific delegate key — the proxy
+  // verifies the envelope under that key and atomically debits a wallet
+  // scoped to (issuer, mandate). An unbound `compute.invoke` mandate would
+  // be a bearer token to spend the subject's credits, which is exactly what
+  // `validateComputeAuthorization` is meant to prevent.
+  if (hasComputeInvokeScope(args.scopes) && !args.grantee.pubkey) {
+    throw new Error(
+      `Compute mandate (scope ${COMPUTE_INVOKE_SCOPE}) requires grantee.pubkey (the delegate key). Generate one and pass it via --pubkey.`,
     );
   }
 
@@ -261,10 +323,11 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
         s === "ethos.read.public" ||
         s === "ethos.read.all" ||
         s === "ethos.write.public" ||
-        s === "gamma.read";
+        s === "gamma.read" ||
+        s === COMPUTE_INVOKE_SCOPE;
       if (!ok) {
         throw new Error(
-          `Scope ${s} is not permitted for the public sphere. Only ethos.read.public, ethos.read.all, ethos.write.public, and gamma.read are allowed.`,
+          `Scope ${s} is not permitted for the public sphere. Only ethos.read.public, ethos.read.all, ethos.write.public, gamma.read, and ${COMPUTE_INVOKE_SCOPE} are allowed.`,
         );
       }
     }
@@ -294,6 +357,101 @@ export function hasWriteScope(scopes: string[]): boolean {
  */
 export function hasGammaReadScope(scopes: string[]): boolean {
   return scopes.includes("gamma.read");
+}
+
+/**
+ * Identify whether the scope set grants compute (token-spending) authority.
+ *
+ * In v0.4, `compute.invoke` is its own opt-in capability: it is NEVER
+ * implied by ethos / gamma scopes. A subject who issues a read-only
+ * mandate can rest assured no token spend is authorized. The compute
+ * proxy MUST refuse any compute invocation under a mandate that does
+ * not carry this scope.
+ */
+export function hasComputeInvokeScope(scopes: string[]): boolean {
+  return scopes.includes(COMPUTE_INVOKE_SCOPE);
+}
+
+/**
+ * Enforce the compute-authorization invariant: a mandate carrying
+ * `compute.invoke` MUST also carry `constraints.compute` with at least
+ * one cap (`daily_cap_microcredits` or `total_cap_microcredits`).
+ *
+ * Rationale: the whole point of the v0.4 split is that token spending
+ * is opt-in AND bounded. An unbounded compute mandate would be a bearer
+ * token to drain the subject's wallet — exactly what we want to make
+ * impossible at the protocol level, not just by server-side policy.
+ *
+ * Conversely, `constraints.compute` without the scope is a no-op
+ * (probably a caller mistake) and is also rejected: the subject's
+ * intent should be unambiguous.
+ *
+ * All numeric caps, when present, must be positive integers — zero
+ * would silently disable spending without making it explicit, and
+ * non-integers would mis-debit the wallet at the per-microcredit
+ * granularity.
+ *
+ * Throws `Error` on violation; returns `void` on success.
+ */
+export function validateComputeAuthorization(
+  scopes: string[],
+  constraints?: MandateConstraints,
+): void {
+  const hasScope = hasComputeInvokeScope(scopes);
+  const compute = constraints?.compute;
+
+  if (!hasScope && compute !== undefined) {
+    throw new Error(
+      `constraints.compute is set but the ${COMPUTE_INVOKE_SCOPE} scope is missing. ` +
+        `Compute caps without the scope have no effect — either add the scope or drop the constraints to make intent explicit.`,
+    );
+  }
+
+  if (!hasScope) return;
+
+  if (!compute) {
+    throw new Error(
+      `Mandate carries the ${COMPUTE_INVOKE_SCOPE} scope but no constraints.compute. ` +
+        `Token-spending capability requires an explicit budget — set at least one of ` +
+        `constraints.compute.daily_cap_microcredits or constraints.compute.total_cap_microcredits.`,
+    );
+  }
+
+  const hasDailyCap = typeof compute.daily_cap_microcredits === "number";
+  const hasTotalCap = typeof compute.total_cap_microcredits === "number";
+  if (!hasDailyCap && !hasTotalCap) {
+    throw new Error(
+      `constraints.compute must include at least one of daily_cap_microcredits or total_cap_microcredits ` +
+        `when the ${COMPUTE_INVOKE_SCOPE} scope is granted. ` +
+        `An unbounded compute mandate is a bearer token to drain the subject's wallet.`,
+    );
+  }
+
+  for (const [field, value] of [
+    ["daily_cap_microcredits", compute.daily_cap_microcredits],
+    ["total_cap_microcredits", compute.total_cap_microcredits],
+    ["max_credits_per_call", compute.max_credits_per_call],
+  ] as const) {
+    if (value === undefined) continue;
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(
+        `constraints.compute.${field} must be a positive integer (got ${value}).`,
+      );
+    }
+  }
+
+  if (compute.allowed_models !== undefined) {
+    if (!Array.isArray(compute.allowed_models)) {
+      throw new Error(`constraints.compute.allowed_models must be an array of strings.`);
+    }
+    for (const m of compute.allowed_models) {
+      if (typeof m !== "string" || m.length === 0) {
+        throw new Error(
+          `constraints.compute.allowed_models entries must be non-empty strings (got ${JSON.stringify(m)}).`,
+        );
+      }
+    }
+  }
 }
 
 export function writeMandate(m: Mandate): string {
@@ -332,6 +490,7 @@ export function verifyMandate(
   if (
     mandate["aithos-mandate"] !== "0.1.0" &&
     mandate["aithos-mandate"] !== "0.2.1" &&
+    mandate["aithos-mandate"] !== "0.3.0" &&
     mandate["aithos-mandate"] !== MANDATE_VERSION_CURRENT
   ) {
     errors.push(`Unsupported mandate version: ${mandate["aithos-mandate"]}`);
@@ -347,6 +506,18 @@ export function verifyMandate(
         `Mandate carries forbidden scope "${s}". These operations cannot be delegated.`,
       );
     }
+  }
+
+  // Compute-authorization invariant (v0.4): a mandate carrying
+  // `compute.invoke` MUST also carry a bounded `constraints.compute`.
+  // Re-checked here so a malformed mandate that somehow bypassed
+  // `createMandate` (older library, hand-edited file, mint-time bug)
+  // is still rejected at verify — the spend ceiling is a security
+  // invariant, not just a UX safeguard at mint.
+  try {
+    validateComputeAuthorization(mandate.scopes, mandate.constraints);
+  } catch (e) {
+    errors.push(`Compute authorization invalid: ${(e as Error).message}`);
   }
   if (mandate.issuer !== didDoc.id) {
     errors.push(`issuer ${mandate.issuer} does not match did document ${didDoc.id}`);
