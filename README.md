@@ -16,7 +16,20 @@ Aithos lets a person publish a signed, versioned, zone-partitioned description o
 - **[WHITEPAPER.md](./WHITEPAPER.md)** — the founding text. Read this first if you want the *why*.
 - **[SPEC.md](./SPEC.md)** — normative protocol specification (index).
 - **[cli/](./cli/)** — the `aithos` CLI reference implementation.
-- **[ROADMAP.md](./ROADMAP.md)** — what's next.
+- **[ROADMAP.md](./ROADMAP.md)** — what's next, what's not, and how the pieces fit.
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — how to engage if you want to help.
+
+## Currently in design
+
+The protocol is still evolving and several proposals are in active design. They are versioned under [`spec/drafts/`](./spec/drafts/) and open for review:
+
+- **[Bundle v0.3 — per-section encryption](./spec/drafts/bundle-v0.3-per-section-encryption.md)** — split each zone into per-section blobs (one ciphertext file per section in `circle` and `self`, one plaintext markdown file per section in `public`). Editing one section costs O(section size) instead of O(zone size). Symmetric across all three zones.
+- **[Gamma v0.3 — per-entry envelopes](./spec/drafts/gamma-v0.3-per-entry-envelopes.md)** — split append capability from read capability in the gamma log, so a write-delegate no longer gets retroactive read access to the subject's history. Adds a new `gamma.read` scope.
+- **Section-level mandates** *(companion draft, in design)* — extend the mandate scope grammar to address individual sections (`ethos.write.self#gmail:*`). Builds on per-section encryption.
+
+See [`spec/drafts/README.md`](./spec/drafts/README.md) for the full draft index and lifecycle, and [`ROADMAP.md`](./ROADMAP.md) for how these fit into the broader trajectory toward v1.0.
+
+Comments, critique, and pull requests are welcome on every draft. Open an issue to start a discussion or propose changes directly on a draft.
 
 ## In a paragraph
 
