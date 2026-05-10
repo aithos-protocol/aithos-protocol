@@ -477,14 +477,40 @@ export interface VerifyResult {
 }
 
 /**
+ * Default clock-skew tolerance for mandate time-window checks (seconds).
+ *
+ * Real-world clocks drift. A client signs `not_before = now()` and the
+ * server validates a few hundred milliseconds later — but if the server's
+ * clock runs behind the client by even 100ms, a strict comparison
+ * (`server_now < not_before`) rejects the mandate as "not yet valid".
+ *
+ * 30s matches common JWT practice (`leeway` / `clock_tolerance` in jose,
+ * jsonwebtoken, oidc-client, etc.). It's wide enough to absorb routine
+ * NTP jitter and Lambda cold-start clocks without weakening the
+ * security model meaningfully — a 30s window doesn't help an attacker
+ * who already has a valid mandate, and a stolen mandate is much more
+ * dangerous than a 30s anticipated activation.
+ */
+export const MANDATE_CLOCK_SKEW_SECONDS_DEFAULT = 30;
+
+/**
  * Verify a mandate's structure, signature, and time window against a DID document.
  * Does NOT consult a revocation list — caller provides that separately.
+ *
+ * Time-window checks are bounded by `clockSkewSeconds` (default
+ * {@link MANDATE_CLOCK_SKEW_SECONDS_DEFAULT}) on both ends:
+ *   - mandate is "not yet valid" only if `now < not_before - skew`
+ *   - mandate is "expired" only if `now >= not_after + skew`
+ * Pass `clockSkewSeconds: 0` for the legacy strict behaviour.
  */
 export function verifyMandate(
   mandate: Mandate,
   didDoc: DidDocument,
   now: Date = new Date(),
+  options: { clockSkewSeconds?: number } = {},
 ): VerifyResult {
+  const skewMs =
+    (options.clockSkewSeconds ?? MANDATE_CLOCK_SKEW_SECONDS_DEFAULT) * 1000;
   const errors: string[] = [];
 
   if (
@@ -537,8 +563,15 @@ export function verifyMandate(
 
   const nb = new Date(mandate.not_before);
   const na = new Date(mandate.not_after);
-  if (now < nb) errors.push(`Mandate not yet valid (not_before=${mandate.not_before})`);
-  if (now >= na) errors.push(`Mandate has expired (not_after=${mandate.not_after})`);
+  // Apply clock-skew tolerance symmetrically. `now < nb - skew` only —
+  // a mandate signed truly in the future (more than `skew` seconds out)
+  // still fails. Same for expiration on the other end.
+  if (now.getTime() < nb.getTime() - skewMs) {
+    errors.push(`Mandate not yet valid (not_before=${mandate.not_before})`);
+  }
+  if (now.getTime() >= na.getTime() + skewMs) {
+    errors.push(`Mandate has expired (not_after=${mandate.not_after})`);
+  }
 
   // Signature
   try {

@@ -7,6 +7,32 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-05-10
+
+### Fixed
+
+- **`verifyMandate` now applies a clock-skew tolerance** (default 30s,
+  per JWT/jose convention) on both `not_before` and `not_after` checks.
+  Previously a mandate signed at time `T` and validated by a server
+  whose clock ran 100ms behind was rejected as "Mandate not yet valid".
+  Real-world clock drift between client and Lambda routinely produces
+  sub-second skew; the strict comparison was generating spurious
+  rejections that no caller had a reason to expect.
+
+  New `MANDATE_CLOCK_SKEW_SECONDS_DEFAULT` constant exported.
+  `verifyMandate(mandate, didDoc, now, options)` accepts an optional
+  `options.clockSkewSeconds` to override (e.g. `0` for legacy strict
+  behaviour, useful in tests). Symmetric: a 5-second-stale mandate is
+  still accepted, also bounded at 30s — gives clients a small grace
+  period after expiration where a delegate's in-flight request
+  doesn't fall off a cliff.
+
+  Tests added: `test/mandate-clock-skew.test.ts` covers acceptance
+  within tolerance, rejection beyond it, opt-out via
+  `clockSkewSeconds: 0`, and symmetric expiration behaviour.
+
+## [0.5.1] — 2026-05-08
+
 ### Protocol — mandate envelope `0.4.0`
 - **New scope `compute.invoke`** — opt-in, stand-alone capability that
   authorizes a delegate to spend the subject's compute credits via the
