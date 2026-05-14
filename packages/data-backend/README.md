@@ -3,11 +3,9 @@
 AWS reference implementation of the Aithos **data sub-protocol** PDS
 (Personal Data Server). See [spec/data/](../../spec/data/00-overview.md).
 
-> **Status:** Sub-jalon 3.2b — delegate flow is real. Owners can
-> issue, attach, and revoke mandates that grant scoped access to
-> third-party apps. Apps authenticate with their own grantee key and
-> the subject's mandate. Revocations are persisted and consulted on
-> every authenticated request.
+> **Status:** Sub-jalon 3.2c.1 — schema validation is now real.
+> Records are validated against the registered schema on every write.
+> The first normative core schema `aithos.contacts.v1` is shipped.
 
 ## What's here
 

@@ -1,6 +1,6 @@
 {
   "name": "@aithos/data-backend",
-  "version": "0.3.0-alpha.1",
+  "version": "0.3.0-alpha.2",
   "description": "AWS backend (DynamoDB + Lambda + API Gateway) implementing the Aithos data sub-protocol primitives. See spec/data/.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",

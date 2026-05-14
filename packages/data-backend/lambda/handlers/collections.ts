@@ -33,6 +33,7 @@ import {
   requireSubjectMatch,
   type Caller,
 } from "../auth/authenticate.js";
+import { getSchema } from "../schemas/registry.js";
 
 /* -------------------------------------------------------------------------- */
 /*  create_collection                                                         */
@@ -58,6 +59,17 @@ export async function createCollectionHandler(caller: Caller): Promise<unknown> 
     throw new RpcError(
       -32042,
       "AITHOS_INSUFFICIENT_SCOPE: create_collection is owner-only in v0.1; delegates cannot create collections",
+    );
+  }
+
+  // If schema is a core Aithos schema, verify it's known. Third-party
+  // schemas (any prefix not starting with `aithos.<bareword>` — see RFC
+  // §3.3) are accepted at face value for now; client validates against
+  // them. Only the aithos.* namespace is server-validated in v0.1.
+  if (p.schema!.startsWith("aithos.") && !getSchema(p.schema!)) {
+    throw new RpcError(
+      -32070,
+      `AITHOS_DATA_SCHEMA_UNKNOWN: schema "${p.schema}" is not registered on this platform`,
     );
   }
 

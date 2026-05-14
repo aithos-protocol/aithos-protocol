@@ -46,6 +46,7 @@ import {
   encodeCursor,
   validateRequired,
 } from "./collections.js";
+import { getSchema, validateMetadata } from "../schemas/registry.js";
 
 /* -------------------------------------------------------------------------- */
 /*  insert_record                                                             */
@@ -79,8 +80,24 @@ export async function insertRecordHandler(caller: Caller): Promise<unknown> {
     );
   }
 
+  const schemaId = col.Item.schema as string;
   const now = new Date().toISOString();
   const recordId = p.record_id ?? `record_${ulid()}`;
+
+  // Validate the metadata clear against the registered schema.
+  // Encrypted payload remains opaque and is not validated server-side.
+  if (getSchema(schemaId)) {
+    const result = validateMetadata(schemaId, p.metadata!, { op: "insert" });
+    if (!result.ok) {
+      throw new RpcError(
+        -32072,
+        `AITHOS_DATA_RECORD_INVALID: ${result.errors.map((e) => `${e.field}: ${e.reason}`).join("; ")}`,
+        { errors: result.errors },
+      );
+    }
+    p.metadata = result.metadata;
+  }
+
   const metadata = {
     ...p.metadata!,
     created_at: now,
@@ -269,6 +286,20 @@ export async function updateRecordHandler(caller: Caller): Promise<unknown> {
       `AITHOS_DATA_CONCURRENT_MODIFICATION: record was modified since expected_modified_at`,
       { actual: r.Item.modified_at, expected: p.expected_modified_at },
     );
+  }
+
+  // Validate metadata against the collection's schema.
+  const schemaId = r.Item.schema as string;
+  if (getSchema(schemaId)) {
+    const result = validateMetadata(schemaId, p.metadata!, { op: "update" });
+    if (!result.ok) {
+      throw new RpcError(
+        -32072,
+        `AITHOS_DATA_RECORD_INVALID: ${result.errors.map((e) => `${e.field}: ${e.reason}`).join("; ")}`,
+        { errors: result.errors },
+      );
+    }
+    p.metadata = result.metadata;
   }
 
   const now = new Date().toISOString();

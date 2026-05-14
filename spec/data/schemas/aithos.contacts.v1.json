@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.aithos.dev/aithos.contacts.v1.json",
+  "aithos:schema": "aithos.contacts.v1",
+  "aithos:version": "0.1.0",
+  "aithos:created_at": "2026-05-14T00:00:00Z",
+  "title": "Contact (prospect or customer)",
+  "description": "A natural-person contact record for CRM-like use cases. The first standard schema published under the aithos.data v0.1 sub-protocol.",
+  "type": "object",
+  "required": ["name"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "aithos:indexable": true,
+      "description": "Full name of the contact, as the subject wishes to refer to them. Required."
+    },
+    "email": {
+      "type": "string",
+      "format": "email",
+      "maxLength": 200,
+      "aithos:indexable": true,
+      "description": "Primary email address. Indexable for exact-match lookup. Optional."
+    },
+    "phone_hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$",
+      "aithos:indexable": true,
+      "aithos:derived_from": "phone",
+      "description": "BLAKE3 hash of the normalized phone number. Indexable for exact-match lookup without leaking the number itself. The clear phone lives in the encrypted payload."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["lead", "contact", "opportunity", "won", "lost", "archived"],
+      "default": "lead",
+      "aithos:indexable": true,
+      "description": "CRM pipeline status. Drives filtering and pagination in list_records queries."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+      "maxItems": 32,
+      "uniqueItems": true,
+      "aithos:indexable": true,
+      "description": "Free-form labels (e.g. 'priority', 'fr', 'web-source'). Indexable for tag-based filtering."
+    },
+    "source": {
+      "type": "string",
+      "maxLength": 100,
+      "aithos:indexable": true,
+      "description": "How the contact entered the pipeline (e.g. 'linkedin', 'referral', 'web-form')."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "aithos:indexable": true,
+      "aithos:auto": "on_insert",
+      "description": "When the contact record was first created. Server-set; clients MUST NOT supply."
+    },
+    "modified_at": {
+      "type": "string",
+      "format": "date-time",
+      "aithos:indexable": true,
+      "aithos:auto": "on_modify",
+      "description": "When the contact record was last modified. Server-set."
+    },
+    "last_contacted_at": {
+      "type": "string",
+      "format": "date-time",
+      "aithos:indexable": true,
+      "description": "When the subject last reached out. Client-set."
+    },
+    "phone": {
+      "type": "string",
+      "maxLength": 50,
+      "aithos:encrypted": true,
+      "aithos:pii": true,
+      "description": "Phone number in E.164 or any locale format the subject prefers. Stored encrypted; the platform sees only phone_hash."
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 100000,
+      "aithos:encrypted": true,
+      "description": "Free-form text notes. The subject's working journal on this contact."
+    },
+    "conversation_log": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/conversationEntry" },
+      "maxItems": 10000,
+      "aithos:encrypted": true,
+      "description": "Append-only log of interactions. Each entry is a structured turn (user / agent / contact)."
+    },
+    "form_responses": {
+      "type": "object",
+      "additionalProperties": true,
+      "aithos:encrypted": true,
+      "description": "Free-form structured data from qualification forms or onboarding questionnaires."
+    },
+    "custom_fields": {
+      "type": "object",
+      "additionalProperties": true,
+      "aithos:encrypted": true,
+      "description": "Subject-defined custom fields. Encrypted because their meaning is private to the subject's workflow."
+    }
+  },
+  "$defs": {
+    "conversationEntry": {
+      "type": "object",
+      "required": ["at", "from", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Wall-clock timestamp of the entry."
+        },
+        "from": {
+          "type": "string",
+          "enum": ["user", "agent", "contact"],
+          "description": "Who produced the turn. 'user' = the subject themselves; 'agent' = an authorized app speaking on their behalf; 'contact' = the contact."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50000,
+          "description": "The turn's body. Markdown permitted."
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["email", "phone", "sms", "chat", "in_person", "other"],
+          "description": "Optional channel of the interaction."
+        }
+      }
+    }
+  }
+}

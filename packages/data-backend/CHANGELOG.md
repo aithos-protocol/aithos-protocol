@@ -1,5 +1,74 @@
 # @aithos/data-backend — Changelog
 
+## 0.3.0-alpha.2 — 2026-05-14
+
+### Schema validation is now real (Sub-jalon 3.2c.1)
+
+The PDS now validates every `insert_record` and `update_record`
+against the registered schema. `create_collection` rejects collections
+referencing an unknown `aithos.*` schema. Records that violate the
+schema are rejected with `-32072 AITHOS_DATA_RECORD_INVALID` before
+storage.
+
+### Added
+
+- **First normative core schema** `aithos.contacts.v1`:
+  - Spec: `spec/data/schemas/aithos.contacts.v1.md`
+  - JSON Schema: `spec/data/schemas/aithos.contacts.v1.json`
+  - Bundled in Lambda: `lambda/schemas/aithos.contacts.v1.ts`
+  - Fields: 9 indexable (`name`, `email`, `phone_hash`, `status`,
+    `tags`, `source`, `created_at`, `modified_at`,
+    `last_contacted_at`) + 5 encrypted (`phone`, `notes`,
+    `conversation_log`, `form_responses`, `custom_fields`).
+- **Schema registry** (`lambda/schemas/registry.ts`):
+  - `getSchema(id)`, `listSchemas()` for lookup.
+  - `validateMetadata(schemaId, metadata, { op })` returns
+    `{ ok, errors, metadata }` with cleaned values.
+  - Hand-rolled JSON Schema 2020-12 subset (no ajv dep, keeps bundle
+    lean).
+  - Enforces `aithos:auto: on_insert | on_modify` — client-supplied
+    values are silently overridden.
+  - Rejects fields marked `aithos:encrypted` from showing up in the
+    `metadata` payload (they belong inside the encrypted blob).
+  - Applies `default` values for missing optional fields.
+
+### Validated end-to-end
+
+`test-e2e/schema-flow.mjs` — 13 assertions, all green on live:
+
+1. Unknown schema in create_collection → `-32070 SCHEMA_UNKNOWN`
+2. Valid `aithos.contacts.v1` collection created
+3. Missing required `name` → `-32072 RECORD_INVALID`
+4. Wrong type for `tags` (string vs array) → `-32072`
+5. Status not in enum → `-32072`
+6. Bad email format → `-32072`
+7. Encrypted field `phone` placed in metadata → `-32072`
+8. Unknown field → `-32072`
+9. Bad `phone_hash` pattern → `-32072`
+10. Valid full record → 200
+11. Client `created_at` silently overridden (auto:on_insert)
+12. Server-set `created_at` differs from the spoof value
+13. Default `status: "lead"` applied when omitted
+
+Regression suites still green:
+- `auth-flow.mjs` (3.2a) — 14/14
+- `delegate-flow.mjs` (3.2b) — 11/11
+
+**Total live deployment: 38 assertions all green.**
+
+### Known limitations (deferred)
+
+- Only `aithos.contacts.v1` is bundled. Other core schemas
+  (`aithos.messages.v1`, `aithos.calendar.v1`, …) are deferred to
+  later jalons.
+- Third-party schemas (any prefix outside `aithos.*`) are accepted at
+  face value in `create_collection` and skip server validation. Client
+  is expected to validate.
+- No anonymous `aithos.data.get_schema` / `list_schemas` RPC yet —
+  apps that want to read schemas dynamically must bundle them.
+- `did:aithos:…` resolution and gamma log persistence remain deferred
+  to Sub-jalon 3.2c.2 / 3.2c.3.
+
 ## 0.3.0-alpha.1 — 2026-05-14
 
 ### Delegate flow is now real (Sub-jalon 3.2b)
