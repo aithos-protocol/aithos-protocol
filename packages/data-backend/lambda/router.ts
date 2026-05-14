@@ -35,6 +35,11 @@ import {
   updateRecordHandler,
   deleteRecordHandler,
 } from "./handlers/records.js";
+import {
+  authorizeAppHandler,
+  revokeAppHandler,
+  rotateCmkHandler,
+} from "./handlers/authorization.js";
 import { jsonRpcError, jsonRpcResult, RpcError } from "./jsonrpc.js";
 
 const PROTOCOL_VERSION = process.env.AITHOS_DATA_PROTOCOL_VERSION ?? "0.1.0";
@@ -60,6 +65,11 @@ const HANDLERS: Record<string, Handler> = {
   "aithos.data.insert_record": insertRecordHandler,
   "aithos.data.update_record": updateRecordHandler,
   "aithos.data.delete_record": deleteRecordHandler,
+
+  // Authorization primitives (Sub-jalon 3.2b)
+  "aithos.data.authorize_app": authorizeAppHandler,
+  "aithos.data.revoke_app": revokeAppHandler,
+  "aithos.data.rotate_cmk": rotateCmkHandler,
 };
 
 /**

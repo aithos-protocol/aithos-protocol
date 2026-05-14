@@ -102,6 +102,19 @@ export class AithosDataPdsStack extends Stack {
     });
 
     /* -------------------------------------------------------------------- */
+    /*  Revocations table (mandate revocations, spec §4.6)                  */
+    /* -------------------------------------------------------------------- */
+
+    const revocationsTable = new Table(this, "RevocationsTable", {
+      tableName: "aithos-data-pds-revocations-dev",
+      partitionKey: { name: "mandate_id", type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      encryption: TableEncryption.AWS_MANAGED,
+      pointInTimeRecovery: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    /* -------------------------------------------------------------------- */
     /*  Lambda router                                                        */
     /* -------------------------------------------------------------------- */
 
@@ -121,6 +134,7 @@ export class AithosDataPdsStack extends Stack {
       environment: {
         DATA_TABLE_NAME: table.tableName,
         NONCE_TABLE_NAME: nonceTable.tableName,
+        REVOCATIONS_TABLE_NAME: revocationsTable.tableName,
         AITHOS_DATA_PROTOCOL_VERSION: "0.1.0",
       },
       bundling: {
@@ -137,6 +151,7 @@ export class AithosDataPdsStack extends Stack {
 
     table.grantReadWriteData(router);
     nonceTable.grantReadWriteData(router);
+    revocationsTable.grantReadWriteData(router);
 
     /* -------------------------------------------------------------------- */
     /*  HTTP API Gateway                                                     */

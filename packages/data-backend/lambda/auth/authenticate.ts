@@ -23,6 +23,7 @@ import { ed25519PublicKeyToMultibase } from "@aithos/protocol-core/did";
 import { RpcError } from "../jsonrpc.js";
 import { resolveIssuerDoc } from "./did-resolver.js";
 import { replayCache } from "./nonce-store.js";
+import { findRevocation } from "./revocations.js";
 
 /**
  * Authenticated caller. Returned by `authenticate()`; passed to every
@@ -87,9 +88,22 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
     expectedMethod: input.method,
     params: businessParams,
     resolveIssuerDoc,
-    // TODO Sub-jalon 3.2b: ctx.findRevocation queries the platform
-    // revocation index. v0.1 dev: skip — revocations are checked
-    // out-of-band by the subject's client today.
+    findRevocation: async (mandateId) => {
+      const rev = await findRevocation(mandateId);
+      if (!rev) return null;
+      // Project to the Revocation shape the verifier expects. The
+      // verifier reads only `revoked_at` and `reason` from this object,
+      // so the other fields are placeholders that satisfy the type.
+      return {
+        "aithos-revocation": "0.1.0",
+        mandate_id: mandateId,
+        issuer: "",
+        issued_by_key: "",
+        revoked_at: rev.revoked_at,
+        reason: rev.reason ?? "revoked",
+        signature: { alg: "ed25519", key: "", value: "" },
+      } as unknown as Awaited<ReturnType<NonNullable<VerifyEnvelopeContext["findRevocation"]>>>;
+    },
     replay: replayCache,
   };
 

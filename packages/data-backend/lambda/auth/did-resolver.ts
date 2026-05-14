@@ -89,16 +89,31 @@ function resolveDidKey(did: string): DidDocument {
   // metadata; we fill the Aithos extension fields with stable defaults
   // so envelope verification (which reads only `id` and
   // `verificationMethod`) is unaffected.
+  //
+  // We expose the same Ed25519 key under FOUR URLs:
+  //   - did:key:X#X            (canonical did:key form)
+  //   - did:key:X#public        \
+  //   - did:key:X#circle        | sphere aliases used by Aithos mandates
+  //   - did:key:X#self          /
+  //
+  // This is a pragmatic accommodation for Sub-jalon 3.2b: the mandate
+  // shape from @aithos/protocol-core expects `issued_by_key` to be of
+  // the form `<did>#<sphere>` where sphere ∈ {public, circle, self}.
+  // A did:key has only one key, so all sphere aliases point to it.
+  // When we add did:aithos:… resolution in a later jalon, real subjects
+  // will have distinct keys per sphere.
+  const sphereAliases = ["public", "circle", "self"] as const;
+  const baseVm = {
+    type: "Ed25519VerificationKey2020" as const,
+    controller: did,
+    publicKeyMultibase: canonicalMultibase,
+  };
   return {
     "@context": ["https://www.w3.org/ns/did/v1"],
     id: did,
     verificationMethod: [
-      {
-        id: `${did}#${canonicalMultibase}`,
-        type: "Ed25519VerificationKey2020",
-        controller: did,
-        publicKeyMultibase: canonicalMultibase,
-      },
+      { ...baseVm, id: `${did}#${canonicalMultibase}` },
+      ...sphereAliases.map((s) => ({ ...baseVm, id: `${did}#${s}` })),
     ],
     keyAgreement: [],
     aithos: {

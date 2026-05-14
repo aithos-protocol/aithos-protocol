@@ -3,10 +3,11 @@
 AWS reference implementation of the Aithos **data sub-protocol** PDS
 (Personal Data Server). See [spec/data/](../../spec/data/00-overview.md).
 
-> **Status:** Sub-jalon 3.2a — authentication is now real. Every call
-> to `/mcp/primitives/{read,write}` requires a valid signed envelope
-> per spec chapter 11. Anyone holding only a DID **cannot** access
-> any data.
+> **Status:** Sub-jalon 3.2b — delegate flow is real. Owners can
+> issue, attach, and revoke mandates that grant scoped access to
+> third-party apps. Apps authenticate with their own grantee key and
+> the subject's mandate. Revocations are persisted and consulted on
+> every authenticated request.
 
 ## What's here
 
@@ -15,7 +16,7 @@ AWS reference implementation of the Aithos **data sub-protocol** PDS
 - **Lambda router** (`lambda/router.ts`) — JSON-RPC 2.0 dispatcher.
 - **Handlers** (`lambda/handlers/`) — collection and record primitives.
 
-## What's implemented (Sub-jalon 3.2a)
+## What's implemented (Sub-jalon 3.2b)
 
 | Method | Handler | Spec |
 |---|---|---|
@@ -27,6 +28,9 @@ AWS reference implementation of the Aithos **data sub-protocol** PDS
 | `aithos.data.list_records` | `records.ts` | §5.3.5 |
 | `aithos.data.update_record` | `records.ts` | §5.4.3 |
 | `aithos.data.delete_record` | `records.ts` | §5.4.4 |
+| `aithos.data.authorize_app` | `authorization.ts` | §5.4.5 |
+| `aithos.data.revoke_app` | `authorization.ts` | §5.4.6 |
+| `aithos.data.rotate_cmk` | `authorization.ts` | §5.4.7 |
 
 Plus a `/healthz` GET endpoint for liveness probes (no envelope required).
 
@@ -48,11 +52,11 @@ spec chapter 11, verified by the full 9-step path in
 
 ## What's NOT yet implemented
 
-- `authorize_app`, `revoke_app`, `rotate_cmk` (Sub-jalon 3.2b)
-- `did:aithos:…` resolution (currently `did:key:…` only) — 3.2b
-- Mandate revocation lookup — 3.2b
-- Schema validation against the registry — 3.2c
-- Gamma log persistence — 3.2c
+- `did:aithos:…` resolution (currently `did:key:…` only) — Sub-jalon 3.2c
+- Schema validation against the registry — Sub-jalon 3.2c
+- Gamma log persistence (currently a placeholder `gamma_pending_<ts>`) — Sub-jalon 3.2c
+- CMK rotation: wrap cryptographic validation (today the platform
+  trusts the owner client to produce correct wraps) — later
 - Portability — export/import `.data` — later jalon
 
 ## Architecture
@@ -148,12 +152,14 @@ curl -X POST "$API_URL/mcp/primitives/write" \
   }'
 ```
 
-## End-to-end test (Sub-jalon 3.2a acceptance)
+## End-to-end tests
 
-Run `node test-e2e/auth-flow.mjs` against a deployed stack. It
-generates a `did:key:…` locally, signs envelopes with
-`@aithos/protocol-core`, and validates 14 assertions across the happy
-path and the negative-auth surface:
+Two suites against the live deployment. Together: **25 assertions, all green.**
+
+### `test-e2e/auth-flow.mjs` (Sub-jalon 3.2a)
+
+14 assertions covering owner-mode signed envelopes and the negative
+auth surface:
 
 **Happy path:**
 1. `create_collection` (owner-signed) → 200
@@ -170,6 +176,22 @@ path and the negative-auth surface:
 10. Method mismatch (envelope.method ≠ RPC method) → 401 `AITHOS_BAD_ENVELOPE`
 11. Replayed nonce → 401 `AITHOS_REPLAY_DETECTED`
 12. `envelope.iss` ≠ `subject_did` → 403 `AITHOS_INSUFFICIENT_SCOPE`
+
+### `test-e2e/delegate-flow.mjs` (Sub-jalon 3.2b)
+
+11 assertions covering the full mandate lifecycle:
+
+1. Owner creates collection
+2. Owner mints WRITE mandate for app A
+3. `authorize_app(mandate_A, wrap_A)` succeeds
+4. App A `insert_record` (mandate-signed) succeeds
+5. App A `update_record` succeeds
+6. App A `get_record` succeeds (write implies read)
+7. Owner mints READ-only mandate for app B and authorizes
+8. App B `insert_record` → 403 `AITHOS_INSUFFICIENT_SCOPE`
+9. App B `get_record` succeeds
+10. `revoke_app(mandate_A)` succeeds
+11. App A `get_record` after revoke → 403 `AITHOS_MANDATE_REVOKED`
 
 ## Security model (current state)
 
