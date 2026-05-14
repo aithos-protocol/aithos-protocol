@@ -3,9 +3,9 @@
 AWS reference implementation of the Aithos **data sub-protocol** PDS
 (Personal Data Server). See [spec/data/](../../spec/data/00-overview.md).
 
-> **Status:** Sub-jalon 3.2c.1 — schema validation is now real.
-> Records are validated against the registered schema on every write.
-> The first normative core schema `aithos.contacts.v1` is shipped.
+> **Status:** Sub-jalon 3.2c.2 — gamma log persisted. Every mutation
+> emits a hash-chained audit entry; `aithos.data.list_gamma_entries`
+> exposes the chain to the subject for verification.
 
 ## What's here
 

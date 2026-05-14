@@ -47,6 +47,8 @@ import {
   validateRequired,
 } from "./collections.js";
 import { getSchema, validateMetadata } from "../schemas/registry.js";
+import { appendGammaEntry } from "../gamma/store.js";
+import { hashJson } from "../gamma/hash-util.js";
 
 /* -------------------------------------------------------------------------- */
 /*  insert_record                                                             */
@@ -154,9 +156,25 @@ export async function insertRecordHandler(caller: Caller): Promise<unknown> {
       /* best-effort */
     });
 
+  // Gamma audit entry
+  const gamma = await appendGammaEntry({
+    subject: subjectDid,
+    op: "data.record.created",
+    payload: {
+      collection_urn: p.collection_urn,
+      record_id: recordId,
+      schema: col.Item.schema,
+      metadata_hash: hashJson(metadata),
+      payload_hash: hashJson(p.payload),
+    },
+    authoredByEnvelopeNonce: caller.envelopeNonce,
+    authoredByPubkey: caller.signerPubkeyMultibase,
+    ...(caller.mandateId ? { authorizedBy: caller.mandateId } : {}),
+  });
+
   return {
     record_id: recordId,
-    gamma_ref: `gamma_pending_${now}`,
+    gamma_ref: gamma.id,
   };
 }
 
@@ -346,10 +364,27 @@ export async function updateRecordHandler(caller: Caller): Promise<unknown> {
       /* best-effort */
     });
 
+  // Gamma audit entry
+  const gamma = await appendGammaEntry({
+    subject: subjectDid,
+    op: "data.record.modified",
+    payload: {
+      collection_urn: p.collection_urn,
+      record_id: p.record_id,
+      prev_metadata_hash: hashJson(r.Item.metadata ?? {}),
+      prev_payload_hash: hashJson(r.Item.payload ?? {}),
+      metadata_hash: hashJson(newMetadata),
+      payload_hash: hashJson(p.payload),
+    },
+    authoredByEnvelopeNonce: caller.envelopeNonce,
+    authoredByPubkey: caller.signerPubkeyMultibase,
+    ...(caller.mandateId ? { authorizedBy: caller.mandateId } : {}),
+  });
+
   return {
     record_id: p.record_id,
     modified_at: now,
-    gamma_ref: `gamma_pending_${now}`,
+    gamma_ref: gamma.id,
   };
 }
 
@@ -428,11 +463,27 @@ export async function deleteRecordHandler(caller: Caller): Promise<unknown> {
       /* best-effort */
     });
 
+  // Gamma audit entry
+  const gamma = await appendGammaEntry({
+    subject: subjectDid,
+    op: "data.record.deleted",
+    payload: {
+      collection_urn: p.collection_urn,
+      record_id: p.record_id,
+      prev_metadata_hash: hashJson(r.Item.metadata ?? {}),
+      prev_payload_hash: hashJson(r.Item.payload ?? {}),
+      hard_delete: p.hard_delete === true,
+    },
+    authoredByEnvelopeNonce: caller.envelopeNonce,
+    authoredByPubkey: caller.signerPubkeyMultibase,
+    ...(caller.mandateId ? { authorizedBy: caller.mandateId } : {}),
+  });
+
   return {
     record_id: p.record_id,
     deleted_at: now,
     hard_delete: p.hard_delete === true,
-    gamma_ref: `gamma_pending_${now}`,
+    gamma_ref: gamma.id,
   };
 }
 

@@ -42,6 +42,8 @@ export interface Caller {
   readonly mandate?: SignedEnvelope["mandate"];
   /** Signer Ed25519 pubkey in multibase form. */
   readonly signerPubkeyMultibase: string;
+  /** Envelope nonce of this call — used as the gamma audit trace. */
+  readonly envelopeNonce: string;
   /** Per-call params, with `_envelope` stripped. */
   readonly params: Record<string, unknown>;
 }
@@ -122,6 +124,7 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
     ...(mandateId ? { mandateId } : {}),
     ...(mandate ? { mandate, mandateScopes: mandate.scopes } : {}),
     signerPubkeyMultibase: ed25519PublicKeyToMultibase(result.signerKey),
+    envelopeNonce: (envelope as SignedEnvelope).nonce,
     params: businessParams,
   };
 }

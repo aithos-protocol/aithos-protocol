@@ -43,6 +43,8 @@ import { resolveIssuerDoc } from "../auth/did-resolver.js";
 import { recordRevocation } from "../auth/revocations.js";
 import { parseCollectionUrn } from "./records.js";
 import { validateRequired } from "./collections.js";
+import { appendGammaEntry } from "../gamma/store.js";
+import { hashJson } from "../gamma/hash-util.js";
 
 /* -------------------------------------------------------------------------- */
 /*  authorize_app                                                             */
@@ -215,11 +217,28 @@ export async function authorizeAppHandler(caller: Caller): Promise<unknown> {
     }
   });
 
+  // Gamma audit entry
+  const gamma = await appendGammaEntry({
+    subject: subjectDid,
+    op: "data.collection.authorize_grantee",
+    payload: {
+      collection_urn: p.collection_urn,
+      mandate_id: mandate.id,
+      grantee_did_url: p.wrap!.recipient,
+      grantee_pubkey: mandate.grantee.pubkey,
+      scopes: mandate.scopes,
+      not_before: mandate.not_before,
+      not_after: mandate.not_after,
+    },
+    authoredByEnvelopeNonce: caller.envelopeNonce,
+    authoredByPubkey: caller.signerPubkeyMultibase,
+  });
+
   return {
     wrap_index: newWraps.length - 1,
     mandate_id: mandate.id,
     authorized_at: now,
-    gamma_ref: `gamma_pending_${now}`,
+    gamma_ref: gamma.id,
   };
 }
 
@@ -350,11 +369,26 @@ export async function revokeAppHandler(caller: Caller): Promise<unknown> {
     ...(p.revocation ? { revocation_doc: p.revocation } : {}),
   });
 
+  // Gamma audit entry
+  const gamma = await appendGammaEntry({
+    subject: subjectDid,
+    op: "data.collection.revoke_grantee",
+    payload: {
+      collection_urn: p.collection_urn,
+      mandate_id: p.mandate_id,
+      revoked_at: now,
+      rotated_cmk: p.rotate_cmk === true,
+      ...(p.revocation?.reason ? { reason: p.revocation.reason } : {}),
+    },
+    authoredByEnvelopeNonce: caller.envelopeNonce,
+    authoredByPubkey: caller.signerPubkeyMultibase,
+  });
+
   return {
     mandate_id: p.mandate_id,
     revoked_at: now,
     rotated_cmk: p.rotate_cmk === true,
-    gamma_ref: `gamma_pending_${now}`,
+    gamma_ref: gamma.id,
   };
 }
 
@@ -432,10 +466,24 @@ export async function rotateCmkHandler(caller: Caller): Promise<unknown> {
     }),
   );
 
+  // Gamma audit entry
+  const gamma = await appendGammaEntry({
+    subject: subjectDid,
+    op: "data.collection.rotate_cmk",
+    payload: {
+      collection_urn: p.collection_urn,
+      reason: "manual",
+      new_cmk_envelope_hash: hashJson(p.new_cmk_envelope),
+      records_rewrapped: p.re_wrapped_deks?.length ?? 0,
+    },
+    authoredByEnvelopeNonce: caller.envelopeNonce,
+    authoredByPubkey: caller.signerPubkeyMultibase,
+  });
+
   return {
     rotated_at: now,
     records_rewrapped: p.re_wrapped_deks?.length ?? 0,
-    gamma_ref: `gamma_pending_${now}`,
+    gamma_ref: gamma.id,
   };
 }
 

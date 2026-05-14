@@ -1,5 +1,101 @@
 # @aithos/data-backend — Changelog
 
+## 0.3.0-alpha.3 — 2026-05-14
+
+### Gamma log is now persisted and verifiable (Sub-jalon 3.2c.2)
+
+Every mutation on a subject's collections produces a signed entry in
+a hash-chained audit log, queryable via a new RPC primitive.
+
+### Added
+
+- **New table** `aithos-data-pds-gamma-dev` (PK = `subject_did`,
+  SK = `entry_id` ULID).
+- **`lambda/gamma/store.ts`** — `appendGammaEntry`, `getHead`,
+  `listEntries`, `verifyChain`. SHA-256 chain via `prev_hash`.
+- **`lambda/gamma/hash-util.ts`** — `hashJson(value)` returns
+  `sha256:<hex>` of JCS-canonicalized form. Used by handlers to
+  commit to record / collection / CMK content without exposing it.
+- **Gamma append wired into every mutation handler:**
+  - `create_collection` → `data.collection.created`
+  - `insert_record` → `data.record.created`
+  - `update_record` → `data.record.modified`
+  - `delete_record` → `data.record.deleted`
+  - `authorize_app` → `data.collection.authorize_grantee`
+  - `revoke_app` → `data.collection.revoke_grantee`
+  - `rotate_cmk` → `data.collection.rotate_cmk`
+- Returned `gamma_ref` now points at a real ULID-keyed entry (no
+  more `gamma_pending_*` placeholders).
+- **New RPC primitive** `aithos.data.list_gamma_entries` — owner-only;
+  paginated; supports `op_prefix` filter and inline chain verification
+  via `verify: true`.
+
+### Entry shape
+
+```json
+{
+  "id": "gamma_01J...",
+  "at": "2026-05-14T07:30:14Z",
+  "subject": "did:key:...",
+  "op": "data.record.created",
+  "payload": {
+    "collection_urn": "...",
+    "record_id": "...",
+    "metadata_hash": "sha256:...",
+    "payload_hash": "sha256:..."
+  },
+  "prev_hash": "sha256:...",
+  "hash": "sha256:...",
+  "authored_by_envelope_nonce": "...",
+  "authored_by_pubkey": "z6Mk...",
+  "authorized_by": "mandate_..."  // only when delegate-authored
+}
+```
+
+### Validated end-to-end
+
+`test-e2e/gamma-flow.mjs` — 21 assertions, all green:
+
+1. Collection creation emits `data.collection.created`
+2-4. 3 inserts emit 3× `data.record.created`
+5. Update emits `data.record.modified`
+6. Delete emits `data.record.deleted`
+7. `list_gamma_entries` returns 6 entries
+8-12. Each op count is correct
+13. `verifyChain` returns `ok: true`
+14. First entry's `prev_hash` is the genesis sentinel
+15. Every entry's `prev_hash` matches the previous entry's `hash`
+16. Every entry carries audit metadata (envelope nonce + pubkey)
+17. Every entry's `hash` is a well-formed `sha256:<64-hex>`
+18. `op_prefix=data.record` filters correctly (5 entries)
+19. Cross-subject snooping refused with 403 `AITHOS_INSUFFICIENT_SCOPE`
+
+Regression suites all green:
+- `auth-flow.mjs` (3.2a) — 14/14
+- `delegate-flow.mjs` (3.2b) — 11/11
+- `schema-flow.mjs` (3.2c.1) — 13/13
+
+**Total live deployment: 59 assertions all green.**
+
+### v0.1 dev simplifications (documented)
+
+- **No per-entry Ed25519 signature.** The spec asks for each entry to
+  be signed by either a sphere key (subject direct) or a delegate
+  key (with `authorized_by` mandate id). v0.1 dev relies on the
+  envelope signature instead: `authored_by_envelope_nonce` provides
+  the audit trace back to the verified-and-replay-protected envelope
+  that produced the entry. A future Sub-jalon adds full per-entry
+  signing per spec §10.5.
+- **Concurrency.** Concurrent appends on the same subject may both
+  read the same head before either commits, producing a chain fork.
+  In practice ULIDs prevent silent collision (the second commit's
+  ULID is later) but `verifyChain` will then report the fork. Future
+  Sub-jalon adds compare-and-swap on a head pointer attribute.
+- **Eth / data gamma fusion.** Per spec §8.2, a subject's Ethos and
+  data mutations share a single logical chain. v0.1 keeps them in
+  separate tables (and thus separate chains) for clarity. Fusion is
+  a future protocol-level decision.
+
 ## 0.3.0-alpha.2 — 2026-05-14
 
 ### Schema validation is now real (Sub-jalon 3.2c.1)

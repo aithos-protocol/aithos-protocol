@@ -115,6 +115,29 @@ export class AithosDataPdsStack extends Stack {
     });
 
     /* -------------------------------------------------------------------- */
+    /*  Gamma log table (audit chain, spec/data §8)                         */
+    /* -------------------------------------------------------------------- */
+    //
+    // PK = subject_did (one chain per subject; data and Ethos gamma
+    //                   share the same logical chain per spec §8.2 but
+    //                   live in separate tables here for clarity)
+    // SK = entry_id   (ULID, sorts chronologically)
+    //
+    // Optional GSI for `latest head per subject` is computed by the
+    // store's `getHead()` doing a Query(PK=subject, ScanIndexForward=false,
+    // Limit=1). No extra index needed.
+
+    const gammaTable = new Table(this, "GammaTable", {
+      tableName: "aithos-data-pds-gamma-dev",
+      partitionKey: { name: "subject_did", type: AttributeType.STRING },
+      sortKey: { name: "entry_id", type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      encryption: TableEncryption.AWS_MANAGED,
+      pointInTimeRecovery: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    /* -------------------------------------------------------------------- */
     /*  Lambda router                                                        */
     /* -------------------------------------------------------------------- */
 
@@ -135,6 +158,7 @@ export class AithosDataPdsStack extends Stack {
         DATA_TABLE_NAME: table.tableName,
         NONCE_TABLE_NAME: nonceTable.tableName,
         REVOCATIONS_TABLE_NAME: revocationsTable.tableName,
+        GAMMA_TABLE_NAME: gammaTable.tableName,
         AITHOS_DATA_PROTOCOL_VERSION: "0.1.0",
       },
       bundling: {
@@ -152,6 +176,7 @@ export class AithosDataPdsStack extends Stack {
     table.grantReadWriteData(router);
     nonceTable.grantReadWriteData(router);
     revocationsTable.grantReadWriteData(router);
+    gammaTable.grantReadWriteData(router);
 
     /* -------------------------------------------------------------------- */
     /*  HTTP API Gateway                                                     */

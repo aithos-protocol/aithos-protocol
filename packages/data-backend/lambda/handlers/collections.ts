@@ -34,6 +34,8 @@ import {
   type Caller,
 } from "../auth/authenticate.js";
 import { getSchema } from "../schemas/registry.js";
+import { appendGammaEntry } from "../gamma/store.js";
+import { hashJson } from "../gamma/hash-util.js";
 
 /* -------------------------------------------------------------------------- */
 /*  create_collection                                                         */
@@ -109,6 +111,22 @@ export async function createCollectionHandler(caller: Caller): Promise<unknown> 
     }
     throw err;
   }
+
+  // Gamma audit entry
+  const gamma = await appendGammaEntry({
+    subject: p.subject_did!,
+    op: "data.collection.created",
+    payload: {
+      collection_urn: collectionUrn,
+      collection_name: p.collection_name,
+      schema: p.schema,
+      forward_secrecy: item.forward_secrecy,
+      cmk_envelope_hash: hashJson(p.cmk_envelope),
+    },
+    authoredByEnvelopeNonce: caller.envelopeNonce,
+    authoredByPubkey: caller.signerPubkeyMultibase,
+  });
+  void gamma;
 
   return {
     urn: collectionUrn,
