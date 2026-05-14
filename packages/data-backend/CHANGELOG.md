@@ -1,5 +1,25 @@
 # @aithos/data-backend — Changelog
 
+## 0.3.0-alpha.4 — 2026-05-14
+
+### list_records filter support
+
+The `aithos.data.list_records` handler now applies caller-supplied
+filters server-side, matching the RFC §5.3.5 grammar:
+
+- `equals: { field, value }` — exact match on any indexable field
+- `contains: { field, value }` — substring on a string field
+- `tags_any: [...]` — set membership (OR over tags array)
+- `tags_all: [...]` — set membership (AND over tags array)
+- `range: { field, gte?, lte? }` — bounded range on a string field
+  (typically ISO timestamps)
+
+Multiple criteria are AND-ed. Translated to DynamoDB `FilterExpression`
+on the `gsi1_by_collection_mtime` GSI.
+
+This unblocks the SDK's `client.data('contacts').list({ filter: { ... } })`
+ergonomic API.
+
 ## 0.3.0-alpha.3 — 2026-05-14
 
 ### Gamma log is now persisted and verifiable (Sub-jalon 3.2c.2)

@@ -225,6 +225,15 @@ interface ListRecordsParams {
   limit?: number;
   cursor?: string;
   include_deleted?: boolean;
+  filter?: RecordFilter;
+}
+
+interface RecordFilter {
+  equals?: { field: string; value: string | number | boolean };
+  contains?: { field: string; value: string };
+  tags_any?: string[];
+  tags_all?: string[];
+  range?: { field: string; gte?: string; lte?: string };
 }
 
 export async function listRecordsHandler(caller: Caller): Promise<unknown> {
@@ -239,10 +248,63 @@ export async function listRecordsHandler(caller: Caller): Promise<unknown> {
   const order = p.order ?? "newest";
   const exclusiveStartKey = p.cursor ? decodeCursor(p.cursor) : undefined;
 
+  // Build FilterExpression from caller-supplied filter and include_deleted.
+  const filterClauses: string[] = [];
   const exprAttrValues: Record<string, unknown> = {
     ":pk": gsi1pkForCollection(subjectDid, collectionName),
   };
-  if (!p.include_deleted) exprAttrValues[":f"] = false;
+  const exprAttrNames: Record<string, string> = {};
+
+  if (!p.include_deleted) {
+    filterClauses.push("deleted = :f_deleted");
+    exprAttrValues[":f_deleted"] = false;
+  }
+
+  const flt = p.filter;
+  if (flt?.equals) {
+    exprAttrNames["#f_eq_k"] = "metadata";
+    exprAttrNames["#f_eq_v"] = flt.equals.field;
+    exprAttrValues[":f_eq"] = flt.equals.value;
+    filterClauses.push("#f_eq_k.#f_eq_v = :f_eq");
+  }
+  if (flt?.contains) {
+    exprAttrNames["#f_ct_k"] = "metadata";
+    exprAttrNames["#f_ct_v"] = flt.contains.field;
+    exprAttrValues[":f_ct"] = flt.contains.value;
+    filterClauses.push("contains(#f_ct_k.#f_ct_v, :f_ct)");
+  }
+  if (flt?.tags_any && flt.tags_any.length > 0) {
+    exprAttrNames["#f_ta_k"] = "metadata";
+    exprAttrNames["#f_ta_v"] = "tags";
+    const orParts: string[] = [];
+    flt.tags_any.forEach((t, i) => {
+      const ph = `:f_ta_${i}`;
+      exprAttrValues[ph] = t;
+      orParts.push(`contains(#f_ta_k.#f_ta_v, ${ph})`);
+    });
+    filterClauses.push(`(${orParts.join(" OR ")})`);
+  }
+  if (flt?.tags_all && flt.tags_all.length > 0) {
+    exprAttrNames["#f_taa_k"] = "metadata";
+    exprAttrNames["#f_taa_v"] = "tags";
+    flt.tags_all.forEach((t, i) => {
+      const ph = `:f_taa_${i}`;
+      exprAttrValues[ph] = t;
+      filterClauses.push(`contains(#f_taa_k.#f_taa_v, ${ph})`);
+    });
+  }
+  if (flt?.range) {
+    exprAttrNames["#f_rg_k"] = "metadata";
+    exprAttrNames["#f_rg_v"] = flt.range.field;
+    if (flt.range.gte) {
+      exprAttrValues[":f_rg_gte"] = flt.range.gte;
+      filterClauses.push("#f_rg_k.#f_rg_v >= :f_rg_gte");
+    }
+    if (flt.range.lte) {
+      exprAttrValues[":f_rg_lte"] = flt.range.lte;
+      filterClauses.push("#f_rg_k.#f_rg_v <= :f_rg_lte");
+    }
+  }
 
   const r = await ddb.send(
     new QueryCommand({
@@ -250,10 +312,15 @@ export async function listRecordsHandler(caller: Caller): Promise<unknown> {
       IndexName: "gsi1_by_collection_mtime",
       KeyConditionExpression: "gsi1pk = :pk",
       ExpressionAttributeValues: exprAttrValues,
+      ...(Object.keys(exprAttrNames).length > 0
+        ? { ExpressionAttributeNames: exprAttrNames }
+        : {}),
       ScanIndexForward: order === "oldest",
       Limit: limit,
       ExclusiveStartKey: exclusiveStartKey,
-      ...(p.include_deleted ? {} : { FilterExpression: "deleted = :f" }),
+      ...(filterClauses.length > 0
+        ? { FilterExpression: filterClauses.join(" AND ") }
+        : {}),
     }),
   );
 
