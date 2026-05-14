@@ -1,0 +1,20 @@
+{
+  "app": "tsx bin/app.ts",
+  "watch": {
+    "include": ["bin/**", "cdk/**", "lambda/**"],
+    "exclude": ["README.md", "cdk*.json", "**/*.d.ts", "node_modules/", "test/", "cdk.out/"]
+  },
+  "context": {
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
+    "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
+    "@aws-cdk/aws-lambda:checkSqsPermission": true,
+    "@aws-cdk/core:enablePartitionLiterals": true,
+    "@aws-cdk/aws-events:eventsTargetQueueSameAccount": true,
+    "@aws-cdk/aws-iam:standardizedServicePrincipals": true,
+    "@aws-cdk/core:newStyleStackSynthesis": true
+  }
+}

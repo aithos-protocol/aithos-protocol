@@ -1,0 +1,182 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Mathieu Colla
+
+/**
+ * AithosDataPdsStack — the AWS infrastructure for the Aithos data
+ * sub-protocol PDS (Personal Data Server).
+ *
+ * Components:
+ *   - DynamoDB table (single-table design)
+ *       PK = subject_did               (partition key)
+ *       SK = collection#record_id      (sort key; collection metadata sits at "<col>#")
+ *       GSI1: PK = subject_did#collection, SK = metadata.modified_at
+ *         (enables list_records filtered by collection, sorted by mtime)
+ *
+ *   - Lambda router (Node 20, esbuild-bundled)
+ *       single function dispatches over JSON-RPC method name
+ *
+ *   - HTTP API Gateway (cheaper than REST, sufficient for our needs)
+ *       routes: POST /mcp/primitives/read, POST /mcp/primitives/write
+ *
+ * Notes for v0.1 dev:
+ *   - On-demand billing on the table — no capacity planning needed.
+ *   - PITR enabled for recovery in case of accidental delete during dev.
+ *   - removalPolicy=DESTROY so `cdk destroy` cleans up entirely (no
+ *     orphan tables surviving teardown).
+ *   - Lambda authorizer is intentionally absent in this iteration; the
+ *     handler trusts the caller. Sub-jalon 3.2 wires the real envelope
+ *     + mandate verification.
+ */
+
+import {
+  Duration,
+  RemovalPolicy,
+  Stack,
+  type StackProps,
+  CfnOutput,
+} from "aws-cdk-lib";
+import {
+  AttributeType,
+  BillingMode,
+  Table,
+  TableEncryption,
+  ProjectionType,
+} from "aws-cdk-lib/aws-dynamodb";
+import {
+  HttpApi,
+  HttpMethod,
+  CorsHttpMethod,
+} from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import { Runtime, LoggingFormat, Architecture } from "aws-cdk-lib/aws-lambda";
+import {
+  NodejsFunction,
+  OutputFormat,
+} from "aws-cdk-lib/aws-lambda-nodejs";
+import { RetentionDays } from "aws-cdk-lib/aws-logs";
+import type { Construct } from "constructs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export class AithosDataPdsStack extends Stack {
+  constructor(scope: Construct, id: string, props?: StackProps) {
+    super(scope, id, props);
+
+    /* -------------------------------------------------------------------- */
+    /*  DynamoDB — single-table design                                      */
+    /* -------------------------------------------------------------------- */
+
+    const table = new Table(this, "DataTable", {
+      tableName: "aithos-data-pds-dev",
+      partitionKey: { name: "pk", type: AttributeType.STRING },
+      sortKey: { name: "sk", type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      encryption: TableEncryption.AWS_MANAGED,
+      pointInTimeRecovery: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    // GSI1: list records in a collection sorted by modified_at desc
+    // PK = subject_did#collection
+    // SK = metadata.modified_at  (ISO 8601 string, sorts chronologically)
+    table.addGlobalSecondaryIndex({
+      indexName: "gsi1_by_collection_mtime",
+      partitionKey: { name: "gsi1pk", type: AttributeType.STRING },
+      sortKey: { name: "gsi1sk", type: AttributeType.STRING },
+      projectionType: ProjectionType.ALL,
+    });
+
+    /* -------------------------------------------------------------------- */
+    /*  Lambda router                                                        */
+    /* -------------------------------------------------------------------- */
+
+    const router = new NodejsFunction(this, "RouterFn", {
+      functionName: "aithos-data-pds-router-dev",
+      runtime: Runtime.NODEJS_20_X,
+      architecture: Architecture.ARM_64,
+      entry: path.join(__dirname, "..", "lambda", "router.ts"),
+      depsLockFilePath:
+        process.env.AITHOS_DEPS_LOCK_FILE ??
+        path.join(__dirname, "..", "..", "..", "package-lock.json"),
+      handler: "handler",
+      memorySize: 512,
+      timeout: Duration.seconds(15),
+      loggingFormat: LoggingFormat.JSON,
+      logRetention: RetentionDays.ONE_WEEK,
+      environment: {
+        DATA_TABLE_NAME: table.tableName,
+        AITHOS_DATA_PROTOCOL_VERSION: "0.1.0",
+      },
+      bundling: {
+        target: "node20",
+        format: OutputFormat.ESM,
+        mainFields: ["module", "main"],
+        externalModules: ["@aws-sdk/*"],
+        // ESM workaround: emit a require() shim so esbuild-bundled
+        // CommonJS deps still resolve at runtime.
+        banner:
+          "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
+      },
+    });
+
+    table.grantReadWriteData(router);
+
+    /* -------------------------------------------------------------------- */
+    /*  HTTP API Gateway                                                     */
+    /* -------------------------------------------------------------------- */
+
+    const api = new HttpApi(this, "DataPdsApi", {
+      apiName: "aithos-data-pds-dev",
+      description: "Aithos data sub-protocol PDS — dev API",
+      corsPreflight: {
+        allowOrigins: ["*"],
+        allowMethods: [CorsHttpMethod.POST, CorsHttpMethod.OPTIONS],
+        allowHeaders: ["content-type", "authorization"],
+        maxAge: Duration.hours(1),
+      },
+    });
+
+    const integration = new HttpLambdaIntegration(
+      "RouterIntegration",
+      router,
+    );
+
+    api.addRoutes({
+      path: "/mcp/primitives/read",
+      methods: [HttpMethod.POST],
+      integration,
+    });
+    api.addRoutes({
+      path: "/mcp/primitives/write",
+      methods: [HttpMethod.POST],
+      integration,
+    });
+    api.addRoutes({
+      path: "/healthz",
+      methods: [HttpMethod.GET],
+      integration,
+    });
+
+    /* -------------------------------------------------------------------- */
+    /*  Outputs                                                              */
+    /* -------------------------------------------------------------------- */
+
+    new CfnOutput(this, "DataPdsApiUrl", {
+      value: api.apiEndpoint,
+      description: "Base URL for the Aithos data PDS API",
+      exportName: "AithosDataPdsApiUrl",
+    });
+
+    new CfnOutput(this, "DataTableName", {
+      value: table.tableName,
+      description: "DynamoDB table name for the data PDS",
+    });
+
+    new CfnOutput(this, "RouterFnArn", {
+      value: router.functionArn,
+      description: "ARN of the router Lambda",
+    });
+  }
+}

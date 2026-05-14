@@ -1,0 +1,38 @@
+{
+  "name": "@aithos/data-backend",
+  "version": "0.1.0-alpha.1",
+  "description": "AWS backend (DynamoDB + Lambda + API Gateway) implementing the Aithos data sub-protocol primitives. See spec/data/.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check-types": "tsc --noEmit",
+    "clean": "rm -rf dist cdk.out",
+    "cdk:synth": "cdk synth --app 'tsx bin/app.ts'",
+    "cdk:diff": "cdk diff --app 'tsx bin/app.ts' AithosDataPdsDev",
+    "cdk:deploy": "cdk deploy --app 'tsx bin/app.ts' AithosDataPdsDev --require-approval never",
+    "cdk:destroy": "cdk destroy --app 'tsx bin/app.ts' AithosDataPdsDev --force",
+    "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@aithos/data-crypto": "*",
+    "@aws-sdk/client-dynamodb": "^3.620.0",
+    "@aws-sdk/lib-dynamodb": "^3.620.0",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.140",
+    "@types/node": "^20.11.0",
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0",
+    "esbuild": "^0.23.0",
+    "tsx": "^4.11.0",
+    "typescript": "^5.5.0",
+    "aws-cdk": "^2.150.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
