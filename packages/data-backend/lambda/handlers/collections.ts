@@ -7,11 +7,11 @@
  *   - aithos.data.get_collection
  *   - aithos.data.list_collections
  *
- * Spec ref: spec/data/05-api-primitives.md §5.3.x, §5.4.1.
+ * Each handler receives a `Caller` already authenticated by the router
+ * (envelope signature verified, nonce committed, mandate validated if
+ * present). The handler enforces scope and subject ownership.
  *
- * v0.1 dev note: no envelope / mandate verification yet. Each handler
- * accepts the caller-supplied subject_did at face value. Wire the real
- * auth in Sub-jalon 3.2.
+ * Spec ref: spec/data/05-api-primitives.md §5.3.x, §5.4.1.
  */
 
 import {
@@ -28,12 +28,17 @@ import {
   skForCollection,
 } from "../ddb.js";
 import { RpcError } from "../jsonrpc.js";
+import {
+  requireScope,
+  requireSubjectMatch,
+  type Caller,
+} from "../auth/authenticate.js";
 
 /* -------------------------------------------------------------------------- */
 /*  create_collection                                                         */
 /* -------------------------------------------------------------------------- */
 
-export interface CreateCollectionParams {
+interface CreateCollectionParams {
   subject_did?: string;
   collection_name?: string;
   schema?: string;
@@ -41,11 +46,20 @@ export interface CreateCollectionParams {
   forward_secrecy?: "best_effort" | "strict";
 }
 
-export async function createCollectionHandler(
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  const p = params as CreateCollectionParams;
+export async function createCollectionHandler(caller: Caller): Promise<unknown> {
+  const p = caller.params as CreateCollectionParams;
   validateRequired(p, ["subject_did", "collection_name", "schema", "cmk_envelope"]);
+  requireSubjectMatch(caller, p.subject_did!);
+
+  // create_collection is owner-only in v0.1 — delegate cannot create a
+  // collection on behalf of the subject (the CMK is generated client-side
+  // by the subject and the wrap is for their sphere key).
+  if (caller.mode === "delegate") {
+    throw new RpcError(
+      -32042,
+      "AITHOS_INSUFFICIENT_SCOPE: create_collection is owner-only in v0.1; delegates cannot create collections",
+    );
+  }
 
   const collectionUrn = `urn:aithos:collection:${p.subject_did}:${p.collection_name}`;
   const now = new Date().toISOString();
@@ -101,16 +115,16 @@ export async function createCollectionHandler(
 /*  get_collection                                                            */
 /* -------------------------------------------------------------------------- */
 
-export interface GetCollectionParams {
+interface GetCollectionParams {
   subject_did?: string;
   collection_name?: string;
 }
 
-export async function getCollectionHandler(
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  const p = params as GetCollectionParams;
+export async function getCollectionHandler(caller: Caller): Promise<unknown> {
+  const p = caller.params as GetCollectionParams;
   validateRequired(p, ["subject_did", "collection_name"]);
+  requireSubjectMatch(caller, p.subject_did!);
+  requireScope(caller, p.collection_name!, "read");
 
   const r = await ddb.send(
     new GetCommand({
@@ -136,17 +150,24 @@ export async function getCollectionHandler(
 /*  list_collections                                                          */
 /* -------------------------------------------------------------------------- */
 
-export interface ListCollectionsParams {
+interface ListCollectionsParams {
   subject_did?: string;
   limit?: number;
   cursor?: string;
 }
 
-export async function listCollectionsHandler(
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  const p = params as ListCollectionsParams;
+export async function listCollectionsHandler(caller: Caller): Promise<unknown> {
+  const p = caller.params as ListCollectionsParams;
   validateRequired(p, ["subject_did"]);
+  requireSubjectMatch(caller, p.subject_did!);
+  // list_collections is owner-only — a delegate sees only the collection
+  // they have a wrap on, via get_collection.
+  if (caller.mode === "delegate") {
+    throw new RpcError(
+      -32042,
+      "AITHOS_INSUFFICIENT_SCOPE: list_collections is owner-only in v0.1; delegates may only call get_collection on the specific collection they hold a wrap for",
+    );
+  }
 
   const limit = clampLimit(p.limit, 20, 100);
   const exclusiveStartKey = p.cursor ? decodeCursor(p.cursor) : undefined;
@@ -155,9 +176,6 @@ export async function listCollectionsHandler(
     new QueryCommand({
       TableName: TABLE_NAME,
       KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
-      // Collection items have sk = "col#<name>" — records have sk =
-      // "col#<name>#rec#<id>". To list only collections, we need a
-      // FilterExpression because "begins_with" matches both.
       FilterExpression: "#type = :ctype",
       ExpressionAttributeNames: { "#type": "type" },
       ExpressionAttributeValues: {
@@ -179,7 +197,7 @@ export async function listCollectionsHandler(
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Helpers                                                                   */
+/*  Helpers (also used by records.ts)                                          */
 /* -------------------------------------------------------------------------- */
 
 function projectCollection(item: Record<string, unknown>): unknown {

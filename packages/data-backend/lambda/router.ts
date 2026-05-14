@@ -4,14 +4,17 @@
 /**
  * Lambda router for the Aithos data sub-protocol PDS.
  *
- * Receives JSON-RPC 2.0 requests at /mcp/primitives/{read,write} and
- * dispatches over the method name. Each handler module exports a
- * function matching `Handler` below.
+ * Pipeline per request:
+ *   1. Parse JSON-RPC envelope.
+ *   2. Dispatch on `method` to find the handler.
+ *   3. Run `authenticate()` (envelope + mandate verification +
+ *      replay-cache atomic insert). FAIL CLOSED on any error.
+ *   4. Call the handler with the verified `Caller` object.
  *
- * Authentication note (v0.1 dev):
- *   This iteration does NOT verify envelope signatures or mandates. The
- *   handler trusts the caller. Sub-jalon 3.2 wires the real verification
- *   path via @aithos/protocol-core's envelope module.
+ * Authentication is mandatory for every method exposed here in
+ * Sub-jalon 3.2a. There is no anonymous read path yet — the spec's
+ * §10.5 anonymous endpoints (resolve_handle, search, etc.) are not
+ * part of the data PDS surface, they live on the Ethos platform.
  */
 
 import type {
@@ -19,6 +22,7 @@ import type {
   APIGatewayProxyResultV2,
 } from "aws-lambda";
 
+import { authenticate, type Caller } from "./auth/authenticate.js";
 import {
   createCollectionHandler,
   getCollectionHandler,
@@ -28,8 +32,10 @@ import {
   insertRecordHandler,
   getRecordHandler,
   listRecordsHandler,
+  updateRecordHandler,
+  deleteRecordHandler,
 } from "./handlers/records.js";
-import { jsonRpcError, jsonRpcResult } from "./jsonrpc.js";
+import { jsonRpcError, jsonRpcResult, RpcError } from "./jsonrpc.js";
 
 const PROTOCOL_VERSION = process.env.AITHOS_DATA_PROTOCOL_VERSION ?? "0.1.0";
 
@@ -40,7 +46,9 @@ interface JsonRpcRequest {
   readonly params?: Record<string, unknown>;
 }
 
-const HANDLERS: Record<string, (params: Record<string, unknown>) => Promise<unknown>> = {
+type Handler = (caller: Caller) => Promise<unknown>;
+
+const HANDLERS: Record<string, Handler> = {
   // Read primitives
   "aithos.data.get_collection": getCollectionHandler,
   "aithos.data.list_collections": listCollectionsHandler,
@@ -50,6 +58,8 @@ const HANDLERS: Record<string, (params: Record<string, unknown>) => Promise<unkn
   // Write primitives
   "aithos.data.create_collection": createCollectionHandler,
   "aithos.data.insert_record": insertRecordHandler,
+  "aithos.data.update_record": updateRecordHandler,
+  "aithos.data.delete_record": deleteRecordHandler,
 };
 
 /**
@@ -58,8 +68,10 @@ const HANDLERS: Record<string, (params: Record<string, unknown>) => Promise<unkn
 export const handler = async (
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyResultV2> => {
-  // Healthcheck endpoint
-  if (event.requestContext.http.path === "/healthz") {
+  const path = event.requestContext.http.path;
+
+  // Healthcheck endpoint (anonymous, no envelope required)
+  if (path === "/healthz") {
     return {
       statusCode: 200,
       headers: { "content-type": "application/json" },
@@ -67,6 +79,7 @@ export const handler = async (
         ok: true,
         protocol: "aithos.data",
         version: PROTOCOL_VERSION,
+        authentication: "envelope+mandate required on /mcp/primitives/*",
       }),
     };
   }
@@ -99,20 +112,28 @@ export const handler = async (
     );
   }
 
+  // Build the expected audience URL from the request context. Spec §11.4 step 2
+  // requires `envelope.aud` to match this exactly (modulo normalization).
+  const expectedAud = buildExpectedAud(event);
+
+  // Authentication: throws RpcError on any failure.
+  let caller: Caller;
   try {
-    const result = await fn(body.params ?? {});
+    caller = await authenticate({
+      method: body.method,
+      rawParams: body.params ?? {},
+      expectedAud,
+    });
+  } catch (err) {
+    return errorResponse(body.id ?? null, err);
+  }
+
+  // Dispatch to handler with the verified caller
+  try {
+    const result = await fn(caller);
     return httpResponse(200, jsonRpcResult(body.id ?? null, result));
   } catch (err) {
-    const e = err as { code?: number; message?: string; data?: unknown };
-    const code = typeof e.code === "number" ? e.code : -32000;
-    const message = e.message ?? "internal error";
-    const data = e.data;
-    console.error("handler error", { method: body.method, code, message, data });
-    return httpResponse(
-      // Map JSON-RPC error code class to HTTP status
-      code >= -32099 && code <= -32000 ? 400 : 500,
-      jsonRpcError(body.id ?? null, code, message, data),
-    );
+    return errorResponse(body.id ?? null, err);
   }
 };
 
@@ -122,4 +143,61 @@ function httpResponse(statusCode: number, body: unknown): APIGatewayProxyResultV
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   };
+}
+
+function errorResponse(
+  id: string | number | null,
+  err: unknown,
+): APIGatewayProxyResultV2 {
+  const e = err as { code?: number; message?: string; data?: unknown };
+  const code = typeof e.code === "number" ? e.code : -32000;
+  const message = e.message ?? "internal error";
+  const data = e.data;
+
+  // Map JSON-RPC error code → HTTP status
+  let status = 500;
+  if (err instanceof RpcError) {
+    if (code === -32010 || code === -32011 || code === -32012 || code === -32013) {
+      status = 401; // authentication failure
+    } else if (
+      code === -32040 ||
+      code === -32041 ||
+      code === -32042
+    ) {
+      status = 403; // mandate / scope failure
+    } else if (code === -32020) {
+      status = 404; // not found
+    } else if (code >= -32099 && code <= -32000) {
+      status = 400; // other client error
+    } else if (code === -32601) {
+      status = 404;
+    } else if (code === -32602) {
+      status = 400;
+    } else if (code === -32603) {
+      status = 500;
+    }
+  }
+
+  if (status >= 500) {
+    console.error("handler error", { code, message, data, error: err });
+  } else {
+    console.warn("client error", { code, message });
+  }
+
+  return httpResponse(status, jsonRpcError(id, code, message, data));
+}
+
+/**
+ * Reconstruct the URL that the client should have set as `envelope.aud`.
+ * Spec §11.2 pins `aud` to the absolute endpoint URL (scheme + host +
+ * pathname, no query, no fragment).
+ *
+ * API Gateway gives us the path verbatim in `requestContext.http.path`.
+ * The host comes from the `domainName` field, which excludes the port
+ * and stage prefix on HTTP API. Scheme is always HTTPS.
+ */
+function buildExpectedAud(event: APIGatewayProxyEventV2): string {
+  const host = event.requestContext.domainName;
+  const path = event.requestContext.http.path;
+  return `https://${host}${path}`;
 }

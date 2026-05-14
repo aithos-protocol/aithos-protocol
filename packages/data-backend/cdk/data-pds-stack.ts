@@ -89,6 +89,19 @@ export class AithosDataPdsStack extends Stack {
     });
 
     /* -------------------------------------------------------------------- */
+    /*  Replay-cache table (anti-replay for envelope nonces, spec §11.5)    */
+    /* -------------------------------------------------------------------- */
+
+    const nonceTable = new Table(this, "NonceTable", {
+      tableName: "aithos-data-pds-nonces-dev",
+      partitionKey: { name: "pk", type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      encryption: TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: "expires_at_epoch",
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    /* -------------------------------------------------------------------- */
     /*  Lambda router                                                        */
     /* -------------------------------------------------------------------- */
 
@@ -107,6 +120,7 @@ export class AithosDataPdsStack extends Stack {
       logRetention: RetentionDays.ONE_WEEK,
       environment: {
         DATA_TABLE_NAME: table.tableName,
+        NONCE_TABLE_NAME: nonceTable.tableName,
         AITHOS_DATA_PROTOCOL_VERSION: "0.1.0",
       },
       bundling: {
@@ -122,6 +136,7 @@ export class AithosDataPdsStack extends Stack {
     });
 
     table.grantReadWriteData(router);
+    nonceTable.grantReadWriteData(router);
 
     /* -------------------------------------------------------------------- */
     /*  HTTP API Gateway                                                     */

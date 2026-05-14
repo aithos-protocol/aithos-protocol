@@ -6,8 +6,13 @@
  *   - aithos.data.insert_record
  *   - aithos.data.get_record
  *   - aithos.data.list_records
+ *   - aithos.data.update_record   (NEW in Sub-jalon 3.2a)
+ *   - aithos.data.delete_record   (NEW in Sub-jalon 3.2a)
  *
- * Spec ref: spec/data/05-api-primitives.md §5.3.4, §5.3.5, §5.4.2.
+ * Each handler receives an authenticated `Caller`. Scope is enforced
+ * via requireScope() at the entry of every handler.
+ *
+ * Spec ref: spec/data/05-api-primitives.md §5.3.4–5.3.5, §5.4.2–5.4.4.
  */
 
 import { ulid } from "ulid";
@@ -16,6 +21,7 @@ import {
   GetCommand,
   QueryCommand,
   UpdateCommand,
+  DeleteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 
@@ -30,6 +36,11 @@ import {
 } from "../ddb.js";
 import { RpcError } from "../jsonrpc.js";
 import {
+  requireScope,
+  requireSubjectMatch,
+  type Caller,
+} from "../auth/authenticate.js";
+import {
   clampLimit,
   decodeCursor,
   encodeCursor,
@@ -40,20 +51,20 @@ import {
 /*  insert_record                                                             */
 /* -------------------------------------------------------------------------- */
 
-export interface InsertRecordParams {
+interface InsertRecordParams {
   collection_urn?: string;
   record_id?: string;
   metadata?: Record<string, unknown>;
   payload?: Record<string, unknown>;
 }
 
-export async function insertRecordHandler(
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  const p = params as InsertRecordParams;
+export async function insertRecordHandler(caller: Caller): Promise<unknown> {
+  const p = caller.params as InsertRecordParams;
   validateRequired(p, ["collection_urn", "metadata", "payload"]);
 
   const { subjectDid, collectionName } = parseCollectionUrn(p.collection_urn!);
+  requireSubjectMatch(caller, subjectDid);
+  requireScope(caller, collectionName, "write");
 
   // Confirm the collection exists
   const colKey = {
@@ -91,6 +102,7 @@ export async function insertRecordHandler(
     deleted: false,
     created_at: now,
     modified_at: now,
+    authored_by: caller.mode === "delegate" ? caller.mandateId : undefined,
   };
 
   try {
@@ -111,9 +123,7 @@ export async function insertRecordHandler(
     throw err;
   }
 
-  // Bump the collection's record_count + modified_at (best-effort; not
-  // transactionally consistent with the put above — acceptable for the
-  // POC, will become a TransactWriteItems call in 3.2)
+  // Bookkeeping — bump record_count and modified_at on the collection.
   await ddb
     .send(
       new UpdateCommand({
@@ -124,12 +134,12 @@ export async function insertRecordHandler(
       }),
     )
     .catch(() => {
-      /* swallow — bookkeeping only */
+      /* best-effort */
     });
 
   return {
     record_id: recordId,
-    gamma_ref: `gamma_pending_${now}`, // placeholder — gamma wiring in Sub-jalon 3.2
+    gamma_ref: `gamma_pending_${now}`,
   };
 }
 
@@ -137,17 +147,18 @@ export async function insertRecordHandler(
 /*  get_record                                                                */
 /* -------------------------------------------------------------------------- */
 
-export interface GetRecordParams {
+interface GetRecordParams {
   collection_urn?: string;
   record_id?: string;
 }
 
-export async function getRecordHandler(
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  const p = params as GetRecordParams;
+export async function getRecordHandler(caller: Caller): Promise<unknown> {
+  const p = caller.params as GetRecordParams;
   validateRequired(p, ["collection_urn", "record_id"]);
+
   const { subjectDid, collectionName } = parseCollectionUrn(p.collection_urn!);
+  requireSubjectMatch(caller, subjectDid);
+  requireScope(caller, collectionName, "read");
 
   const r = await ddb.send(
     new GetCommand({
@@ -173,7 +184,7 @@ export async function getRecordHandler(
 /*  list_records                                                              */
 /* -------------------------------------------------------------------------- */
 
-export interface ListRecordsParams {
+interface ListRecordsParams {
   collection_urn?: string;
   order?: "newest" | "oldest";
   limit?: number;
@@ -181,18 +192,18 @@ export interface ListRecordsParams {
   include_deleted?: boolean;
 }
 
-export async function listRecordsHandler(
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  const p = params as ListRecordsParams;
+export async function listRecordsHandler(caller: Caller): Promise<unknown> {
+  const p = caller.params as ListRecordsParams;
   validateRequired(p, ["collection_urn"]);
+
   const { subjectDid, collectionName } = parseCollectionUrn(p.collection_urn!);
+  requireSubjectMatch(caller, subjectDid);
+  requireScope(caller, collectionName, "read");
 
   const limit = clampLimit(p.limit, 20, 100);
   const order = p.order ?? "newest";
   const exclusiveStartKey = p.cursor ? decodeCursor(p.cursor) : undefined;
 
-  // Use GSI1 — partitioned by (subject, collection), sorted by mtime.
   const exprAttrValues: Record<string, unknown> = {
     ":pk": gsi1pkForCollection(subjectDid, collectionName),
   };
@@ -218,6 +229,183 @@ export async function listRecordsHandler(
 }
 
 /* -------------------------------------------------------------------------- */
+/*  update_record  (Sub-jalon 3.2a NEW)                                       */
+/* -------------------------------------------------------------------------- */
+
+interface UpdateRecordParams {
+  collection_urn?: string;
+  record_id?: string;
+  metadata?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+  expected_modified_at?: string;
+}
+
+export async function updateRecordHandler(caller: Caller): Promise<unknown> {
+  const p = caller.params as UpdateRecordParams;
+  validateRequired(p, ["collection_urn", "record_id", "metadata", "payload"]);
+
+  const { subjectDid, collectionName } = parseCollectionUrn(p.collection_urn!);
+  requireSubjectMatch(caller, subjectDid);
+  requireScope(caller, collectionName, "write");
+
+  // Fetch current to preserve created_at and detect concurrent modification
+  const recordKey = {
+    pk: pkForSubject(subjectDid),
+    sk: skForRecord(collectionName, p.record_id!),
+  };
+  const r = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: recordKey }));
+  if (!r.Item || r.Item.deleted) {
+    throw new RpcError(
+      -32020,
+      `AITHOS_NOT_FOUND: record ${p.record_id} not found in ${p.collection_urn}`,
+    );
+  }
+  if (
+    p.expected_modified_at &&
+    p.expected_modified_at !== r.Item.modified_at
+  ) {
+    throw new RpcError(
+      -32077,
+      `AITHOS_DATA_CONCURRENT_MODIFICATION: record was modified since expected_modified_at`,
+      { actual: r.Item.modified_at, expected: p.expected_modified_at },
+    );
+  }
+
+  const now = new Date().toISOString();
+  const newMetadata = {
+    ...p.metadata!,
+    created_at: r.Item.created_at,
+    modified_at: now,
+  };
+
+  const newItem = {
+    ...r.Item,
+    gsi1sk: gsi1skForRecord(now, p.record_id!),
+    metadata: newMetadata,
+    payload: p.payload,
+    modified_at: now,
+    authored_by: caller.mode === "delegate" ? caller.mandateId : r.Item.authored_by,
+  };
+
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: newItem,
+      ConditionExpression:
+        p.expected_modified_at
+          ? "modified_at = :expected"
+          : "attribute_exists(sk)",
+      ExpressionAttributeValues: p.expected_modified_at
+        ? { ":expected": p.expected_modified_at }
+        : undefined,
+    }),
+  );
+
+  // Bookkeeping — bump collection modified_at
+  await ddb
+    .send(
+      new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: pkForSubject(subjectDid), sk: skForCollection(collectionName) },
+        UpdateExpression: "SET modified_at = :now",
+        ExpressionAttributeValues: { ":now": now },
+      }),
+    )
+    .catch(() => {
+      /* best-effort */
+    });
+
+  return {
+    record_id: p.record_id,
+    modified_at: now,
+    gamma_ref: `gamma_pending_${now}`,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  delete_record  (Sub-jalon 3.2a NEW)                                       */
+/* -------------------------------------------------------------------------- */
+
+interface DeleteRecordParams {
+  collection_urn?: string;
+  record_id?: string;
+  /** When true, hard-delete (no soft-delete row). Default false. */
+  hard_delete?: boolean;
+}
+
+export async function deleteRecordHandler(caller: Caller): Promise<unknown> {
+  const p = caller.params as DeleteRecordParams;
+  validateRequired(p, ["collection_urn", "record_id"]);
+
+  const { subjectDid, collectionName } = parseCollectionUrn(p.collection_urn!);
+  requireSubjectMatch(caller, subjectDid);
+  requireScope(caller, collectionName, "write");
+
+  const recordKey = {
+    pk: pkForSubject(subjectDid),
+    sk: skForRecord(collectionName, p.record_id!),
+  };
+
+  // Fetch first to make sure it exists (so we return 404 vs silently no-op)
+  const r = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: recordKey }));
+  if (!r.Item || r.Item.deleted) {
+    throw new RpcError(
+      -32020,
+      `AITHOS_NOT_FOUND: record ${p.record_id} not found in ${p.collection_urn}`,
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  if (p.hard_delete) {
+    // Hard delete — admin operation; locked behind owner-only.
+    if (caller.mode === "delegate") {
+      throw new RpcError(
+        -32042,
+        "AITHOS_INSUFFICIENT_SCOPE: hard_delete is owner-only in v0.1",
+      );
+    }
+    await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: recordKey }));
+  } else {
+    // Soft delete — clear payload, set deleted: true, preserve metadata
+    // for audit and for the eventual gamma chain check.
+    await ddb.send(
+      new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: recordKey,
+        UpdateExpression: "SET deleted = :t, payload = :empty, modified_at = :now",
+        ExpressionAttributeValues: {
+          ":t": true,
+          ":empty": {},
+          ":now": now,
+        },
+      }),
+    );
+  }
+
+  // Bookkeeping — decrement record_count
+  await ddb
+    .send(
+      new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: pkForSubject(subjectDid), sk: skForCollection(collectionName) },
+        UpdateExpression: "ADD record_count :neg1 SET modified_at = :now",
+        ExpressionAttributeValues: { ":neg1": -1, ":now": now },
+      }),
+    )
+    .catch(() => {
+      /* best-effort */
+    });
+
+  return {
+    record_id: p.record_id,
+    deleted_at: now,
+    hard_delete: p.hard_delete === true,
+    gamma_ref: `gamma_pending_${now}`,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Helpers                                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -233,18 +421,11 @@ function projectRecord(item: Record<string, unknown>): unknown {
     deleted: item.deleted ?? false,
     created_at: item.created_at,
     modified_at: item.modified_at,
+    authored_by: item.authored_by,
     gamma_ref: `gamma_pending_${item.modified_at}`,
   };
 }
 
-/**
- * Parse a collection URN of the form
- *   urn:aithos:collection:<subject_did>:<collection_name>
- *
- * Note: subject_did itself contains colons ("did:aithos:z6…"), so we
- * cannot just split on ":". We anchor on the fixed prefix and the
- * known position of the final segment.
- */
 export function parseCollectionUrn(urn: string): {
   subjectDid: string;
   collectionName: string;
@@ -254,7 +435,6 @@ export function parseCollectionUrn(urn: string): {
     throw new RpcError(-32602, `invalid collection_urn: missing prefix "${prefix}"`);
   }
   const rest = urn.slice(prefix.length);
-  // Find the last colon — that separates collection_name from the DID
   const lastColon = rest.lastIndexOf(":");
   if (lastColon < 0) {
     throw new RpcError(-32602, `invalid collection_urn: no separator between DID and collection name`);
