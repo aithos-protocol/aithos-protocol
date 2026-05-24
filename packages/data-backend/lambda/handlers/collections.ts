@@ -64,11 +64,31 @@ export async function createCollectionHandler(caller: Caller): Promise<unknown> 
     );
   }
 
-  // If schema is a core Aithos schema, verify it's known. Third-party
-  // schemas (any prefix not starting with `aithos.<bareword>` — see RFC
-  // §3.3) are accepted at face value for now; client validates against
-  // them. Only the aithos.* namespace is server-validated in v0.1.
-  if (p.schema!.startsWith("aithos.") && !getSchema(p.schema!)) {
+  // Schema namespace validation per RFC §3.3 :
+  //
+  //   - `aithos.<name>.v<N>` (one segment before <name>) → core schemas
+  //     maintained by the Aithos protocol authority. MUST be present in
+  //     the bundled server-side REGISTRY (cf. schemas/registry.ts).
+  //
+  //   - `aithos.x.<vendor>.<name>.v<N>` → vendor namespace (per spec
+  //     §3.3). Accepted at face value for now : the SDK client is the
+  //     authoritative validator. The server-side `validateMetadata` path
+  //     in records.ts/update handlers is conditionally skipped when the
+  //     schema isn't in REGISTRY (`if (getSchema(...))`), so vendor
+  //     records pass through without metadata enforcement. This is
+  //     temporary — A2b (see PLAN-A2b-schema-self-registration.md) will
+  //     introduce a per-owner schema registry table, letting vendors
+  //     publish their own schemas and have them validated server-side.
+  //
+  //   - Any other prefix (e.g. did:web:vendor.com:posts.v1, or a custom
+  //     scheme an organization wants to use internally) → accepted at
+  //     face value, same rationale as vendor namespace.
+  //
+  // The split below isolates the strict "core must be registered" gate
+  // to the actual core namespace.
+  const isCoreAithos =
+    p.schema!.startsWith("aithos.") && !p.schema!.startsWith("aithos.x.");
+  if (isCoreAithos && !getSchema(p.schema!)) {
     throw new RpcError(
       -32070,
       `AITHOS_DATA_SCHEMA_UNKNOWN: schema "${p.schema}" is not registered on this platform`,
