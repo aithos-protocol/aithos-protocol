@@ -331,7 +331,41 @@ Until a formal RFC process is in place:
 4. A platform implementing the schema MUST follow the document
    verbatim; deviations require a new major version.
 
-### 3.7.3 Schema retraction
+### 3.7.3 Vendor schema self-registration
+
+Vendor namespace (`aithos.x.<vendor>.<name>.v<N>`) schemas are NOT
+shipped with the platform. Instead, the subject (or an app acting on
+their behalf during onboarding — owner-only call in v0.1) publishes
+the schema document to their own PDS via
+`aithos.data.register_schema` (§5.5.4).
+
+The PDS stores one schema doc per `(owner_did, schema_id)` pair and
+applies the §3.5 validation rules to subsequent record writes
+referencing that schema, exactly as for core schemas. Until a subject
+has registered the schema, vendor record writes pass through without
+server-side metadata enforcement — only the SDK validates client-side
+(A2a fallback, documented for backward compatibility with the v0.1
+initial cut).
+
+Self-registration is bounded :
+
+- A schema document MUST NOT exceed 10 KB serialized.
+- A subject MUST NOT exceed 50 registered schemas.
+- A registered schema is IMMUTABLE — re-publishing the same
+  `aithos:schema` id with a different canonical document is rejected
+  with `AITHOS_DATA_SCHEMA_IMMUTABLE` (-32082). To evolve, publish a
+  new version (`aithos.x.<vendor>.<name>.v<N+1>`).
+- Re-publishing the same canonical document is idempotent — the call
+  resolves to `{ created: false }` and is safe to issue on every app
+  boot.
+
+This boundary is intentional. The core namespace stays under
+protocol-authority PR review (§3.7.2) where backward-compatibility
+rules can be enforced ; the vendor namespace ships fast and lives in
+the subject's own data plane where it carries no platform-wide blast
+radius.
+
+### 3.7.4 Schema retraction
 
 A core schema once published is, in principle, permanent. If a schema
 must be retracted (e.g. discovered design flaw), the protocol authority

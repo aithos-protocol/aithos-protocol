@@ -71,18 +71,19 @@ export async function createCollectionHandler(caller: Caller): Promise<unknown> 
   //     the bundled server-side REGISTRY (cf. schemas/registry.ts).
   //
   //   - `aithos.x.<vendor>.<name>.v<N>` → vendor namespace (per spec
-  //     §3.3). Accepted at face value for now : the SDK client is the
-  //     authoritative validator. The server-side `validateMetadata` path
-  //     in records.ts/update handlers is conditionally skipped when the
-  //     schema isn't in REGISTRY (`if (getSchema(...))`), so vendor
-  //     records pass through without metadata enforcement. This is
-  //     temporary — A2b (see PLAN-A2b-schema-self-registration.md) will
-  //     introduce a per-owner schema registry table, letting vendors
-  //     publish their own schemas and have them validated server-side.
+  //     §3.3). Owner may publish the schema doc via
+  //     `aithos.data.register_schema` (A2b) ; once published, record
+  //     writes against this collection are validated server-side. Until
+  //     the owner publishes, the A2a fallback applies — records are
+  //     accepted at face value (SDK is the only validator).
+  //     create_collection itself accepts vendor schemas WITHOUT a
+  //     prior register_schema call : registering can happen lazily
+  //     (e.g. SDK boot-time) and the collection metadata only carries
+  //     the schema id, not the doc.
   //
   //   - Any other prefix (e.g. did:web:vendor.com:posts.v1, or a custom
   //     scheme an organization wants to use internally) → accepted at
-  //     face value, same rationale as vendor namespace.
+  //     face value, same rationale as vendor namespace pre-registration.
   //
   // The split below isolates the strict "core must be registered" gate
   // to the actual core namespace.

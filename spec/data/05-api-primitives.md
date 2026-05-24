@@ -403,11 +403,37 @@ Emits gamma entry: `data.collection.tombstoned`.
 
 Fetch a schema document by identifier.
 
-Input: `{ schema: string }` — e.g. `"aithos.contacts.v1"`.
+Input:
 
-Output: full JSON Schema document (§3.2.1).
+```ts
+interface GetSchemaInput {
+  schema: string;          // e.g. "aithos.contacts.v1"
+  subject_did?: string;    // REQUIRED for vendor schemas (aithos.x.*)
+}
+```
 
-Anonymous read. Schemas are public.
+Output:
+
+```ts
+interface GetSchemaOutput {
+  schema: object;          // full JSON Schema 2020-12 document
+  source: "core" | "owner";
+  owner_did?: string;      // present when source == "owner"
+  doc_hash?: string;       // canonical hash, present when source == "owner"
+  created_at?: string;     // ISO 8601, present when source == "owner"
+}
+```
+
+Schemas are public — the document declares the shape of validation,
+not data. A platform MAY serve `get_schema` anonymously ; the v0.1
+reference PDS requires the same signed envelope as other reads (no
+anonymous transport for the data sub-protocol yet, cf. spec §5.2).
+
+Core lookups (`aithos.<name>.v<N>` without `.x.`) ignore
+`subject_did` — the core registry is platform-global. Vendor lookups
+require `subject_did` to address the right per-owner registry (§3.7.3) ;
+they return `AITHOS_DATA_SCHEMA_UNKNOWN` (-32070) when the subject has
+never registered the schema id.
 
 ### 5.5.2 `aithos.data.list_schemas`
 
@@ -442,6 +468,70 @@ Useful for client-side pre-validation.
 Input: `{ schema: string, record: Record<string, unknown> }`.
 
 Output: `{ valid: boolean, errors?: ValidationError[] }`.
+
+### 5.5.4 `aithos.data.register_schema`
+
+Publish an immutable JSON Schema document for a vendor namespace
+(`aithos.x.<vendor>.<name>.v<N>`) to the subject's PDS. Once published,
+the schema is enforced server-side on subsequent record writes that
+reference it (cf. §3.7.3).
+
+Input:
+
+```ts
+interface RegisterSchemaInput {
+  subject_did: string;     // MUST equal envelope iss (owner-only)
+  schema_doc: object;      // full JSON Schema 2020-12 document
+}
+```
+
+Output:
+
+```ts
+interface RegisterSchemaOutput {
+  schema_id: string;       // echoes schema_doc["aithos:schema"]
+  doc_hash: string;        // sha256:<hex> of canonical schema_doc
+  created: boolean;        // false on idempotent re-publish
+  created_at: string;      // ISO 8601 — first registration timestamp
+}
+```
+
+Authentication: signed envelope by the owner (sphere key). Delegates
+cannot register schemas — schema publication is a configuration
+action, not a data action, and is scoped to the sphere root.
+
+Validation rules :
+
+1. `schema_doc["aithos:schema"]` MUST match
+   `^aithos\.x\.[a-z][a-z0-9_-]{0,30}\.[a-z][a-z0-9_-]{0,62}\.v[1-9][0-9]*$`.
+   Core (`aithos.<bareword>`) schemas cannot be self-registered —
+   they go through PR review per §3.7.2.
+2. `schema_doc["aithos:version"]` MUST be a valid semver string.
+3. `schema_doc.type` MUST equal `"object"` and `schema_doc.properties`
+   MUST be present.
+4. The doc MUST validate against the subset of JSON Schema 2020-12 the
+   platform enforces (the same subset as core schemas — types,
+   formats, patterns, required, additionalProperties, plus the
+   `aithos:*` annotations).
+5. Serialized `schema_doc` MUST NOT exceed 10 KB.
+6. The subject MUST NOT exceed 50 registered schemas.
+
+Idempotency :
+
+- Re-registering the same `(subject_did, schema_id)` with the same
+  canonical document → `{ created: false }`. Safe to call on every
+  app boot.
+- Re-registering with a different document → REJECTED with
+  `AITHOS_DATA_SCHEMA_IMMUTABLE` (-32082). To evolve, bump the major
+  version segment of `aithos:schema`.
+
+Errors :
+
+| Code   | When |
+|--------|------|
+| -32042 | `AITHOS_INSUFFICIENT_SCOPE` — delegate tried to register. |
+| -32071 | `AITHOS_DATA_SCHEMA_INVALID` — fails identifier shape, semver, size, quota, or structural rules. |
+| -32082 | `AITHOS_DATA_SCHEMA_IMMUTABLE` — same id, different doc hash. |
 
 ## 5.6 Portability primitives
 
@@ -519,6 +609,7 @@ with codes in the range `[-32099, -32070]`:
 | -32079  | `AITHOS_DATA_WRAP_RECIPIENT_MISMATCH` | Authorize_app wrap's recipient doesn't match the mandate's grantee key. |
 | -32080  | `AITHOS_DATA_ROTATION_IN_PROGRESS` | Concurrent CMK rotation. |
 | -32081  | `AITHOS_DATA_OWNER_WRAP_MISSING`  | After sphere rotation, the collection has no wrap for the current owner sphere. |
+| -32082  | `AITHOS_DATA_SCHEMA_IMMUTABLE`    | `register_schema` rejected because the same id is already registered with a different doc_hash. |
 
 Reuse from Ethos: `AITHOS_NOT_FOUND` (-32020), `AITHOS_INSUFFICIENT_SCOPE`
 (-32042), `AITHOS_BAD_ENVELOPE` (-32010), `AITHOS_BAD_SIGNATURE`

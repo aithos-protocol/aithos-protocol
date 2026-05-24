@@ -46,7 +46,10 @@ import {
   encodeCursor,
   validateRequired,
 } from "./collections.js";
-import { getSchema, validateMetadata } from "../schemas/registry.js";
+import {
+  resolveSchema,
+  validateMetadataAgainst,
+} from "../schemas/registry.js";
 import { appendGammaEntry } from "../gamma/store.js";
 import { hashJson } from "../gamma/hash-util.js";
 
@@ -88,8 +91,19 @@ export async function insertRecordHandler(caller: Caller): Promise<unknown> {
 
   // Validate the metadata clear against the registered schema.
   // Encrypted payload remains opaque and is not validated server-side.
-  if (getSchema(schemaId)) {
-    const result = validateMetadata(schemaId, p.metadata!, { op: "insert" });
+  //
+  // Two-tier lookup (A2b) :
+  //   1. Bundled core REGISTRY (`aithos.<name>.v<N>`).
+  //   2. Per-owner published vendor registry (`aithos.x.<vendor>.<name>.v<N>`).
+  //
+  // If the schema resolves under either tier, we ENFORCE validation —
+  // `additionalProperties: false`, required fields, types, formats. If
+  // no schema is found we fall through to the A2a "accept at face
+  // value" behavior so apps that haven't called register_schema yet
+  // keep working (cf. PLAN-A2b-schema-self-registration.md §3).
+  const schema = await resolveSchema(schemaId, subjectDid);
+  if (schema) {
+    const result = validateMetadataAgainst(schema, p.metadata!, { op: "insert" });
     if (!result.ok) {
       throw new RpcError(
         -32072,
@@ -373,10 +387,12 @@ export async function updateRecordHandler(caller: Caller): Promise<unknown> {
     );
   }
 
-  // Validate metadata against the collection's schema.
+  // Validate metadata against the collection's schema (A2b two-tier
+  // lookup — same rationale as insert_record above).
   const schemaId = r.Item.schema as string;
-  if (getSchema(schemaId)) {
-    const result = validateMetadata(schemaId, p.metadata!, { op: "update" });
+  const schema = await resolveSchema(schemaId, subjectDid);
+  if (schema) {
+    const result = validateMetadataAgainst(schema, p.metadata!, { op: "update" });
     if (!result.ok) {
       throw new RpcError(
         -32072,

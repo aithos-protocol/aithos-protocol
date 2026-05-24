@@ -18,6 +18,8 @@ import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 
 const region = process.env.AWS_REGION ?? "eu-west-3";
 const tableName = process.env.DATA_TABLE_NAME ?? "aithos-data-pds-dev";
+const schemasTableName =
+  process.env.SCHEMAS_TABLE_NAME ?? "aithos-data-pds-schemas-dev";
 
 const baseClient = new DynamoDBClient({ region });
 
@@ -29,6 +31,7 @@ export const ddb = DynamoDBDocumentClient.from(baseClient, {
 });
 
 export const TABLE_NAME = tableName;
+export const SCHEMAS_TABLE_NAME = schemasTableName;
 
 /* -------------------------------------------------------------------------- */
 /*  Key helpers                                                               */
@@ -57,4 +60,24 @@ export function gsi1skForRecord(modifiedAt: string, recordId: string): string {
   // ISO 8601 sorts lexicographically. Prefix with "rec#" so collection
   // metadata (sk="col#…", no gsi1sk) is excluded from queries on this index.
   return `rec#${modifiedAt}#${recordId}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Schemas table key helpers (A2b — per-owner vendor schema registry)        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Partition key for the schemas table — one partition per owner DID so
+ * the per-owner quota check (count + size sum) is a single Query.
+ */
+export function pkForSchemasOwner(ownerDid: string): string {
+  return `owner#${ownerDid}`;
+}
+
+/**
+ * Sort key — the schema identifier itself (e.g. `aithos.x.linkedone.post.v1`).
+ * Each (owner_did, schema_id) pair is unique.
+ */
+export function skForSchema(schemaId: string): string {
+  return schemaId;
 }

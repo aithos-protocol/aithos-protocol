@@ -138,6 +138,32 @@ export class AithosDataPdsStack extends Stack {
     });
 
     /* -------------------------------------------------------------------- */
+    /*  Schemas table (A2b — per-owner vendor schema self-registration,     */
+    /*  spec/data §3.7.4)                                                    */
+    /* -------------------------------------------------------------------- */
+    //
+    // PK = owner_did             (one partition per subject)
+    // SK = schema_id             (e.g. "aithos.x.linkedone.post.v1")
+    //
+    // Stores the immutable JSON Schema 2020-12 document published by the
+    // owner for vendor schemas (`aithos.x.<vendor>.<name>.v<N>`). The
+    // record handlers fall back to this table when resolving a schema
+    // that isn't in the bundled core REGISTRY. Per spec §3.5 a schema
+    // doc is immutable once published — the handler enforces this via
+    // doc_hash equality check, returning AITHOS_DATA_SCHEMA_IMMUTABLE
+    // (-32082) on conflict.
+
+    const schemasTable = new Table(this, "SchemasTable", {
+      tableName: "aithos-data-pds-schemas-dev",
+      partitionKey: { name: "pk", type: AttributeType.STRING },
+      sortKey: { name: "sk", type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      encryption: TableEncryption.AWS_MANAGED,
+      pointInTimeRecovery: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    /* -------------------------------------------------------------------- */
     /*  Lambda router                                                        */
     /* -------------------------------------------------------------------- */
 
@@ -159,6 +185,7 @@ export class AithosDataPdsStack extends Stack {
         NONCE_TABLE_NAME: nonceTable.tableName,
         REVOCATIONS_TABLE_NAME: revocationsTable.tableName,
         GAMMA_TABLE_NAME: gammaTable.tableName,
+        SCHEMAS_TABLE_NAME: schemasTable.tableName,
         AITHOS_DATA_PROTOCOL_VERSION: "0.1.0",
       },
       bundling: {
@@ -177,6 +204,7 @@ export class AithosDataPdsStack extends Stack {
     nonceTable.grantReadWriteData(router);
     revocationsTable.grantReadWriteData(router);
     gammaTable.grantReadWriteData(router);
+    schemasTable.grantReadWriteData(router);
 
     /* -------------------------------------------------------------------- */
     /*  HTTP API Gateway                                                     */
@@ -227,6 +255,11 @@ export class AithosDataPdsStack extends Stack {
     new CfnOutput(this, "DataTableName", {
       value: table.tableName,
       description: "DynamoDB table name for the data PDS",
+    });
+
+    new CfnOutput(this, "SchemasTableName", {
+      value: schemasTable.tableName,
+      description: "DynamoDB table name for vendor schema self-registration (A2b)",
     });
 
     new CfnOutput(this, "RouterFnArn", {

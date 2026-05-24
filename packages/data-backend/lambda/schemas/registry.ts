@@ -60,12 +60,51 @@ const REGISTRY: Record<string, AithosSchema> = {
   [contactsV1Schema["aithos:schema"]]: contactsV1Schema,
 };
 
+/**
+ * Synchronous lookup limited to the bundled core REGISTRY. Used by
+ * call sites that explicitly want core-only behavior (e.g. namespace
+ * gating in create_collection). For the general write-path lookup that
+ * falls back to per-owner registered vendor schemas, use
+ * {@link resolveSchema} (async, DDB-backed).
+ */
 export function getSchema(id: string): AithosSchema | null {
   return REGISTRY[id] ?? null;
 }
 
 export function listSchemas(): readonly AithosSchema[] {
   return Object.values(REGISTRY);
+}
+
+/**
+ * Two-tier schema resolution (spec §3.4.3) :
+ *   1. Bundled core REGISTRY — `aithos.<name>.v<N>`.
+ *   2. Owner-published vendor registry (DDB, A2b) — `aithos.x.<vendor>.<name>.v<N>`,
+ *      scoped to the calling owner so a vendor's schema is visible only
+ *      under the subjects that have explicitly registered it.
+ *
+ * Returns null when neither lookup hits — callers MUST decide whether
+ * that's fatal (core namespace → reject) or permissive (vendor
+ * namespace pre-A2b registration → accept at face value, see
+ * records.ts for the A2a fallback rationale).
+ *
+ * Async because the second tier is a DDB Get. The first tier is sync
+ * so a `aithos.contacts.v1` lookup never hits DDB.
+ */
+export async function resolveSchema(
+  id: string,
+  ownerDid?: string,
+): Promise<AithosSchema | null> {
+  const core = REGISTRY[id];
+  if (core) return core;
+  if (ownerDid && id.startsWith("aithos.x.")) {
+    // Lazy import — the store pulls in the DDB client, which we don't
+    // want to bundle into call sites that only need the sync core
+    // REGISTRY (e.g. unit tests of validateMetadata).
+    const { getOwnerSchema } = await import("./store.js");
+    const stored = await getOwnerSchema(ownerDid, id);
+    return stored?.schema_doc ?? null;
+  }
+  return null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -110,6 +149,11 @@ export interface ValidateOptions {
  * `aithos:auto`). Fields declared `aithos:encrypted` are not in the
  * metadata object — they live in the payload ciphertext and are
  * opaque to the platform.
+ *
+ * For core schemas the lookup is sync (REGISTRY). For owner-published
+ * vendor schemas the caller should resolve via {@link resolveSchema}
+ * and pass the schema document via {@link validateMetadataAgainst} to
+ * avoid a second DDB read.
  */
 export function validateMetadata(
   schemaId: string,
@@ -124,7 +168,20 @@ export function validateMetadata(
       metadata,
     };
   }
+  return validateMetadataAgainst(schema, metadata, options);
+}
 
+/**
+ * Same as {@link validateMetadata} but accepts an already-resolved
+ * schema document. Useful when the caller already paid the cost of
+ * resolution (e.g. a DDB Get for a vendor schema) and doesn't want to
+ * pay again.
+ */
+export function validateMetadataAgainst(
+  schema: AithosSchema,
+  metadata: Record<string, unknown>,
+  options: ValidateOptions,
+): ValidationResult {
   const errors: ValidationError[] = [];
   const cleaned: Record<string, unknown> = {};
   const silentOverride = options.silentlyOverrideAuto ?? true;

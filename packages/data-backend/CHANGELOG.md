@@ -1,5 +1,38 @@
 # @aithos/data-backend — Changelog
 
+## Unreleased — A2b vendor schema self-registration
+
+### Added
+
+- New DynamoDB table `aithos-data-pds-schemas-dev` (PK=`owner#<did>`,
+  SK=`<schema_id>`) storing per-owner vendor schema documents (spec
+  §3.7.3). On-demand billing, PITR on, single region.
+- New JSON-RPC primitive `aithos.data.register_schema` —
+  owner-only, idempotent on `(subject_did, schema_id, doc_hash)`,
+  caps at 10 KB per doc / 50 schemas per subject.
+- New JSON-RPC primitive `aithos.data.get_schema` (spec §5.5.1) —
+  returns either a bundled core schema (no `subject_did` needed) or
+  an owner-published vendor schema (lookup keyed by `subject_did`).
+- New JSON-RPC primitive `aithos.data.list_schemas` (spec §5.5.2) —
+  enumerates bundled core schemas, optionally filtered by prefix.
+- New error code -32082 `AITHOS_DATA_SCHEMA_IMMUTABLE` — emitted when
+  `register_schema` is called with an already-registered id and a
+  different canonical document.
+- `insert_record` / `update_record` now perform a two-tier schema
+  resolution : bundled REGISTRY first, then the owner's vendor
+  registry. Records under registered vendor schemas are now enforced
+  server-side (`additionalProperties: false`, required, types).
+  Pre-A2b "accept at face value" behavior is preserved for vendor
+  schemas the owner has NOT yet registered.
+
+### Internal
+
+- `schemas/registry.ts` exposes `resolveSchema(id, ownerDid?)`
+  (async) alongside the existing sync `getSchema(id)`.
+- `schemas/store.ts` — new module with `getOwnerSchema`,
+  `countOwnerSchemas`, `putOwnerSchema` + a 60-second LRU cache to
+  bound DDB read amplification on the hot record-write path.
+
 ## 0.3.0-alpha.4 — 2026-05-14
 
 ### list_records filter support

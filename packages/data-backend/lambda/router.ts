@@ -41,6 +41,11 @@ import {
   rotateCmkHandler,
 } from "./handlers/authorization.js";
 import { listGammaEntriesHandler } from "./handlers/gamma.js";
+import {
+  getSchemaHandler,
+  listSchemasHandler,
+  registerSchemaHandler,
+} from "./handlers/schemas.js";
 import { jsonRpcError, jsonRpcResult, RpcError } from "./jsonrpc.js";
 
 const PROTOCOL_VERSION = process.env.AITHOS_DATA_PROTOCOL_VERSION ?? "0.1.0";
@@ -74,6 +79,11 @@ const HANDLERS: Record<string, Handler> = {
 
   // Gamma log primitives (Sub-jalon 3.2c.2)
   "aithos.data.list_gamma_entries": listGammaEntriesHandler,
+
+  // Schema-management primitives (A2b — vendor schema self-registration)
+  "aithos.data.register_schema": registerSchemaHandler,
+  "aithos.data.get_schema": getSchemaHandler,
+  "aithos.data.list_schemas": listSchemasHandler,
 };
 
 /**
