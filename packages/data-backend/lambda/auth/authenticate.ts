@@ -125,6 +125,31 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
         )
       : resolveIssuerDoc;
 
+  // HOTFIX-A2a-RESOLVER — diagnostic log (temporaire, à retirer une fois
+  // le flow Linkedone vert). Affiche la présence et la forme des sphere
+  // pubkeys reçues — pas de leak (les pubkeys publiques sont publiques
+  // par construction). Permet de débugger les -32040 mandate did not
+  // verify : si on voit `has_override=false`, c'est que le caller
+  // n'envoie PAS le champ ; si on voit les pubkeys mais que verify
+  // échoue, c'est qu'elles ne matchent pas les seeds du mandate.
+  if (subjectDid && subjectDid.startsWith("did:aithos:")) {
+    const safe = rawSphereKeys && typeof rawSphereKeys === "object"
+      ? (rawSphereKeys as Record<string, unknown>)
+      : null;
+    console.log("AUTH_DIAG_SUBJECT_SPHERE_PUBKEYS", {
+      iss: subjectDid,
+      method: input.method,
+      has_override: safe !== null,
+      keys_present: safe ? Object.keys(safe).sort() : [],
+      // Premiers chars de chaque pubkey — pour matcher visuellement
+      // contre ce que la SPA / Linkedone backend dit envoyer
+      root_prefix: typeof safe?.root === "string" ? safe.root.slice(0, 12) : null,
+      public_prefix: typeof safe?.public === "string" ? safe.public.slice(0, 12) : null,
+      circle_prefix: typeof safe?.circle === "string" ? safe.circle.slice(0, 12) : null,
+      self_prefix: typeof safe?.self === "string" ? safe.self.slice(0, 12) : null,
+    });
+  }
+
   const ctx: VerifyEnvelopeContext = {
     expectedAud: input.expectedAud,
     expectedMethod: input.method,
