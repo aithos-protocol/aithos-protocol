@@ -21,7 +21,7 @@ import {
 import { ed25519PublicKeyToMultibase } from "@aithos/protocol-core/did";
 
 import { RpcError } from "../jsonrpc.js";
-import { resolveIssuerDoc } from "./did-resolver.js";
+import { resolveIssuerDoc, withSphereOverride } from "./did-resolver.js";
 import { replayCache } from "./nonce-store.js";
 import { findRevocation } from "./revocations.js";
 
@@ -85,11 +85,51 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   } & Record<string, unknown>;
   void _envelope;
 
+  // HOTFIX-A2a-RESOLVER — `_subject_sphere_pubkeys` extension
+  // ─────────────────────────────────────────────────────────
+  // Callers (e.g. Linkedone backend signing delegate-path envelopes
+  // on behalf of a custodial did:aithos user) can pass the user's 4
+  // real sphere pubkeys via this params extension to enable mandate
+  // signature verification — the PDS's local did:aithos synthesis
+  // alone cannot recover per-sphere pubkeys (it only has the root
+  // pubkey from the multibase). The field IS part of params_hash (so
+  // it's covered by the envelope signature, can't be tampered with by
+  // a passive attacker), but we read it BEFORE running verifyEnvelope
+  // to wire up the resolver — the verifier will then re-hash params
+  // with the field included and find a match.
+  //
+  // Defense: extracted value must be a plain object whose 4 keys are
+  // multibase strings; anything else is silently ignored (the call
+  // falls back to plain did:aithos synthesis, which is fine for
+  // owner-path-#root envelopes and only fails for mandates as before).
+  //
+  // TODO retire once Aithos has a real did:aithos HTTP registry
+  // resolver (audit MEDIUM "did:aithos resolver stubbed").
+  const subjectDid =
+    typeof (envelope as { iss?: unknown }).iss === "string"
+      ? ((envelope as { iss: string }).iss)
+      : null;
+  const rawSphereKeys = businessParams._subject_sphere_pubkeys;
+  const enrichedResolver =
+    subjectDid &&
+    subjectDid.startsWith("did:aithos:") &&
+    rawSphereKeys !== undefined &&
+    rawSphereKeys !== null &&
+    typeof rawSphereKeys === "object"
+      ? withSphereOverride(
+          resolveIssuerDoc,
+          subjectDid,
+          rawSphereKeys as Partial<
+            Record<"root" | "public" | "circle" | "self", unknown>
+          >,
+        )
+      : resolveIssuerDoc;
+
   const ctx: VerifyEnvelopeContext = {
     expectedAud: input.expectedAud,
     expectedMethod: input.method,
     params: businessParams,
-    resolveIssuerDoc,
+    resolveIssuerDoc: enrichedResolver,
     findRevocation: async (mandateId) => {
       const rev = await findRevocation(mandateId);
       if (!rev) return null;
@@ -118,6 +158,13 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   const mandate = (envelope as SignedEnvelope).mandate;
   const mode: "owner" | "delegate" = mandateId ? "delegate" : "owner";
 
+  // Strip the HOTFIX-A2a-RESOLVER extension from the params we hand to
+  // handlers — it was used for sig verification and has no business
+  // meaning. Keeps handlers ignorant of this transitional plumbing.
+  const { _subject_sphere_pubkeys: _hotfixStripped, ...handlerParams } =
+    businessParams as Record<string, unknown>;
+  void _hotfixStripped;
+
   return {
     subjectDid: result.issuer,
     mode,
@@ -125,7 +172,7 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
     ...(mandate ? { mandate, mandateScopes: mandate.scopes } : {}),
     signerPubkeyMultibase: ed25519PublicKeyToMultibase(result.signerKey),
     envelopeNonce: (envelope as SignedEnvelope).nonce,
-    params: businessParams,
+    params: handlerParams,
   };
 }
 
