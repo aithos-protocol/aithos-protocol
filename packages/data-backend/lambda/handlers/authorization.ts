@@ -88,7 +88,11 @@ export async function authorizeAppHandler(caller: Caller): Promise<unknown> {
   }
 
   // 2. Mandate signature + window + structure.
-  const issuerDoc = await resolveIssuerDoc(subjectDid);
+  // Use the enriched resolver from caller (HOTFIX-A2a-RESOLVER) so that
+  // mandates signed by a non-root sphere (e.g. #circle for custodial
+  // did:aithos users) verify correctly when the caller passed
+  // `_subject_sphere_pubkeys` in params.
+  const issuerDoc = await caller.resolveIssuerDoc(subjectDid);
   if (!issuerDoc) {
     throw new RpcError(
       -32011,

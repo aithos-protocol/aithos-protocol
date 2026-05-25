@@ -19,6 +19,7 @@ import {
   type VerifyEnvelopeContext,
 } from "@aithos/protocol-core/envelope";
 import { ed25519PublicKeyToMultibase } from "@aithos/protocol-core/did";
+import type { DidDocument } from "@aithos/protocol-core/identity";
 
 import { RpcError } from "../jsonrpc.js";
 import { resolveIssuerDoc, withSphereOverride } from "./did-resolver.js";
@@ -46,6 +47,16 @@ export interface Caller {
   readonly envelopeNonce: string;
   /** Per-call params, with `_envelope` stripped. */
   readonly params: Record<string, unknown>;
+  /**
+   * DID resolver to use when a handler needs to verify a mandate or
+   * decode a DID document — already enriched with `withSphereOverride`
+   * if the caller passed `_subject_sphere_pubkeys` in params (cf.
+   * HOTFIX-A2a-RESOLVER). Handlers SHOULD use this rather than calling
+   * `resolveIssuerDoc` directly, otherwise mandate signature
+   * verification will fail for custodial did:aithos users whose
+   * sphere keys are distinct from root.
+   */
+  readonly resolveIssuerDoc: (did: string) => Promise<DidDocument | null>;
 }
 
 interface AuthenticateInput {
@@ -198,6 +209,11 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
     signerPubkeyMultibase: ed25519PublicKeyToMultibase(result.signerKey),
     envelopeNonce: (envelope as SignedEnvelope).nonce,
     params: handlerParams,
+    // Expose le resolver enrichi (HOTFIX-A2a-RESOLVER) pour que les
+    // handlers qui font verifyMandate (authorize_app, revoke_app, etc.)
+    // bénéficient automatiquement de l'override sphère pubkeys, sans
+    // avoir à re-construire le wrapper localement.
+    resolveIssuerDoc: enrichedResolver,
   };
 }
 
