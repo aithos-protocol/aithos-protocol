@@ -19,7 +19,7 @@
  * replay of a wrapped DEK from one record into another.
  */
 
-import { randomBytes } from "node:crypto";
+import { randomBytes } from "./internal/random.js";
 import { XChaCha20Poly1305 } from "@stablelib/xchacha20poly1305";
 
 import {
