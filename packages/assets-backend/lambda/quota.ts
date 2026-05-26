@@ -75,6 +75,11 @@ export async function reserveQuota(
   }
 
   const limit = PER_SUBJECT_QUOTA_BYTES;
+  // DynamoDB ConditionExpression NE SUPPORTE PAS l'arithmétique (+ - * /).
+  // L'arithmétique n'est autorisée que dans UpdateExpression. Pour
+  // exprimer "used_bytes + delta ≤ limit", on précompute le seuil de
+  // façon équivalente : "used_bytes ≤ limit - delta".
+  const remaining = limit - delta;
 
   try {
     const r = await ddb.send(
@@ -83,10 +88,11 @@ export async function reserveQuota(
         Key: { pk: pkForSubject(subjectDid), sk: QUOTA_META_SK },
         UpdateExpression: "ADD used_bytes :d SET limit_bytes = :l",
         ConditionExpression:
-          "attribute_not_exists(used_bytes) OR used_bytes + :d <= :l",
+          "attribute_not_exists(used_bytes) OR used_bytes <= :remaining",
         ExpressionAttributeValues: {
           ":d": delta,
           ":l": limit,
+          ":remaining": remaining,
         },
         ReturnValues: "ALL_NEW",
       }),
