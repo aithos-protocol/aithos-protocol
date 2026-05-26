@@ -1,0 +1,45 @@
+{
+  "name": "@aithos/assets-backend",
+  "version": "0.1.0-alpha.1",
+  "description": "AWS backend (S3 + DynamoDB + Lambda + API Gateway + CloudFront) implementing the Aithos assets sub-protocol primitives. See spec/assets/.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check-types": "tsc --noEmit",
+    "clean": "rm -rf dist cdk.out",
+    "cdk:synth": "cdk synth --app 'tsx bin/app.ts'",
+    "cdk:diff": "cdk diff --app 'tsx bin/app.ts' AithosAssetsPdsDev",
+    "cdk:deploy": "cdk deploy --app 'tsx bin/app.ts' AithosAssetsPdsDev --require-approval never",
+    "cdk:destroy": "cdk destroy --app 'tsx bin/app.ts' AithosAssetsPdsDev --force",
+    "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "test:e2e": "node --import tsx --test --test-reporter=spec \"test-e2e/*.test.ts\""
+  },
+  "dependencies": {
+    "@aithos/assets-crypto": "*",
+    "@aithos/protocol-core": "*",
+    "@aws-sdk/client-dynamodb": "^3.620.0",
+    "@aws-sdk/client-s3": "^3.620.0",
+    "@aws-sdk/lib-dynamodb": "^3.620.0",
+    "@aws-sdk/s3-request-presigner": "^3.620.0",
+    "@noble/hashes": "^1.4.0",
+    "@scure/base": "^1.1.6",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.140",
+    "@types/node": "^20.11.0",
+    "aws-cdk-lib": "^2.150.0",
+    "aws-sdk-client-mock": "^4.0.0",
+    "constructs": "^10.3.0",
+    "esbuild": "^0.23.0",
+    "tsx": "^4.11.0",
+    "typescript": "^5.5.0",
+    "aws-cdk": "^2.150.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

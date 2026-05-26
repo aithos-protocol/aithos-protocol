@@ -1,0 +1,76 @@
+{
+  "name": "@aithos/assets-crypto",
+  "version": "0.1.0-alpha.1",
+  "description": "Reference cryptographic primitives for the Aithos assets sub-protocol: AMK generation, X25519-HKDF-AEAD wraps, XChaCha20-Poly1305 byte encryption. See spec/assets/.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aithos-protocol/aithos-protocol.git",
+    "directory": "packages/assets-crypto"
+  },
+  "keywords": [
+    "aithos",
+    "assets",
+    "pds",
+    "personal-data-server",
+    "encryption",
+    "x25519",
+    "xchacha20poly1305",
+    "envelope-encryption",
+    "file-encryption"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./amk": {
+      "types": "./dist/amk.d.ts",
+      "import": "./dist/amk.js"
+    },
+    "./asset": {
+      "types": "./dist/asset.d.ts",
+      "import": "./dist/asset.js"
+    },
+    "./aad": {
+      "types": "./dist/aad.d.ts",
+      "import": "./dist/aad.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check-types": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^1.4.0",
+    "@stablelib/xchacha20poly1305": "^2.0.1",
+    "@stablelib/hkdf": "^2.0.1",
+    "@stablelib/sha256": "^2.0.1",
+    "@scure/base": "^1.1.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.11.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

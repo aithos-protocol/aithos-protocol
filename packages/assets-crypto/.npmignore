@@ -1,0 +1,9 @@
+src/
+test/
+tsconfig.json
+tsconfig.tsbuildinfo
+.npmignore
+node_modules/
+*.test.ts
+*.bench.ts
+.DS_Store
