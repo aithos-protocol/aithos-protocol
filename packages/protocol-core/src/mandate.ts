@@ -94,9 +94,20 @@ export interface Mandate {
   };
 }
 
+/**
+ * Kind of mandate this revocation targets.
+ *
+ * Default `"action"` corresponds to standard mandates (§4). `"sponsorship-mandate"`
+ * targets sponsorship mandates from draft §13. Verifiers that pre-date the
+ * field MUST treat its absence as `"action"` (back-compat).
+ */
+export type RevocationMandateKind = "action" | "sponsorship-mandate";
+
 export interface Revocation {
   "aithos-revocation": "0.1.0";
   mandate_id: string;
+  /** Draft §13.9 — disambiguates which signed object the revocation targets. */
+  mandate_kind?: RevocationMandateKind;
   issuer: string;
   issued_by_key: string;
   revoked_at: string;
@@ -397,6 +408,12 @@ export interface RevokeMandateArgs {
   mandate: Mandate;
   reason: string;
   revokedAt?: Date;
+  /**
+   * Draft §13.9 — kind of mandate this revocation targets. Defaults to
+   * `"action"` for back-compat; pass `"sponsorship-mandate"` when revoking
+   * a `SponsorshipMandate`.
+   */
+  mandateKind?: RevocationMandateKind;
 }
 
 export function createRevocation(args: RevokeMandateArgs): Revocation {
@@ -411,6 +428,9 @@ export function createRevocation(args: RevokeMandateArgs): Revocation {
   const unsigned: Revocation = {
     "aithos-revocation": "0.1.0",
     mandate_id: args.mandate.id,
+    ...(args.mandateKind && args.mandateKind !== "action"
+      ? { mandate_kind: args.mandateKind }
+      : {}),
     issuer: args.mandate.issuer,
     issued_by_key: issuedBy,
     revoked_at: revokedAt,

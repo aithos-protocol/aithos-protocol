@@ -65,6 +65,24 @@ export interface EnvelopeProof {
   readonly proofValue: string; // base64url(Ed25519 signature, 64 bytes)
 }
 
+/**
+ * Optional sponsorship reference — draft §13.6.
+ *
+ * Present when the consumer expects a specific `SponsorshipMandate` to fund
+ * the call. The authority MUST cross-check `hash` against the canonical copy
+ * of the mandate and reject on mismatch, defeating any attempt to widen caps
+ * by tampering with a local copy. When the field is absent, the authority MAY
+ * still auto-discover an eligible sponsorship from its own index; the field is
+ * an explicit hint, not the sole gate.
+ *
+ * NOT YET NORMATIVE — pending promotion of `sponsorship-mandate-v0.1` draft.
+ */
+export interface SponsorshipReference {
+  readonly id: string;
+  /** Canonical hash of the mandate, format `"sha256:" + hex`. */
+  readonly hash: string;
+}
+
 export interface SignedEnvelope {
   readonly "aithos-envelope": "0.1.0";
   readonly iss: string;
@@ -76,6 +94,8 @@ export interface SignedEnvelope {
   /** `"sha256-" + lowercase hex SHA-256 of rfc8785(params without _envelope)`. */
   readonly params_hash: string;
   readonly mandate?: Mandate;
+  /** Draft §13.6 — sponsorship reference, optional and back-compatible. */
+  readonly sponsorship?: SponsorshipReference;
   readonly proof: EnvelopeProof;
 }
 
@@ -195,6 +215,12 @@ export interface SignEnvelopeArgs {
   readonly now?: Date;
   /** Nonce override. Defaults to a freshly minted ULID. */
   readonly nonce?: string;
+  /**
+   * Optional sponsorship reference — draft §13.6. When present, the field is
+   * carried in the signed envelope and the authority may apply the indicated
+   * sponsorship if eligible.
+   */
+  readonly sponsorship?: SponsorshipReference;
 }
 
 export function signEnvelope(args: SignEnvelopeArgs): SignedEnvelope {
@@ -209,6 +235,7 @@ export function signEnvelope(args: SignEnvelopeArgs): SignedEnvelope {
     signerSeed: args.sphereKey.seed,
     verificationMethod: args.sphereKey.verificationMethod,
     mandate: undefined,
+    sponsorship: args.sponsorship,
   });
 }
 
@@ -230,6 +257,8 @@ export interface SignEnvelopeWithMandateArgs {
   readonly ttlSeconds?: number;
   readonly now?: Date;
   readonly nonce?: string;
+  /** Optional sponsorship reference — draft §13.6. */
+  readonly sponsorship?: SponsorshipReference;
 }
 
 export function signEnvelopeWithMandate(
@@ -255,6 +284,7 @@ export function signEnvelopeWithMandate(
     signerSeed: args.delegateKey.seed,
     verificationMethod: args.delegateKey.pubkeyMultibase,
     mandate: args.mandate,
+    sponsorship: args.sponsorship,
   });
 }
 
@@ -269,6 +299,7 @@ function buildAndSignEnvelope(args: {
   signerSeed: Uint8Array;
   verificationMethod: string;
   mandate: Mandate | undefined;
+  sponsorship: SponsorshipReference | undefined;
 }): SignedEnvelope {
   const now = args.now ?? new Date();
   const ttl = args.ttlSeconds ?? 60;
@@ -290,6 +321,9 @@ function buildAndSignEnvelope(args: {
     nonce: args.nonce ?? ulid(),
     params_hash: envelopeParamsHash(args.params),
     ...(args.mandate !== undefined ? { mandate: args.mandate } : {}),
+    ...(args.sponsorship !== undefined
+      ? { sponsorship: args.sponsorship }
+      : {}),
     proof: {
       type: "Ed25519Signature2020",
       verificationMethod: args.verificationMethod,
