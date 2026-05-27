@@ -14,6 +14,7 @@ issue to start a discussion, or a PR to propose changes to a draft directly.
 |---|---|---|---|
 | [`bundle-v0.3-per-section-encryption.md`](./bundle-v0.3-per-section-encryption.md) | §3 | Draft | Split each zone into per-section blobs (one ciphertext file per section in `circle` / `self`, one plaintext markdown file per section in `public`). Editing one section costs O(section size) instead of O(zone size). Symmetric across all three zones. |
 | [`gamma-v0.3-per-entry-envelopes.md`](./gamma-v0.3-per-entry-envelopes.md) | §10, §4 | Draft | Per-entry envelopes in the gamma log. Decouples append capability from read capability — a write-delegate no longer gets retroactive read access to the subject's history. Adds a new `gamma.read` scope. |
+| [`sponsorship-mandate-v0.1.md`](./sponsorship-mandate-v0.1.md) | new §13, §4, §10, §11 | Draft | Commercial sponsorship between Ethos. A sponsor signs a persistent `SponsorshipMandate` declaring it will absorb the cost of operations performed by consumers within explicit budget and scope constraints. A designated accounting-authority subject signs a `ConsumptionReceipt` on every debit, archived V1 and gamma-anchored V2. No currency, no consensus, no token — pure composition of existing signatures. |
 | [`gamma-deep-memory.md`](./gamma-deep-memory.md) | §10 | Promoted | Original draft for the gamma deep-memory log. Already promoted to normative §10 in the current spec. Kept here for historical reference. |
 
 ## Coordination across drafts
