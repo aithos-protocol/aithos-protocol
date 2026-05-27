@@ -1,6 +1,6 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Aithos protocol — reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
@@ -67,6 +67,10 @@
     "./mandate": {
       "types": "./dist/mandate.d.ts",
       "import": "./dist/mandate.js"
+    },
+    "./sponsorship": {
+      "types": "./dist/sponsorship.d.ts",
+      "import": "./dist/sponsorship.js"
     },
     "./storage": {
       "types": "./dist/storage.d.ts",

@@ -5,6 +5,69 @@ All notable changes to `@aithos/protocol-core` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-05-27
+
+Purely additive minor release introducing the **sponsorship primitive**
+defined in `spec/drafts/sponsorship-mandate-v0.1.md` (draft §13). No
+existing API changes shape or behaviour. The new surface is **experimental
+until §13 is promoted to a normative chapter**; expect minor breaks to the
+sponsorship-specific types before v1.0.
+
+### Added
+- **Sponsorship mandates** (draft §13.3). New module
+  `@aithos/protocol-core/sponsorship`:
+  - `SponsorshipMandate` — signed by a sponsor declaring it will absorb
+    the cost of operations performed by consumers within explicit budget
+    and scope. Includes `audience` (open or list), `scopes`,
+    `allowed_methods`, optional `allowed_models`, a `budget` object
+    (per-user, per-day, lifetime pool caps in an authority-defined `unit`),
+    and an `accounting_authority` pointer (DID + endpoint).
+  - `createSponsorshipMandate`, `verifySponsorshipMandate`,
+    `sponsorshipMandateHash` (canonical SHA-256 used for envelope binding).
+- **Consumption receipts** (draft §13.5). `ConsumptionReceipt` — signed by
+  the accounting authority on every debit, binding `(sponsor, consumer,
+  envelope, amount)` into one attestation. `createConsumptionReceipt`,
+  `verifyConsumptionReceipt`. Carries `funded_by ∈ { "sponsored",
+  "purchase", "grant" }`.
+- **Sponsorship revocations** (draft §13.9). `createSponsorshipRevocation`
+  reuses the existing `Revocation` shape with the new `mandate_kind`
+  discriminator set to `"sponsorship-mandate"`.
+- **Eligibility decision** (draft §13.7). `evaluateEligibility(input)` —
+  pure routing function used by an authority to decide whether a candidate
+  sponsorship covers a call. Returns `{ ok, reason }` where `reason`
+  enumerates: `ok | expired | not_yet_valid | method_blocked |
+  model_blocked | audience_excluded | per_user_cap_reached |
+  per_user_window_cap_reached | per_day_cap_reached | pool_cap_reached |
+  wallet_insufficient`.
+
+### Changed (back-compatible, additive only)
+- **`SignedEnvelope`** carries an optional `sponsorship?: { id, hash }`
+  field. When present, the authority MUST verify the indicated sponsorship
+  is eligible; when absent, the authority MAY auto-discover. The field is
+  inside the signing bytes — an attacker cannot attach it after signing.
+- **`Revocation`** carries an optional `mandate_kind?: "action" |
+  "sponsorship-mandate"`. Absent ≡ `"action"` for back-compat with all
+  prior revocation lists.
+- **`signEnvelope` / `signEnvelopeWithMandate`** accept an optional
+  `sponsorship` argument that is propagated into the signed envelope.
+
+### Protocol
+- New draft chapter: `spec/drafts/sponsorship-mandate-v0.1.md` (586 lines).
+  Targets a new chapter §13 on promotion, with cross-references to §4
+  (mandates), §10 (platform primitives), §11 (signed envelopes), and the
+  v0.3 gamma draft (for V2 receipt anchoring).
+
+### Notes
+- The new `unit` field on `SponsorshipBudget` deliberately leaves the
+  unit of account uninterpreted by the protocol. The reserved value
+  `"aithos.mc"` denotes the platform microcredit, but authorities MAY
+  accept any string (e.g. `"openai.tokens"`). This keeps the protocol
+  free of any embedded currency or pricing assumption.
+- Receipts are stored canonically at the authority in v0.1. V0.2 will
+  introduce gamma-log anchoring (pending the `gamma-v0.3-per-entry-envelopes`
+  draft landing and a `SponsorshipAcceptance` draft to grant the authority
+  `gamma.write` on each party's log).
+
 ## [0.5.1] — 2026-05-01
 
 ### Fixed

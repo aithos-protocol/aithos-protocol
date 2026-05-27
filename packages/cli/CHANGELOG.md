@@ -5,6 +5,20 @@ All notable changes to the Aithos reference CLI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-05-27
+
+### Changed
+- Bumped `@aithos/protocol-core` peer to `^0.6.0` to pick up the new
+  sponsorship primitive (draft §13). The CLI itself does not yet expose
+  sponsorship commands; this version bump exists only so users who
+  reinstall the CLI resolve a protocol-core that contains the new types.
+  Sponsorship commands (e.g. `aithos sponsorship create/revoke/show`)
+  may be added in a later release once the draft stabilises.
+
+### Notes
+- No behaviour change in the existing command surface. All existing
+  commands continue to work unchanged.
+
 ## [0.5.1] — 2026-05-01
 
 ### Fixed

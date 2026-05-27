@@ -5,6 +5,20 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-05-27
+
+### Changed
+- Bumped `@aithos/protocol-core` peer to `^0.6.0` to pick up the new
+  sponsorship primitive (draft §13). The MCP server itself does not yet
+  expose sponsorship-aware tools; this version bump exists only so
+  consumers installing the MCP server resolve a protocol-core that
+  contains the new types. Sponsorship-aware MCP tools may be added in
+  a later release.
+
+### Notes
+- No behaviour change in the existing tool surface. Existing MCP clients
+  continue to work unchanged.
+
 ## [0.6.1] — 2026-05-01
 
 ### Fixed
