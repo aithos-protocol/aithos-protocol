@@ -31,6 +31,8 @@ import {
 
 import { isMediaTypeAllowed } from "../lambda/media-types.js";
 
+import { pickEnvelope } from "../lambda/handlers/uploads.js";
+
 import {
   notFound,
   invalidParams,
@@ -201,5 +203,59 @@ describe("Error constructors", () => {
     const e = invalidParams("foo is required");
     assert.equal(e.code, -32602);
     assert.equal(e.message, "foo is required");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  pickEnvelope — complete_upload AMK envelope selection                     */
+/* -------------------------------------------------------------------------- */
+
+describe("pickEnvelope (complete_upload AMK envelope selection)", () => {
+  const placeholder = {
+    alg: "xchacha20poly1305-ietf",
+    nonce: "",
+    wraps: [],
+  };
+  const real = {
+    alg: "xchacha20poly1305-ietf",
+    nonce: "AAAA",
+    wraps: [
+      {
+        kid: "did:key:z6Mk…#kex",
+        epk: "AAAA",
+        ct: "BBBB",
+        recipient: "did:key:z6Mk…",
+      },
+    ],
+  };
+
+  it("prefers the complete-time envelope when it has non-empty wraps", () => {
+    assert.deepEqual(pickEnvelope(real, placeholder), real);
+  });
+
+  it("falls back to init-time envelope when complete-time wraps[] is empty", () => {
+    // Legacy SDK only sends amk_envelope at init.
+    assert.deepEqual(pickEnvelope(undefined, placeholder), placeholder);
+    // Complete-time wraps explicitly empty → still fall back.
+    assert.deepEqual(pickEnvelope(placeholder, placeholder), placeholder);
+  });
+
+  it("falls back to init-time envelope when complete-time is missing", () => {
+    assert.deepEqual(pickEnvelope(undefined, real), real);
+    assert.deepEqual(pickEnvelope(null, real), real);
+  });
+
+  it("returns undefined when neither envelope is provided", () => {
+    assert.equal(pickEnvelope(undefined, undefined), undefined);
+    assert.equal(pickEnvelope(undefined, null), undefined);
+    assert.equal(pickEnvelope(null, null), undefined);
+  });
+
+  it("ignores non-object inputs", () => {
+    // Strings, numbers, arrays without `wraps` field → treated as no
+    // envelope.
+    assert.equal(pickEnvelope("not-an-envelope", undefined), undefined);
+    assert.equal(pickEnvelope(42, undefined), undefined);
+    assert.equal(pickEnvelope([], undefined), undefined);
   });
 });

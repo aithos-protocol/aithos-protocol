@@ -199,6 +199,23 @@ export async function initUploadHandler(caller: Caller): Promise<unknown> {
 interface CompleteUploadParams {
   upload_session: string;
   observed_sha256_of_plaintext?: string;
+  /**
+   * Optional final AMK envelope sent by the SDK on `complete_upload`.
+   *
+   * Rationale: at `init_upload` time the client doesn't yet know the
+   * server-allocated URN, and the AMK wraps are AAD-bound to the URN.
+   * So the client sends a placeholder envelope at init (empty `wraps`,
+   * empty `nonce`) and the real envelope here once the URN is known.
+   *
+   * The handler prefers this field over `pending.amk_envelope` whenever
+   * a non-empty `wraps[]` is supplied. Public uploads (encrypted=false)
+   * ignore the field entirely; nothing is ever stored.
+   *
+   * Shape validation is intentionally light at this layer — full
+   * envelope schema is enforced server-side by the SDK contract and
+   * client-side by the `decryptAssetBytes` AAD check at read time.
+   */
+  amk_envelope?: unknown;
 }
 
 export async function completeUploadHandler(caller: Caller): Promise<unknown> {
@@ -252,6 +269,17 @@ export async function completeUploadHandler(caller: Caller): Promise<unknown> {
   // Materialize the asset metadata document.
   const urn = urnForAsset(pending.subject_did, pending.asset_id);
   const now = new Date().toISOString();
+
+  // Pick the AMK envelope to persist. The SDK sends a placeholder at
+  // init_upload (empty `wraps[]`, empty `nonce`) because the AMK wraps
+  // are AAD-bound to the URN, which isn't known until the server
+  // allocates the asset_id. On complete_upload the SDK sends the real
+  // envelope. We prefer the complete-time envelope whenever it carries
+  // a non-empty `wraps[]`; otherwise we keep what was sent at init.
+  const finalEnvelope = pending.encrypted
+    ? pickEnvelope(p.amk_envelope, pending.amk_envelope)
+    : undefined;
+
   const assetItem = {
     pk: pkForSubject(pending.subject_did),
     sk: skForAsset(pending.asset_id),
@@ -266,7 +294,7 @@ export async function completeUploadHandler(caller: Caller): Promise<unknown> {
     size_bytes: pending.size_bytes,
     sha256_of_plaintext: pending.sha256_of_plaintext,
     encrypted: pending.encrypted,
-    amk_envelope: pending.amk_envelope ?? undefined,
+    amk_envelope: finalEnvelope,
     storage: {
       backend: "s3" as const,
       key: pending.s3_key,
@@ -289,8 +317,10 @@ export async function completeUploadHandler(caller: Caller): Promise<unknown> {
       size_bytes: pending.size_bytes,
       sha256_of_plaintext: pending.sha256_of_plaintext,
       encrypted: pending.encrypted,
-      recipients_count: Array.isArray((pending.amk_envelope as { wraps?: unknown[] } | null)?.wraps)
-        ? (pending.amk_envelope as { wraps: unknown[] }).wraps.length
+      recipients_count: Array.isArray(
+        (finalEnvelope as { wraps?: unknown[] } | undefined)?.wraps,
+      )
+        ? (finalEnvelope as { wraps: unknown[] }).wraps.length
         : 0,
       attached_context: pending.attached_context ?? null,
     },
@@ -466,4 +496,35 @@ function stripDdbKeys(item: Record<string, unknown>): Record<string, unknown> {
   void gsi2pk;
   void gsi2sk;
   return rest;
+}
+
+/**
+ * Pick the AMK envelope to persist on `complete_upload`.
+ *
+ * Returns the complete-time envelope when it carries a non-empty
+ * `wraps[]` array (the SDK only ships a real envelope on complete —
+ * init carries a placeholder), otherwise falls back to the
+ * init-time envelope, otherwise undefined.
+ *
+ * Validation is intentionally minimal: we check shape (object with
+ * `wraps` array) only. Deep schema validation belongs to the SDK
+ * contract; bytes-level integrity is enforced by AEAD/AAD at read.
+ *
+ * Exported for unit testing — the handler is the only production
+ * caller.
+ */
+export function pickEnvelope(
+  fromComplete: unknown,
+  fromInit: unknown,
+): unknown {
+  const completeHasWraps = hasNonEmptyWraps(fromComplete);
+  if (completeHasWraps) return fromComplete;
+  if (fromInit !== null && fromInit !== undefined) return fromInit;
+  return undefined;
+}
+
+function hasNonEmptyWraps(env: unknown): boolean {
+  if (!env || typeof env !== "object") return false;
+  const wraps = (env as { wraps?: unknown }).wraps;
+  return Array.isArray(wraps) && wraps.length > 0;
 }

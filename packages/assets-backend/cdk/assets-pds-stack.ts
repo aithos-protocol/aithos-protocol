@@ -369,6 +369,18 @@ export class AithosAssetsPdsStack extends Stack {
       // No explicit priceClass set — uses CloudFront's default (PriceClass_All).
     });
 
+    // Wire the CloudFront domain into the Lambda so `publicAssetUrl()`
+    // in s3-presign.ts composes real URLs. Without this the helper
+    // falls back to `https://cdn.example/...` (a sentinel that obviously
+    // 404s in browsers — observed on 2026-05-29 in app-example /assets).
+    // `addEnvironment` lets us reference the distribution domain after
+    // the distribution construct is created, without needing to reorder
+    // the stack.
+    router.addEnvironment(
+      "PUBLIC_ASSETS_CDN_DOMAIN",
+      distribution.distributionDomainName,
+    );
+
     /* -------------------------------------------------------------------- */
     /*  Outputs                                                              */
     /* -------------------------------------------------------------------- */
