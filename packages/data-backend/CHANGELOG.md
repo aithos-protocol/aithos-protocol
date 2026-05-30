@@ -1,5 +1,31 @@
 # @aithos/data-backend — Changelog
 
+## Unreleased — append-only deposits (data.<collection>.append)
+
+### Added
+
+- **Lateral `append` scope enforcement.** `requireScope` gains the
+  insert-only `"append"` action: `insert_record` now accepts a
+  `data.<collection>.append` mandate (or wildcard `data.*.append`), in
+  addition to full `write`/`admin` scopes. `append` is NOT in the `needed`
+  set of read/write/admin, so a pure-append mandate can insert but can never
+  `get_record` / `list_records` / `update_record` / `delete_record` — those
+  still require read/write and return `-32042 AITHOS_INSUFFICIENT_SCOPE`.
+  This is the server half of the "deposit without read" pattern: combined
+  with the client sealing each DEK to the owner's pubkey
+  (`dek_wrapped_for_owner`), a depositor can add records it cannot read.
+- The record `payload` is opaque to the PDS, so deposits carrying
+  `dek_wrapped_for_owner` (instead of `dek_wrapped_for_cmk`) are stored
+  as-is — no handler change needed. Anti-overwrite is already enforced by
+  the `attribute_not_exists(sk)` condition on insert (a depositor cannot
+  clobber an existing record_id).
+- `test/append-scope.test.ts` — unit tests for the append/read/write/admin
+  matrix.
+
+> Anti-abuse: v1 relies on a **short mandate TTL** for append mandates.
+> `constraints.rate_limit` is defined in the spec but not yet enforced by
+> this backend for any scope; wiring an insert counter is a follow-up.
+
 ## Unreleased — A2b vendor schema self-registration
 
 ### Added

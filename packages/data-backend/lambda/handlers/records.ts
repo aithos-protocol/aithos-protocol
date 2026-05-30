@@ -70,7 +70,10 @@ export async function insertRecordHandler(caller: Caller): Promise<unknown> {
 
   const { subjectDid, collectionName } = parseCollectionUrn(p.collection_urn!);
   requireSubjectMatch(caller, subjectDid);
-  requireScope(caller, collectionName, "write");
+  // insert_record is satisfied by an `append` (insert-only) scope OR a
+  // full `write`/`admin` scope. A pure-append depositor can add records but
+  // cannot read/update/delete them (those handlers require read/write).
+  requireScope(caller, collectionName, "append");
 
   // Confirm the collection exists
   const colKey = {

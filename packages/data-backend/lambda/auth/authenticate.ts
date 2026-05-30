@@ -228,12 +228,19 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
  *   - `data.*.<action>`              — wildcard collection
  *   - `data.<collection>.admin`      — admin implies write implies read
  *
+ * The `"append"` action is the **lateral** insert-only capability. It is
+ * satisfied by `data.<col>.append` (or wildcard), and ALSO by a `write` /
+ * `admin` scope (those strictly include insert). Crucially, `append` is NOT
+ * in the `needed` set of read/write/admin, so a pure-append mandate can
+ * insert but can never read, list, update, or delete — it is never a write
+ * scope. This makes the "deposit without read" invariant structural.
+ *
  * Throws RpcError(-32042, AITHOS_INSUFFICIENT_SCOPE) on miss.
  */
 export function requireScope(
   caller: Caller,
   collectionName: string,
-  action: "read" | "write" | "admin",
+  action: "read" | "write" | "admin" | "append",
 ): void {
   if (caller.mode === "owner") return;
 
@@ -248,6 +255,15 @@ export function requireScope(
   if (action === "read") {
     needed.push(`data.${collectionName}.write`);
     needed.push(`data.*.write`);
+  }
+  if (action === "append") {
+    // Insert is also permitted by a full write/admin scope — those strictly
+    // include the ability to add a record. (The reverse is NOT true: append
+    // never satisfies read/write/admin.)
+    needed.push(`data.${collectionName}.write`);
+    needed.push(`data.*.write`);
+    needed.push(`data.${collectionName}.admin`);
+    needed.push(`data.*.admin`);
   }
 
   // The mandate's scopes may carry filter suffixes — see spec §4.2.3.
