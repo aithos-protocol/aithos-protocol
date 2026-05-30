@@ -25,7 +25,13 @@
 import { randomBytes } from "./internal/random.js";
 import { XChaCha20Poly1305 } from "@stablelib/xchacha20poly1305";
 
-import { generateDEK, unwrapDEKFromCMK, wrapDEKForCMK } from "./dek.js";
+import {
+  generateDEK,
+  unwrapDEKFromCMK,
+  unwrapDEKForRecipient,
+  wrapDEKForCMK,
+  wrapDEKForRecipient,
+} from "./dek.js";
 import {
   DataCryptoError,
   decodeBase64,
@@ -96,6 +102,65 @@ export function encryptRecord(input: EncryptRecordInput): RecordPayload {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Encrypt for deposit (append-only) — DEK sealed to the owner pubkey        */
+/* -------------------------------------------------------------------------- */
+
+export interface EncryptRecordForRecipientInput {
+  readonly subjectDid: string;
+  readonly collectionName: string;
+  readonly recordId: string;
+  readonly payload: unknown;
+  /** Owner's X25519 public key (#data-kex), 32 bytes. */
+  readonly recipientPublicKey: Uint8Array;
+  /** DID URL of the owner's key, e.g. "did:aithos:z6Mkr…#data-kex". */
+  readonly recipientDidUrl: string;
+}
+
+/**
+ * Encrypt a record for the append-only deposit path.
+ *
+ * Generates a fresh DEK, encrypts the canonicalized payload under it, then
+ * SEALS the DEK to the owner's X25519 public key (not the CMK). The DEK is
+ * zeroed before return. The depositor keeps no key material, so it can read
+ * nothing — not even this record. Returns a {@link RecordPayload} carrying
+ * `dek_wrapped_for_owner` (and no `dek_wrapped_for_cmk`).
+ */
+export function encryptRecordForRecipient(
+  input: EncryptRecordForRecipientInput,
+): RecordPayload {
+  const plaintext = utf8(canonicalize(input.payload));
+  const dek = generateDEK();
+  try {
+    const nonce = new Uint8Array(randomBytes(NONCE_LENGTH));
+    const aad = aadForRecord(
+      input.subjectDid,
+      input.collectionName,
+      input.recordId,
+    );
+    const aead = new XChaCha20Poly1305(dek);
+    const ciphertext = aead.seal(nonce, plaintext, aad);
+
+    const depositWrap = wrapDEKForRecipient({
+      dek,
+      recipientPublicKey: input.recipientPublicKey,
+      recipientDidUrl: input.recipientDidUrl,
+      subjectDid: input.subjectDid,
+      collectionName: input.collectionName,
+      recordId: input.recordId,
+    });
+
+    return {
+      alg: "xchacha20poly1305-ietf",
+      nonce: encodeBase64(nonce),
+      ciphertext: encodeBase64(ciphertext),
+      dek_wrapped_for_owner: depositWrap,
+    };
+  } finally {
+    dek.fill(0);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Decrypt                                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -121,6 +186,14 @@ export function decryptRecord<T = unknown>(input: DecryptRecordInput): T {
     throw new DataCryptoError(
       "DATA_RECORD_ALG_UNKNOWN",
       `unknown record AEAD alg "${input.encrypted.alg}"`,
+    );
+  }
+  if (input.encrypted.dek_wrapped_for_cmk === undefined) {
+    throw new DataCryptoError(
+      "DATA_RECORD_NOT_CMK_WRAPPED",
+      input.encrypted.dek_wrapped_for_owner !== undefined
+        ? "record is an append-only deposit (dek_wrapped_for_owner); decrypt it with decryptDepositedRecord using the owner's X25519 private key, not the CMK"
+        : "record payload has no dek_wrapped_for_cmk",
     );
   }
 
@@ -159,6 +232,72 @@ export function decryptRecord<T = unknown>(input: DecryptRecordInput): T {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Decrypt a deposited (append-only) record — owner side                     */
+/* -------------------------------------------------------------------------- */
+
+export interface DecryptDepositedRecordInput {
+  readonly subjectDid: string;
+  readonly collectionName: string;
+  readonly recordId: string;
+  readonly encrypted: RecordPayload;
+  /** Owner's X25519 private key (#data-kex), 32 bytes. */
+  readonly recipientPrivateKey: Uint8Array;
+}
+
+/**
+ * Decrypt an append-only deposit, given the owner's X25519 private key.
+ *
+ * Counterpart of {@link encryptRecordForRecipient}. The owner unwraps the
+ * DEK from `dek_wrapped_for_owner` with its `#data-kex` private key, then
+ * AEAD-decrypts the payload. No CMK is involved.
+ */
+export function decryptDepositedRecord<T = unknown>(
+  input: DecryptDepositedRecordInput,
+): T {
+  if (input.encrypted.alg !== "xchacha20poly1305-ietf") {
+    throw new DataCryptoError(
+      "DATA_RECORD_ALG_UNKNOWN",
+      `unknown record AEAD alg "${input.encrypted.alg}"`,
+    );
+  }
+  if (input.encrypted.dek_wrapped_for_owner === undefined) {
+    throw new DataCryptoError(
+      "DATA_RECORD_NOT_DEPOSIT",
+      "record has no dek_wrapped_for_owner; it is not an append-only deposit (use decryptRecord with the CMK)",
+    );
+  }
+
+  const dek = unwrapDEKForRecipient({
+    wrap: input.encrypted.dek_wrapped_for_owner,
+    recipientPrivateKey: input.recipientPrivateKey,
+    subjectDid: input.subjectDid,
+    collectionName: input.collectionName,
+    recordId: input.recordId,
+  });
+
+  try {
+    const nonce = decodeBase64(input.encrypted.nonce);
+    const ciphertext = decodeBase64(input.encrypted.ciphertext);
+    const aad = aadForRecord(
+      input.subjectDid,
+      input.collectionName,
+      input.recordId,
+    );
+    const aead = new XChaCha20Poly1305(dek);
+    const plaintext = aead.open(nonce, ciphertext, aad);
+    if (plaintext === null) {
+      throw new DataCryptoError(
+        "DATA_RECORD_DECRYPT_FAILED",
+        "deposited record payload AEAD decryption failed",
+      );
+    }
+    return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+  } finally {
+    dek.fill(0);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Re-wrap DEK under a new CMK (CMK rotation support)                        */
 /* -------------------------------------------------------------------------- */
 
@@ -180,6 +319,12 @@ export interface RewrapRecordDEKInput {
  * byte-identical before and after.
  */
 export function rewrapRecordDEK(input: RewrapRecordDEKInput): RecordPayload {
+  if (input.encrypted.dek_wrapped_for_cmk === undefined) {
+    throw new DataCryptoError(
+      "DATA_RECORD_NOT_CMK_WRAPPED",
+      "cannot rewrap: record has no dek_wrapped_for_cmk (append-only deposits are sealed to the owner key and are not part of CMK rotation)",
+    );
+  }
   const dek = unwrapDEKFromCMK({
     wrappedDek: input.encrypted.dek_wrapped_for_cmk,
     cmk: input.oldCmk,

@@ -54,6 +54,21 @@ export interface CMKEnvelope {
  * The payload envelope of a record.
  *
  * Spec ref: `spec/data/01-data-model.md` §1.3.4.
+ *
+ * Exactly ONE of the two DEK-wrap fields is present, and that choice
+ * encodes how the record was written:
+ *
+ *  - `dek_wrapped_for_cmk` — the normal owner / read-write-delegate path.
+ *    The DEK is wrapped under the collection's CMK; anyone holding the CMK
+ *    (owner, or a `read`/`write` delegate via `authorize_app`) can read it.
+ *
+ *  - `dek_wrapped_for_owner` — the **append-only deposit** path
+ *    (`data.<collection>.append`). The DEK is sealed to the owner's
+ *    `#data-kex` X25519 public key, NOT to the CMK. The depositor never
+ *    holds the CMK and discards the DEK, so it can read NOTHING in the
+ *    collection — not even its own deposit. Only the owner's private
+ *    `#data-kex` key recovers the DEK. This is what makes append-without-read
+ *    cryptographic rather than policy-enforced.
  */
 export interface RecordPayload {
   readonly alg: "xchacha20poly1305-ietf";
@@ -61,8 +76,18 @@ export interface RecordPayload {
   readonly nonce: string;
   /** AEAD ciphertext of the payload (base64). */
   readonly ciphertext: string;
-  /** DEK wrapped for the collection's CMK (nonce ‖ ciphertext, base64). */
-  readonly dek_wrapped_for_cmk: string;
+  /**
+   * DEK wrapped for the collection's CMK (nonce ‖ ciphertext, base64).
+   * Present for owner / read-write-delegate writes. Mutually exclusive
+   * with {@link RecordPayload.dek_wrapped_for_owner}.
+   */
+  readonly dek_wrapped_for_cmk?: string;
+  /**
+   * DEK sealed to the owner's X25519 public key (append-only deposit).
+   * Present for `data.<collection>.append` writes. Mutually exclusive
+   * with {@link RecordPayload.dek_wrapped_for_cmk}.
+   */
+  readonly dek_wrapped_for_owner?: WrapEntry;
 }
 
 /* -------------------------------------------------------------------------- */
