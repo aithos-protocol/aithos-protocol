@@ -249,6 +249,17 @@ export function createMandate(args: CreateMandateArgs): Mandate {
     );
   }
 
+  // Append mandates MUST bind to a specific delegate key: the depositor signs
+  // every insert envelope under it, and the PDS verifies that signature
+  // against `grantee.pubkey`. Unlike read/write data mandates, an append
+  // mandate needs NO `kex_pubkey` — the depositor seals each DEK to the
+  // owner's public key and keeps no read capability of its own.
+  if (hasDataAppendScope(args.scopes) && !args.grantee.pubkey) {
+    throw new Error(
+      `Append mandate (data.<collection>.append) requires grantee.pubkey (the delegate key that signs insert envelopes).`,
+    );
+  }
+
   const now = args.notBefore ?? new Date();
   const notAfter = new Date(now.getTime() + args.ttlSeconds * 1000);
   const nonce = base64url(randomBytes(9)); // 72 bits of entropy
@@ -362,6 +373,26 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
 /** Identify whether any of the given scopes is a write scope. */
 export function hasWriteScope(scopes: string[]): boolean {
   return scopes.some((s) => s.startsWith("ethos.write."));
+}
+
+/**
+ * Whether `s` is a well-formed append-only data scope: `data.<collection>.append`.
+ *
+ * `append` is a **lateral** capability, deliberately NOT part of the
+ * `read ⊂ write ⊂ admin` hierarchy (mirrors `gamma.write`). It authorizes
+ * `insert_record` ONLY — never read, update, or delete — and is the protocol
+ * counterpart of the cryptographic "seal DEK to owner pubkey" deposit
+ * (`@aithos/data-crypto` `encryptRecordForRecipient`). Because it grants no
+ * read, a holder cannot decrypt anything in the collection, not even its own
+ * deposit. Collection names MUST NOT contain ".".
+ */
+export function isDataAppendScope(s: string): boolean {
+  return /^data\.[^.]+\.append$/.test(s);
+}
+
+/** Whether the scope set carries any `data.<collection>.append` scope. */
+export function hasDataAppendScope(scopes: string[]): boolean {
+  return scopes.some(isDataAppendScope);
 }
 
 /**

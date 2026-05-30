@@ -7,6 +7,24 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-05-30
+
+### Added
+
+- **Append-only data scope `data.<collection>.append`.** A new *lateral*
+  capability — deliberately outside the `read ⊂ write ⊂ admin` hierarchy
+  (mirrors `gamma.write`) — that authorizes `insert_record` ONLY. Helpers
+  `isDataAppendScope` / `hasDataAppendScope`. `createMandate` now requires
+  `grantee.pubkey` for append mandates (the depositor signs each insert
+  envelope), but NOT `kex_pubkey`: an append holder seals each DEK to the
+  owner's public key (`@aithos/data-crypto` `encryptRecordForRecipient`) and
+  gains no read capability — it cannot decrypt anything in the collection,
+  not even its own deposit. Enables the "deposit without read" pattern
+  (e.g. Délie: a patient drops a long-lived mandate into the practitioner's
+  collection without being able to read other patients' deposits). The
+  per-method enforcement (insert allowed, read/update/delete refused) lives
+  in the data-backend; `append` is never treated as a write scope here.
+
 ## [0.6.1] — 2026-05-30
 
 ### Added
