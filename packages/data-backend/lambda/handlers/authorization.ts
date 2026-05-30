@@ -295,21 +295,23 @@ export async function revokeAppHandler(caller: Caller): Promise<unknown> {
     grantee_pubkey: string;
   }>;
   const mandateEntry = mandateIndex[p.mandate_id!];
-  if (!mandateEntry) {
-    throw new RpcError(
-      -32020,
-      `AITHOS_NOT_FOUND: mandate ${p.mandate_id} is not authorized on ${p.collection_urn}`,
-    );
-  }
 
-  // 1. Remove the wrap addressed to that grantee.
+  // An append-only mandate (`data.<col>.append`) is never run through
+  // authorize_app — it carries no CMK wrap (the depositor seals each DEK to
+  // the owner's pubkey instead). So a missing mandate_index entry is NOT an
+  // error here: we still publish the revocation so the PDS rejects future
+  // envelopes signed under that mandate. Only when an entry exists do we have
+  // a wrap to strip. Revoking is owner-only + subject-matched (checked above),
+  // so recording a revocation for an owner-named mandate id is safe.
   const existingEnvelope = col.Item.cmk_envelope as {
     alg: string;
     wraps: Array<{ recipient: string }>;
   };
-  const filteredWraps = (existingEnvelope.wraps ?? []).filter(
-    (w) => !w.recipient.includes(mandateEntry.grantee_pubkey),
-  );
+  const filteredWraps = mandateEntry
+    ? (existingEnvelope.wraps ?? []).filter(
+        (w) => !w.recipient.includes(mandateEntry.grantee_pubkey),
+      )
+    : (existingEnvelope.wraps ?? []);
 
   const now = new Date().toISOString();
 
