@@ -32,6 +32,47 @@ data.*.<action>                    // wildcard across all collections
 | `data.<col>.read` | Call `aithos.data.get_record`, `list_records` on collection `<col>`. |
 | `data.<col>.write` | Call `insert_record`, `update_record`, `delete_record`. Implies `read`. |
 | `data.<col>.admin` | Same as `write` plus `authorize_app`, `revoke_app` (sub-delegation), `rotate_cmk`. Reserved for trusted apps — typically not granted to third-party apps in v0.1. |
+| `data.<col>.append` | Call `insert_record` ONLY. **Lateral capability** — see §4.2.4. Grants no read; not implied by `write`/`admin` and does not imply `read`. |
+
+### 4.2.3bis The lateral `append` action (deposit without read)
+
+`append` is intentionally **outside** the `read ⊂ write ⊂ admin` hierarchy
+(the same way `gamma.write` sits beside the ethos scopes). It authorizes a
+single operation — `insert_record` — and nothing else:
+
+- A holder of `data.<col>.append` MAY add new records to `<col>`.
+- It MUST NOT be able to `get_record`, `list_records`, `update_record`, or
+  `delete_record` on `<col>`. The PDS returns
+  `AITHOS_INSUFFICIENT_SCOPE` for those.
+- `append` is never implied by `write`/`admin`, and never implies `read`.
+  Conversely, a `write`/`admin` scope DOES satisfy an insert (it strictly
+  includes the ability to add a record).
+
+This enables a **deposit-without-read** pattern: a third party can drop a
+record into a subject's collection without being able to read that
+collection — not other parties' records, and not even its own deposit.
+
+**Cryptographic binding.** A normal write wraps each record's DEK under the
+collection CMK (`dek_wrapped_for_cmk`), so any CMK-holder (owner or
+read/write delegate) can read it. An `append` deposit instead seals the DEK
+to the **owner's `#data-kex` X25519 public key** (`dek_wrapped_for_owner`,
+an X25519-HKDF-AEAD wrap), and the depositor discards the DEK. The depositor
+holds no CMK and no DEK, so it can decrypt nothing. Only the owner's private
+`#data-kex` key recovers the DEK. The PDS treats the record payload as
+opaque and stores either wrap form unchanged. A read/write delegate
+encountering a deposit it cannot open simply skips it.
+
+> **Why a separate action, not `write` without `kex_pubkey`?** §4.4.2 notes
+> a write mandate MAY omit `kex_pubkey` ("writing blind"). `append`
+> formalizes and enforces that intent: it makes "insert but never read" a
+> first-class, server-checked capability rather than a convention, and the
+> `dek_wrapped_for_owner` construction makes the blindness cryptographic
+> (the depositor cannot read even what it wrote), not merely policy.
+
+> **Anti-abuse.** Because `append` permits unbounded inserts within the
+> mandate window, an append mandate SHOULD carry a short `not_after`.
+> `constraints.rate_limit` (e.g. `inserts_per_day`) MAY bound it further;
+> rate-limit enforcement for data scopes is OPTIONAL in v0.1.
 
 ### 4.2.2 Wildcards
 
@@ -201,6 +242,14 @@ the CMK wrap. Without it, the grantee cannot decrypt anything.
 A mandate granting only write scope MAY omit `kex_pubkey` (the grantee
 would be writing blind, with the owner managing read access separately).
 This is unusual but valid.
+
+A mandate granting only `append` (§4.2.3bis) REQUIRES `grantee.pubkey`
+(the depositor signs every `insert_record` envelope under it) but MUST omit
+`kex_pubkey` and MUST NOT receive a CMK wrap: the whole point is that the
+depositor cannot read. The depositor instead seals each record's DEK to the
+owner's `#data-kex` public key (`dek_wrapped_for_owner`), which it obtains
+from the owner's DID document or the mandate — no key agreement with the PDS
+or the owner is needed at deposit time.
 
 ## 4.5 Authorization flow
 
