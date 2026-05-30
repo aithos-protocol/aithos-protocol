@@ -1,5 +1,21 @@
 # @aithos/data-crypto — Changelog
 
+## 0.1.2 — 2026-05-30
+
+### Added
+
+- **Append-only deposit primitives** (`spec/data/04-mandates.md` §4.2.3bis).
+  `wrapDEKForRecipient` / `unwrapDEKForRecipient` seal a record's DEK to the
+  owner's X25519 public key (distinct HKDF salt `aithos-data-dek-deposit-wrap-v1`
+  and AAD domain bound to subject/collection/record/recipient).
+  `encryptRecordForRecipient` / `decryptDepositedRecord` are the record-level
+  helpers: a depositor encrypts and discards the DEK (no read capability),
+  and only the owner's private `#data-kex` key recovers it.
+- `RecordPayload` now carries either `dek_wrapped_for_cmk` (owner /
+  read-write-delegate path) or `dek_wrapped_for_owner` (deposit path); the CMK
+  decrypt/rewrap paths reject the deposit shape (and vice-versa) with precise
+  error codes.
+
 ## 0.1.0 — 2026-05-14
 
 Initial POC release. Validates the data sub-protocol cryptographic

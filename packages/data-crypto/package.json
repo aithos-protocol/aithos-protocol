@@ -1,6 +1,6 @@
 {
   "name": "@aithos/data-crypto",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Reference cryptographic primitives for the Aithos data sub-protocol (PDS): CMK, DEK, wraps, record encryption. See spec/data/.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
