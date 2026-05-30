@@ -351,14 +351,25 @@ export async function revokeAppHandler(caller: Caller): Promise<unknown> {
     newEnvelope = { alg: existingEnvelope.alg, wraps: filteredWraps };
   }
 
-  // 3. Persist collection update + remove mandate from index
+  // 3. Persist collection update. Only REMOVE the mandate_index entry when
+  //    one exists — for an append mandate the collection may have no
+  //    `mandate_index` map at all (it was never run through authorize_app),
+  //    and `REMOVE mandate_index.#mid` on an absent parent path is rejected
+  //    by DynamoDB ("invalid document path"). When there's nothing to strip
+  //    we just update the (unchanged) envelope + mtime.
   await ddb.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
       Key: colKey,
-      UpdateExpression:
-        "SET cmk_envelope = :env, modified_at = :now REMOVE mandate_index.#mid",
-      ExpressionAttributeNames: { "#mid": p.mandate_id! },
+      ...(mandateEntry
+        ? {
+            UpdateExpression:
+              "SET cmk_envelope = :env, modified_at = :now REMOVE mandate_index.#mid",
+            ExpressionAttributeNames: { "#mid": p.mandate_id! },
+          }
+        : {
+            UpdateExpression: "SET cmk_envelope = :env, modified_at = :now",
+          }),
       ExpressionAttributeValues: {
         ":env": newEnvelope,
         ":now": now,
