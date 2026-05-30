@@ -335,10 +335,16 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
         s === "ethos.read.all" ||
         s === "ethos.write.public" ||
         s === "gamma.read" ||
-        s === COMPUTE_INVOKE_SCOPE;
+        s === COMPUTE_INVOKE_SCOPE ||
+        // Data scopes (`data.<collection>.<action>`) are sphere-neutral: the
+        // data access axis is the collection, not the sphere, and the real
+        // binding is the grantee key + CMK wrap (data spec §4.4). They are
+        // permitted under every sphere, including public — this lets a
+        // public-read mandate also carry data-collection access.
+        s.startsWith("data.");
       if (!ok) {
         throw new Error(
-          `Scope ${s} is not permitted for the public sphere. Only ethos.read.public, ethos.read.all, ethos.write.public, gamma.read, and ${COMPUTE_INVOKE_SCOPE} are allowed.`,
+          `Scope ${s} is not permitted for the public sphere. Only ethos.read.public, ethos.read.all, ethos.write.public, gamma.read, ${COMPUTE_INVOKE_SCOPE}, and data.* scopes are allowed.`,
         );
       }
     }
