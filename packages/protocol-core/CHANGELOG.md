@@ -7,6 +7,18 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-05-30
+
+### Added
+
+- **`validateScopesAgainstSphere` permits `data.*` scopes under the public
+  sphere.** Data access scopes (`data.<collection>.<action>`, `spec/data`)
+  are sphere-neutral — the access axis is the collection and the binding is
+  the grantee key + CMK wrap, not the sphere. They are now accepted under
+  every `actor_sphere`, including `public`, enabling combined mandates like
+  `ethos.read.public` + `data.<col>.read`. Mint-side only — the verify path
+  is unchanged. Mirrors `@aithos/protocol-client` — kept in lockstep.
+
 ## [0.6.0] — 2026-05-27
 
 Adds the **sponsorship primitive** defined in
