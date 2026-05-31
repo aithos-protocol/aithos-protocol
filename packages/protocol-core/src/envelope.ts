@@ -177,7 +177,7 @@ function bytesToHex(bytes: Uint8Array): string {
  * substitute-then-canonicalize pattern from §5.1.1: blank the signature
  * field, JCS-canonicalize, produce UTF-8 bytes, sign/verify those bytes.
  */
-function envelopeSigningBytes(env: SignedEnvelope): Uint8Array {
+export function envelopeSigningBytes(env: SignedEnvelope): Uint8Array {
   const substituted: SignedEnvelope = {
     ...env,
     proof: { ...env.proof, proofValue: "" },
@@ -288,7 +288,18 @@ export function signEnvelopeWithMandate(
   });
 }
 
-function buildAndSignEnvelope(args: {
+/**
+ * Build the canonical UNSIGNED envelope — every field populated except
+ * `proof.proofValue`, which is left blank (`""`) per the §5.1.1
+ * substitute-then-canonicalize pattern. This is the single source of truth
+ * for envelope assembly: both the seed-based signers and the pluggable
+ * async signer ({@link signEnvelopeWith}) build their bytes from here, so
+ * any signing path produces byte-identical wire output for identical input.
+ *
+ * Callers obtain the bytes to sign via {@link envelopeSigningBytes} and
+ * attach the resulting signature with {@link attachProof}.
+ */
+export function buildUnsignedEnvelope(args: {
   iss: string;
   aud: string;
   method: string;
@@ -296,7 +307,6 @@ function buildAndSignEnvelope(args: {
   ttlSeconds: number | undefined;
   now: Date | undefined;
   nonce: string | undefined;
-  signerSeed: Uint8Array;
   verificationMethod: string;
   mandate: Mandate | undefined;
   sponsorship: SponsorshipReference | undefined;
@@ -311,7 +321,7 @@ function buildAndSignEnvelope(args: {
   const iat = Math.floor(now.getTime() / 1000);
   const exp = iat + ttl;
 
-  const unsigned: SignedEnvelope = {
+  return {
     "aithos-envelope": ENVELOPE_VERSION,
     iss: args.iss,
     aud: args.aud,
@@ -331,12 +341,97 @@ function buildAndSignEnvelope(args: {
       proofValue: "",
     },
   };
+}
 
-  const sig = ed.sign(envelopeSigningBytes(unsigned), args.signerSeed);
+/** Attach a raw Ed25519 signature to an unsigned envelope (base64url proofValue). */
+export function attachProof(
+  unsigned: SignedEnvelope,
+  signature: Uint8Array,
+): SignedEnvelope {
   return {
     ...unsigned,
-    proof: { ...unsigned.proof, proofValue: base64url(sig) },
+    proof: { ...unsigned.proof, proofValue: base64url(signature) },
   };
+}
+
+/**
+ * Pluggable-signer envelope helper. Identical wire output to
+ * {@link signEnvelope} / {@link signEnvelopeWithMandate} but the Ed25519
+ * signing operation is injected as an async callback instead of taking a
+ * raw seed. This lets hosts that hold non-extractable keys (e.g. WebCrypto
+ * `crypto.subtle`, the Aithos SDK's `EnvelopeSigner`) sign without ever
+ * surfacing seed bytes — while sharing this module's canonicalization so
+ * their envelopes can never drift from the seed-based path.
+ *
+ * For an owner-path call, pass the subject's `did#sphere` as
+ * `verificationMethod` and omit `mandate`. For a delegate-path call, pass
+ * the delegate's bare multibase as `verificationMethod` and the signed
+ * `mandate`; the `sign` callback MUST use the delegate's key.
+ */
+export interface SignEnvelopeWithArgs {
+  readonly iss: string;
+  readonly aud: string;
+  readonly method: string;
+  readonly params: unknown;
+  /** `did#sphere` (owner path) or bare multibase (delegate path). */
+  readonly verificationMethod: string;
+  /** Sign the given canonical bytes with the appropriate Ed25519 key. */
+  readonly sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array;
+  readonly ttlSeconds?: number;
+  readonly now?: Date;
+  readonly nonce?: string;
+  /** Present only on the delegate path (§11.6). */
+  readonly mandate?: Mandate;
+  /** Optional sponsorship reference — draft §13.6. */
+  readonly sponsorship?: SponsorshipReference;
+}
+
+export async function signEnvelopeWith(
+  args: SignEnvelopeWithArgs,
+): Promise<SignedEnvelope> {
+  const unsigned = buildUnsignedEnvelope({
+    iss: args.iss,
+    aud: args.aud,
+    method: args.method,
+    params: args.params,
+    ttlSeconds: args.ttlSeconds,
+    now: args.now,
+    nonce: args.nonce,
+    verificationMethod: args.verificationMethod,
+    mandate: args.mandate,
+    sponsorship: args.sponsorship,
+  });
+  const signature = await args.sign(envelopeSigningBytes(unsigned));
+  return attachProof(unsigned, signature);
+}
+
+function buildAndSignEnvelope(args: {
+  iss: string;
+  aud: string;
+  method: string;
+  params: unknown;
+  ttlSeconds: number | undefined;
+  now: Date | undefined;
+  nonce: string | undefined;
+  signerSeed: Uint8Array;
+  verificationMethod: string;
+  mandate: Mandate | undefined;
+  sponsorship: SponsorshipReference | undefined;
+}): SignedEnvelope {
+  const unsigned = buildUnsignedEnvelope({
+    iss: args.iss,
+    aud: args.aud,
+    method: args.method,
+    params: args.params,
+    ttlSeconds: args.ttlSeconds,
+    now: args.now,
+    nonce: args.nonce,
+    verificationMethod: args.verificationMethod,
+    mandate: args.mandate,
+    sponsorship: args.sponsorship,
+  });
+  const sig = ed.sign(envelopeSigningBytes(unsigned), args.signerSeed);
+  return attachProof(unsigned, sig);
 }
 
 /* -------------------------------------------------------------------------- */
