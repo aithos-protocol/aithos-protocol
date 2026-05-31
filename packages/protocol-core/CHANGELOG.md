@@ -7,6 +7,28 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-05-31
+
+### Added
+
+- **Pluggable async signer for envelopes (`signEnvelopeWith`).** A seed-free
+  signing path that injects the Ed25519 operation as an async callback, letting
+  hosts that hold non-extractable keys (WebCrypto `crypto.subtle`, the
+  `@aithos/sdk` `EnvelopeSigner`) sign without ever surfacing seed bytes — while
+  sharing this module's canonicalization, so their envelopes are byte-identical
+  to the seed-based path. Also exposes the building blocks `buildUnsignedEnvelope`
+  and `attachProof`, and now **exports `envelopeSigningBytes`**. `signEnvelope` /
+  `signEnvelopeWithMandate` are unchanged on the surface (re-wired internally onto
+  the shared builder). Additive, non-breaking — conformance proven by
+  `envelope-pluggable-signer.test.ts`.
+
+### Changed
+
+- **`package.json` now declares `sideEffects: false`,** letting bundlers
+  tree-shake unused exports — this keeps the envelope-verification subset lean
+  when imported by serverless hosts (e.g. the gateway-middleware lambdas, which
+  pull only `canonical` / `envelope` / `mandate` via subpath exports).
+
 ## [0.6.2] — 2026-05-30
 
 ### Added
