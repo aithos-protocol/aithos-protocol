@@ -270,6 +270,11 @@ export class AithosAssetsPdsStack extends Stack {
         PER_ASSET_CAP_BYTES: String(perAssetCapBytes),
         PRESIGNED_URL_TTL_SECONDS: String(presignedUrlTtlSeconds),
         AITHOS_ASSETS_PROTOCOL_VERSION: "0.1.0",
+        // Public vanity host fronting this assets PDS through CloudFront.
+        // Enables dual-aud verification (vanity + execute-api origin) during
+        // the edge migration — see lambda/router.ts buildExpectedAud. Override
+        // via the ASSETS_PUBLIC_HOST shell env at synth time if it differs.
+        ASSETS_PUBLIC_HOST: process.env.ASSETS_PUBLIC_HOST ?? "assets.aithos.be",
       },
       bundling: {
         target: "node20",

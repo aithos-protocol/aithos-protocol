@@ -187,6 +187,11 @@ export class AithosDataPdsStack extends Stack {
         GAMMA_TABLE_NAME: gammaTable.tableName,
         SCHEMAS_TABLE_NAME: schemasTable.tableName,
         AITHOS_DATA_PROTOCOL_VERSION: "0.1.0",
+        // Public vanity host fronting this PDS through CloudFront. Enables
+        // dual-aud verification (vanity + execute-api origin) during the edge
+        // migration — see lambda/router.ts buildExpectedAud. Override via the
+        // PDS_PUBLIC_HOST shell env at synth time if the domain differs.
+        PDS_PUBLIC_HOST: process.env.PDS_PUBLIC_HOST ?? "pds.aithos.be",
       },
       bundling: {
         target: "node20",

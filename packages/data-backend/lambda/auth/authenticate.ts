@@ -65,10 +65,32 @@ interface AuthenticateInput {
   /** Raw JSON-RPC params (still contains `_envelope`). */
   readonly rawParams: Record<string, unknown>;
   /**
-   * Server-side audience URL — what the envelope's `aud` field MUST
-   * match. Built from the HTTP request URL.
+   * Server-side audience URL(s) — what the envelope's `aud` field MUST
+   * match. Built from the HTTP request URL. May be a single value or, during
+   * the edge migration, a set of acceptable endpoints (vanity + origin host).
    */
-  readonly expectedAud: string;
+  readonly expectedAud: string | readonly string[];
+}
+
+/**
+ * Canonicalize an audience URL for comparison. Mirrors protocol-core's
+ * internal `normalizeAud` (not exported): lowercases the host and strips a
+ * single trailing slash from the pathname. Used only to pick the matching
+ * candidate out of a dual-aud set; the authoritative check still runs inside
+ * verifyEnvelope on the value we hand it.
+ */
+function normalizeAud(u: string): string {
+  try {
+    const url = new URL(u);
+    const host = url.host.toLowerCase();
+    let pathname = url.pathname;
+    if (pathname.length > 1 && pathname.endsWith("/")) {
+      pathname = pathname.slice(0, -1);
+    }
+    return `${url.protocol}//${host}${pathname}`;
+  } catch {
+    return u.toLowerCase();
+  }
 }
 
 /**
@@ -161,8 +183,24 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
     });
   }
 
+  // Dual-aud resolution. `expectedAud` may be a set of acceptable endpoints
+  // (vanity + origin host) during the edge migration. protocol-core's
+  // verifyEnvelope only compares against a single value, so we pick the
+  // accepted candidate whose normalized form equals the envelope's `aud` and
+  // hand THAT to the verifier (its step-2 check then trivially matches). If
+  // none matches, we pass the first candidate so the canonical mismatch error
+  // fires with a meaningful `expected`.
+  const acceptedAud = Array.isArray(input.expectedAud)
+    ? input.expectedAud
+    : [input.expectedAud];
+  const envAud = (envelope as { aud?: unknown }).aud;
+  const matchedAud =
+    typeof envAud === "string"
+      ? acceptedAud.find((a) => normalizeAud(a) === normalizeAud(envAud))
+      : undefined;
+
   const ctx: VerifyEnvelopeContext = {
-    expectedAud: input.expectedAud,
+    expectedAud: matchedAud ?? acceptedAud[0],
     expectedMethod: input.method,
     params: businessParams,
     resolveIssuerDoc: enrichedResolver,

@@ -83,7 +83,33 @@ const replayCache: EnvelopeReplayCache = {
 export interface AuthenticateInput {
   readonly method: string;
   readonly rawParams: Record<string, unknown>;
-  readonly expectedAud: string;
+  /**
+   * Server-side audience URL(s) the envelope's `aud` MUST match. A single
+   * value, or — during the edge migration — a set of acceptable endpoints
+   * (vanity + origin host) for dual-aud verification.
+   */
+  readonly expectedAud: string | readonly string[];
+}
+
+/**
+ * Canonicalize an audience URL for comparison. Mirrors protocol-core's
+ * internal `normalizeAud` (not exported): lowercases the host and strips a
+ * single trailing slash from the pathname. Used only to pick the matching
+ * candidate out of a dual-aud set; the authoritative check still runs inside
+ * verifyEnvelope on the value we hand it.
+ */
+function normalizeAud(u: string): string {
+  try {
+    const url = new URL(u);
+    const host = url.host.toLowerCase();
+    let pathname = url.pathname;
+    if (pathname.length > 1 && pathname.endsWith("/")) {
+      pathname = pathname.slice(0, -1);
+    }
+    return `${url.protocol}//${host}${pathname}`;
+  } catch {
+    return u.toLowerCase();
+  }
 }
 
 /**
@@ -111,8 +137,22 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   } & Record<string, unknown>;
   void _envelope;
 
+  // Dual-aud resolution. `expectedAud` may be a set of acceptable endpoints
+  // (vanity + origin host). protocol-core's verifyEnvelope compares against a
+  // single value, so pick the accepted candidate whose normalized form equals
+  // the envelope's `aud` and hand THAT to the verifier; if none matches, pass
+  // the first candidate so the canonical mismatch error fires.
+  const acceptedAud = Array.isArray(input.expectedAud)
+    ? input.expectedAud
+    : [input.expectedAud];
+  const envAud = (envelope as { aud?: unknown }).aud;
+  const matchedAud =
+    typeof envAud === "string"
+      ? acceptedAud.find((a) => normalizeAud(a) === normalizeAud(envAud))
+      : undefined;
+
   const result = await verifyEnvelope(envelope as SignedEnvelope, {
-    expectedAud: input.expectedAud,
+    expectedAud: matchedAud ?? acceptedAud[0],
     expectedMethod: input.method,
     params: businessParams,
     nowSeconds: Math.floor(Date.now() / 1000),

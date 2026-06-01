@@ -50,6 +50,18 @@ import { jsonRpcError, jsonRpcResult, RpcError } from "./jsonrpc.js";
 
 const PROTOCOL_VERSION = process.env.AITHOS_DATA_PROTOCOL_VERSION ?? "0.1.0";
 
+/**
+ * Public-facing host the PDS is reachable on through CloudFront
+ * (e.g. "pds.aithos.be"). Host only — no scheme, no path.
+ *
+ * Behind CloudFront the origin request policy strips the viewer Host
+ * (`all_viewer_except_host`), so `event.requestContext.domainName` is the
+ * raw execute-api host, NOT the vanity domain a modern SDK signs into its
+ * `aud`. When this is set we accept BOTH endpoints (dual-aud) during the
+ * edge migration. Leave unset to keep the legacy single-aud behavior.
+ */
+const PDS_PUBLIC_HOST = process.env.PDS_PUBLIC_HOST;
+
 interface JsonRpcRequest {
   readonly jsonrpc: "2.0";
   readonly id?: string | number | null;
@@ -220,8 +232,17 @@ function errorResponse(
  * The host comes from the `domainName` field, which excludes the port
  * and stage prefix on HTTP API. Scheme is always HTTPS.
  */
-function buildExpectedAud(event: APIGatewayProxyEventV2): string {
+function buildExpectedAud(event: APIGatewayProxyEventV2): string | string[] {
   const host = event.requestContext.domainName;
   const path = event.requestContext.http.path;
-  return `https://${host}${path}`;
+  const originAud = `https://${host}${path}`;
+  // Dual-aud during the PDS edge migration (strangler EXPAND step): also
+  // accept the public vanity endpoint a modern SDK signs once pointed at
+  // CloudFront (pds.aithos.be). The origin host stays accepted so legacy
+  // clients hitting the raw execute-api URL keep working. Drop the vanity
+  // branch once the metric shows all clients target the vanity domain.
+  if (PDS_PUBLIC_HOST && PDS_PUBLIC_HOST !== host) {
+    return [`https://${PDS_PUBLIC_HOST}${path}`, originAud];
+  }
+  return originAud;
 }
