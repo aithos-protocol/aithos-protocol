@@ -88,19 +88,24 @@ function resolveDidKey(did: string): DidDocument {
   // so envelope verification (which reads only `id` and
   // `verificationMethod`) is unaffected.
   //
-  // We expose the same Ed25519 key under FOUR URLs:
+  // We expose the same Ed25519 key under several URLs:
   //   - did:key:X#X            (canonical did:key form)
-  //   - did:key:X#public        \
-  //   - did:key:X#circle        | sphere aliases used by Aithos mandates
-  //   - did:key:X#self          /
+  //   - did:key:X#root         owner-path data envelopes sign under #root
+  //   - did:key:X#data         data sub-protocol dedicated sphere (spec
+  //                            spec/data/02-key-hierarchy.md: owner = #data|#root)
+  //   - did:key:X#public  \
+  //   - did:key:X#circle  |    Ethos mandate spheres
+  //   - did:key:X#self    /
   //
-  // This is a pragmatic accommodation for Sub-jalon 3.2b: the mandate
-  // shape from @aithos/protocol-core expects `issued_by_key` to be of
-  // the form `<did>#<sphere>` where sphere ∈ {public, circle, self}.
-  // A did:key has only one key, so all sphere aliases point to it.
+  // The mandate shape from @aithos/protocol-core expects `issued_by_key` to be
+  // `<did>#<sphere>`. A did:key has only one key, so ALL aliases point to it —
+  // adding #root/#data is purely additive (same key, more labels) and lets a
+  // did:key owner sign data ops under #root, the same convention a did:aithos
+  // account uses (whose multibase IS the #root key). No security change:
+  // verification still checks the signature against that single key.
   // When we add did:aithos:… resolution in a later jalon, real subjects
   // will have distinct keys per sphere.
-  const sphereAliases = ["public", "circle", "self"] as const;
+  const sphereAliases = ["root", "data", "public", "circle", "self"] as const;
   const baseVm = {
     type: "Ed25519VerificationKey2020" as const,
     controller: did,
