@@ -19,8 +19,129 @@
 
 import { multibaseToEd25519PublicKey, ed25519PublicKeyToMultibase } from "@aithos/protocol-core/did";
 import type { DidDocument } from "@aithos/protocol-core/identity";
+import { verifyDidDocument } from "@aithos/protocol-core/identity";
 
 import { RpcError } from "../jsonrpc.js";
+
+/* -------------------------------------------------------------------------- */
+/*  did:aithos real resolution — fetch the published DID document             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Base URL of the Ethos identity registry that serves `aithos.get_identity`
+ * (returns the subject's signed did.json). Defaults to the public read API.
+ * Override via the ETHOS_RESOLVER_URL env (CDK) for staging/preview.
+ */
+const ETHOS_RESOLVER_URL = (process.env.ETHOS_RESOLVER_URL ?? "https://api.aithos.be").replace(/\/$/, "");
+const RESOLVE_TIMEOUT_MS = 3_000;
+const RESOLVE_TTL_MS = 5 * 60_000; // positive cache: a published doc rarely changes
+const RESOLVE_NEG_TTL_MS = 30_000; // negative cache: unpublished / transient failure
+
+interface CacheEntry {
+  doc: DidDocument | null;
+  expiresAt: number;
+}
+const didDocCache = new Map<string, CacheEntry>();
+
+/**
+ * Fetch the published, root-signed did.json for a did:aithos subject from the
+ * Ethos registry. Returns the inner DidDocument, or null on not-found / any
+ * transport error (caller falls back to the root-only synthesis). The caller
+ * is responsible for verifying the doc's root proof — we do NOT trust the
+ * endpoint, only the self-certifying root signature inside the doc.
+ */
+async function fetchPublishedDidDoc(did: string): Promise<DidDocument | null> {
+  try {
+    const res = await fetch(`${ETHOS_RESOLVER_URL}/mcp/primitives/read`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "pds-resolve",
+        method: "aithos.get_identity",
+        params: { did },
+      }),
+      signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      result?: { object?: unknown };
+      error?: unknown;
+    };
+    if (json.error || !json.result) return null; // -32020 NOT_FOUND etc.
+    const doc = json.result.object;
+    if (!doc || typeof doc !== "object") return null;
+    return doc as DidDocument;
+  } catch {
+    // Network error, timeout, malformed JSON → unresolvable via registry.
+    return null;
+  }
+}
+
+/**
+ * Root-only synthesis: expose the root pubkey (decoded from the DID's own
+ * multibase) under #root + the three Ethos sphere aliases. Used when the
+ * subject has no published did.json yet (or the registry is unreachable), so
+ * `#root`-signed envelopes always verify (self-certifying). For subjects whose
+ * real sphere keys differ from root, callers can still pass
+ * `_subject_sphere_pubkeys` (see withSphereOverride).
+ */
+function synthesizeDidAithosFromRoot(
+  did: string,
+  canonicalMultibase: string,
+): DidDocument {
+  const baseVm = {
+    type: "Ed25519VerificationKey2020" as const,
+    controller: did,
+    publicKeyMultibase: canonicalMultibase,
+  };
+  return {
+    "@context": ["https://www.w3.org/ns/did/v1"],
+    id: did,
+    verificationMethod: [
+      { ...baseVm, id: `${did}#root` },
+      { ...baseVm, id: `${did}#public` },
+      { ...baseVm, id: `${did}#circle` },
+      { ...baseVm, id: `${did}#self` },
+    ],
+    keyAgreement: [],
+    aithos: {
+      version: "0.1.0" as const,
+      created_at: "1970-01-01T00:00:00Z",
+      rotated: [],
+    },
+  };
+}
+
+/**
+ * Merge the implicit, self-certifying `#root` verification method (the DID's
+ * own multibase) into a published DID document. The published doc lists the
+ * real `#public`/`#circle`/`#self`/`#data` keys but NOT `#root` (root is
+ * implicit per spec §1.5), so without this an envelope signed under `#root`
+ * would not resolve.
+ */
+function withRootVm(
+  did: string,
+  canonicalMultibase: string,
+  published: DidDocument,
+): DidDocument {
+  const hasRoot = published.verificationMethod.some(
+    (vm) => vm.id === `${did}#root`,
+  );
+  if (hasRoot) return published;
+  return {
+    ...published,
+    verificationMethod: [
+      {
+        id: `${did}#root`,
+        type: "Ed25519VerificationKey2020",
+        controller: did,
+        publicKeyMultibase: canonicalMultibase,
+      },
+      ...published.verificationMethod,
+    ],
+  };
+}
 
 /**
  * Resolve a DID to its current DID document.
@@ -162,7 +283,7 @@ function resolveDidKey(did: string): DidDocument {
  * any similar A2a tenant in the meantime — and stays correct forever
  * for users where root == public == circle == self (the did:key case).
  */
-function resolveDidAithos(did: string): DidDocument | null {
+async function resolveDidAithos(did: string): Promise<DidDocument | null> {
   const multibase = did.slice("did:aithos:".length);
   // Guard: refuse the `did:aithos:app:*` family — these are placeholder
   // app DIDs, not pubkey-encoded user DIDs. Returning null lets the
@@ -181,36 +302,35 @@ function resolveDidAithos(did: string): DidDocument | null {
   }
   if (pubkey.length !== 32) return null;
 
-  // Round-trip canonicalisation guard (same as resolveDidKey).
+  // Round-trip canonicalisation: the #root pubkey the verifier will need, and
+  // the fallback synthesis key.
   const canonicalMultibase = ed25519PublicKeyToMultibase(pubkey);
-  if (canonicalMultibase !== multibase) {
-    // Non-canonical encoding. We accept it (= we don't throw), but the
-    // verifier's `issuerDoc.id !== envelope.iss` check will fail right
-    // after and surface a clean -32011. Returning null here would mask
-    // the precise reason (the diff between encodings is useful in logs).
-  }
 
-  const baseVm = {
-    type: "Ed25519VerificationKey2020" as const,
-    controller: did,
-    publicKeyMultibase: canonicalMultibase,
-  };
-  return {
-    "@context": ["https://www.w3.org/ns/did/v1"],
-    id: did,
-    verificationMethod: [
-      { ...baseVm, id: `${did}#root` },
-      { ...baseVm, id: `${did}#public` },
-      { ...baseVm, id: `${did}#circle` },
-      { ...baseVm, id: `${did}#self` },
-    ],
-    keyAgreement: [],
-    aithos: {
-      version: "0.1.0" as const,
-      created_at: "1970-01-01T00:00:00Z",
-      rotated: [],
-    },
-  };
+  const now = Date.now();
+  const cached = didDocCache.get(did);
+  if (cached && cached.expiresAt > now) return cached.doc;
+
+  // Real resolution: fetch the published, root-signed did.json from the Ethos
+  // registry. Trust is anchored in the doc's OWN root proof (self-certifying),
+  // NOT in the endpoint — a compromised registry cannot forge sphere keys
+  // because the forged doc would fail verifyDidDocument.
+  const published = await fetchPublishedDidDoc(did);
+  let resolved: DidDocument | null;
+  let ttl: number;
+  if (published && published.id === did && verifyDidDocument(published)) {
+    // Real per-sphere keys (#public/#circle/#self/#data) + implicit #root.
+    resolved = withRootVm(did, canonicalMultibase, published);
+    ttl = RESOLVE_TTL_MS;
+  } else {
+    // No valid published doc (unpublished subject, registry unreachable, or a
+    // doc that failed its root proof) → root-only synthesis. `#root`-signed
+    // owner envelopes still verify; non-root spheres need the published doc
+    // or the `_subject_sphere_pubkeys` override.
+    resolved = synthesizeDidAithosFromRoot(did, canonicalMultibase);
+    ttl = RESOLVE_NEG_TTL_MS;
+  }
+  didDocCache.set(did, { doc: resolved, expiresAt: now + ttl });
+  return resolved;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -275,6 +275,12 @@ export class AithosAssetsPdsStack extends Stack {
         // the edge migration — see lambda/router.ts buildExpectedAud. Override
         // via the ASSETS_PUBLIC_HOST shell env at synth time if it differs.
         ASSETS_PUBLIC_HOST: process.env.ASSETS_PUBLIC_HOST ?? "assets.aithos.be",
+        // Ethos identity registry the resolver calls to fetch a real, root-
+        // signed did.json for did:aithos subjects (so owner asset envelopes can
+        // sign under the dedicated #data sphere instead of #root). See
+        // lambda/auth/did-resolver.ts. Override via ETHOS_RESOLVER_URL at synth.
+        ETHOS_RESOLVER_URL:
+          process.env.ETHOS_RESOLVER_URL ?? "https://api.aithos.be",
       },
       bundling: {
         target: "node20",
