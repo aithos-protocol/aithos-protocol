@@ -32,9 +32,8 @@
 import * as ed from "@noble/ed25519";
 
 import type { Identity, IdentityMetadata } from "./identity.js";
-import { rootDid } from "./identity.js";
 import type { Sphere } from "./did.js";
-import { ed25519PublicKeyToMultibase } from "./did.js";
+import { ed25519PublicKeyToMultibase, rootDid } from "./did.js";
 import type { Mandate } from "./mandate.js";
 import {
   type GammaSigner,

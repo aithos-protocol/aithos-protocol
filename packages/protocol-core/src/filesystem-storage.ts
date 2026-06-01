@@ -43,12 +43,8 @@ import {
   type VerifyEthosResult,
   type ZoneDoc,
 } from "./ethos.js";
-import {
-  findRevocation,
-  loadMandate,
-  type Mandate,
-  type Revocation,
-} from "./mandate.js";
+import { type Mandate, type Revocation } from "./mandate.js";
+import { findRevocation, loadMandate } from "./mandate-store.js";
 import {
   identityDir,
   listIdentities,

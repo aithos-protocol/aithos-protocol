@@ -12,31 +12,27 @@
  */
 
 import * as ed from "@noble/ed25519";
-import { randomBytes } from "node:crypto";
-import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { sha512 } from "@noble/hashes/sha512";
+import { randomBytes } from "@noble/hashes/utils";
 import { ulid } from "ulid";
 
 import { canonicalize } from "./canonical.js";
+import type { Identity, DidDocument } from "./identity.js";
+import { base64url, base64urlDecode, sha256Hex } from "./encoding.js";
 import {
-  type Identity,
-  type DidDocument,
-  base64url,
-  base64urlDecode,
+  type Sphere,
   rootDid,
   sphereDidUrl,
   signWithSphere,
-  sha256Hex,
-} from "./identity.js";
-import type { Sphere } from "./did.js";
-import {
-  mandatesDir,
-  revocationsDir,
-  ensureDir,
-  writeJson,
-  readJson,
-} from "./storage.js";
-import { multibaseToEd25519PublicKey } from "./did.js";
+  multibaseToEd25519PublicKey,
+} from "./did.js";
+
+// @noble/ed25519 v2 requires a sync SHA-512 for sync sign/verify (used by
+// verifyMandate / createMandate / verifyRevocation). Set here so this module
+// works even when the node-only identity.ts — which also sets this — is not in
+// the import graph (e.g. browser verify-only bundles reach mandate.ts via
+// envelope.ts but never import identity.ts).
+ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                     */
@@ -502,18 +498,9 @@ export function validateComputeAuthorization(
   }
 }
 
-export function writeMandate(m: Mandate): string {
-  ensureDir(mandatesDir());
-  const path = join(mandatesDir(), `${m.id}.json`);
-  writeJson(path, m, 0o600);
-  return path;
-}
-
-export function loadMandate(mandateId: string): Mandate {
-  const path = join(mandatesDir(), `${mandateId}.json`);
-  if (!existsSync(path)) throw new Error(`Mandate not found: ${mandateId}`);
-  return readJson<Mandate>(path);
-}
+// writeMandate / loadMandate moved to mandate-store.ts (node-only keystore),
+// re-exported from the package barrel. Kept out of here so the verify path
+// stays free of node:fs/path.
 
 /* -------------------------------------------------------------------------- */
 /*  Verification                                                              */
@@ -688,30 +675,9 @@ export function createRevocation(args: RevokeMandateArgs): Revocation {
   return unsigned;
 }
 
-export function writeRevocation(r: Revocation): string {
-  ensureDir(revocationsDir());
-  const path = join(revocationsDir(), `revocation_${r.mandate_id.replace(/^mandate_/, "")}.json`);
-  writeJson(path, r, 0o600);
-  return path;
-}
-
-export function loadRevocation(path: string): Revocation {
-  return readJson<Revocation>(path);
-}
-
-/**
- * Return the local revocation for a mandate id, or null if none is on disk.
- *
- * The expected on-disk name is `revocation_<ULID>.json` in `revocationsDir()`,
- * where `<ULID>` is the mandate id with its `mandate_` prefix stripped — this
- * matches what `writeRevocation` produces.
- */
-export function findRevocation(mandateId: string): Revocation | null {
-  const ulidPart = mandateId.replace(/^mandate_/, "");
-  const path = join(revocationsDir(), `revocation_${ulidPart}.json`);
-  if (!existsSync(path)) return null;
-  return readJson<Revocation>(path);
-}
+// writeRevocation / loadRevocation / findRevocation moved to mandate-store.ts
+// (node-only keystore), re-exported from the package barrel. Kept out of here
+// so the verify path stays free of node:fs/path.
 
 export function verifyRevocation(
   rev: Revocation,

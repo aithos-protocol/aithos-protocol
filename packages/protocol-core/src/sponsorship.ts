@@ -34,14 +34,16 @@ import { canonicalize } from "./canonical.js";
 import {
   base64url,
   base64urlDecode,
-  signWithSphere,
-  sphereDidUrl,
-  rootDid,
   sha256Hex,
   type Identity,
   type DidDocument,
 } from "./identity.js";
-import { multibaseToEd25519PublicKey } from "./did.js";
+import {
+  multibaseToEd25519PublicKey,
+  signWithSphere,
+  sphereDidUrl,
+  rootDid,
+} from "./did.js";
 import type { Sphere } from "./did.js";
 import type { Revocation, VerifyResult } from "./mandate.js";
 

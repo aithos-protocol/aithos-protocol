@@ -62,9 +62,6 @@ import {
   type DidDocument,
   base64url,
   base64urlDecode,
-  sphereDidUrl,
-  signWithSphere,
-  rootDid,
   edSeedToX25519Secret,
   x25519PublicFromSecret,
   ed25519PubToX25519Pub,
@@ -74,6 +71,9 @@ import {
   type Sphere,
   SPHERE_FRAGMENTS,
   multibaseToEd25519PublicKey,
+  sphereDidUrl,
+  signWithSphere,
+  rootDid,
   x25519PublicKeyToMultibase,
 } from "./did.js";
 import {
@@ -89,11 +89,10 @@ import {
 import {
   type Mandate,
   type Revocation,
-  findRevocation,
   hasGammaReadScope,
-  loadMandate,
   verifyMandate,
 } from "./mandate.js";
+import { findRevocation, loadMandate } from "./mandate-store.js";
 import {
   appendGammaEntryOnDisk,
   buildGammaEntryV03,

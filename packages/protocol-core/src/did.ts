@@ -10,7 +10,18 @@
  * Sphere keys are referenced as DID URL fragments: #public, #circle, #self.
  */
 
+import * as ed from "@noble/ed25519";
+import { sha512 } from "@noble/hashes/sha512";
 import { base58 } from "@scure/base";
+
+import type { Identity } from "./identity.js";
+
+// @noble/ed25519 v2 requires a sync SHA-512 for sync sign/verify. This setup
+// is also performed in identity.ts; we replicate it here (idempotent) so the
+// sphere-signing helpers below work even when identity.ts is NOT part of the
+// import graph (e.g. browser verify-only bundles that reach did.ts via
+// mandate.ts but never import the node-only identity.ts).
+ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
 
 export const SPHERE_FRAGMENTS = ["public", "circle", "self"] as const;
 export type Sphere = (typeof SPHERE_FRAGMENTS)[number];
@@ -65,4 +76,28 @@ export function parseDidAithos(did: string): { rootMultibase: string; fragment: 
   const m = did.match(/^did:aithos:([^#]+)(#.*)?$/);
   if (!m) throw new Error(`Not a did:aithos identifier: ${did}`);
   return { rootMultibase: m[1], fragment: m[2] ? m[2].slice(1) : null };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Sphere signing helpers                                                    */
+/*                                                                            */
+/*  Moved here from identity.ts so the mandate/envelope verify path can sign  */
+/*  and build sphere DID URLs without importing the node-only identity.ts     */
+/*  keystore. They operate purely on an in-memory Identity (no filesystem).   */
+/* -------------------------------------------------------------------------- */
+
+export function signWithSphere(
+  identity: Identity,
+  sphere: Sphere,
+  payload: Uint8Array,
+): Uint8Array {
+  return ed.sign(payload, identity[sphere].seed);
+}
+
+export function sphereDidUrl(identity: Identity, sphere: Sphere): string {
+  return didUrlForSphere(didAithosForRootKey(identity.root.publicKey), sphere);
+}
+
+export function rootDid(identity: Identity): string {
+  return didAithosForRootKey(identity.root.publicKey);
 }

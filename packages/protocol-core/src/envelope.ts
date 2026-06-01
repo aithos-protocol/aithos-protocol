@@ -21,6 +21,7 @@
 
 import * as ed from "@noble/ed25519";
 import { sha256 as sha256fn } from "@noble/hashes/sha256";
+import { sha512 } from "@noble/hashes/sha512";
 import { ulid } from "ulid";
 
 import { canonicalize } from "./canonical.js";
@@ -28,16 +29,19 @@ import {
   multibaseToEd25519PublicKey,
   ed25519PublicKeyToMultibase,
 } from "./did.js";
-import {
-  base64url,
-  base64urlDecode,
-  type DidDocument,
-} from "./identity.js";
+import { base64url, base64urlDecode } from "./encoding.js";
+import type { DidDocument } from "./identity.js";
 import {
   verifyMandate,
   type Mandate,
   type Revocation,
 } from "./mandate.js";
+
+// @noble/ed25519 v2 requires a sync SHA-512 for sync sign/verify. This module
+// is the verify entry point used by browser clients (via protocol-client), so
+// set it here rather than relying on a side effect of importing the node-only
+// identity.ts (which it no longer does). Idempotent across modules.
+ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
 
 /* -------------------------------------------------------------------------- */
 /*  Envelope shape (§11.2)                                                    */

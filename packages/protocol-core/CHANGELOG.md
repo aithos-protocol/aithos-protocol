@@ -7,6 +7,38 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-06-01
+
+### Changed
+
+- **Verification path is now browser-bundleable (no `node:` imports).** The
+  envelope/mandate verify graph (`envelope.ts` → `mandate.ts` → `did.ts` +
+  `encoding.ts`) no longer statically imports `node:fs`/`node:path`/`node:crypto`.
+  Previously `envelope.ts` pulled `base64url`/`verifyMandate` from modules that
+  also carried the filesystem keystore, so a browser bundler (Vite/Rollup) would
+  externalize node built-ins and fail with errors like _"join is not exported by
+  __vite-browser-external"_ even though the keystore is never called client-side.
+  Now:
+  - New `encoding.ts` holds `base64url` / `base64urlDecode` / `sha256Hex`
+    (node-free). Re-exported from `identity.ts` for backward compatibility.
+  - `signWithSphere` / `sphereDidUrl` / `rootDid` moved to `did.ts` (they operate
+    purely on an in-memory `Identity`). Internal callers updated.
+  - The mandate filesystem keystore (`writeMandate`, `loadMandate`,
+    `writeRevocation`, `loadRevocation`, `findRevocation`) moved to a new
+    node-only `mandate-store.ts`. Still re-exported from the package barrel, so
+    CLI imports are unchanged.
+  - `mandate.ts` now sources its CSPRNG from `@noble/hashes/utils`
+    (cross-platform) instead of `node:crypto`.
+  - `ed.etc.sha512Sync` is set inline in the verify-path modules so sync
+    sign/verify works without relying on a side effect of importing the
+    node-only `identity.ts`. `sideEffects` now whitelists those modules so the
+    setup is never tree-shaken.
+- New subpath exports `./encoding` and `./mandate-store`.
+
+  No public API removed and no wire-format change: all 96 conformance + byte
+  snapshot tests pass unchanged. Purely a module-boundary refactor so the same
+  verify code bundles in the browser.
+
 ## [0.6.3] — 2026-05-31
 
 ### Added

@@ -80,9 +80,6 @@ import {
   type DidDocument,
   base64url,
   base64urlDecode,
-  signWithSphere,
-  sphereDidUrl,
-  rootDid,
   edSeedToX25519Secret,
   ed25519PubToX25519Pub,
   x25519PublicFromSecret,
@@ -93,6 +90,9 @@ import {
   didUrlForKex,
   multibaseToEd25519PublicKey,
   x25519PublicKeyToMultibase,
+  signWithSphere,
+  sphereDidUrl,
+  rootDid,
 } from "./did.js";
 import { ensureDir, identityDir } from "./storage.js";
 import type { Author } from "./author.js";

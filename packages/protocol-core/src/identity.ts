@@ -19,7 +19,6 @@
 
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha512";
-import { sha256 } from "@noble/hashes/sha256";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { existsSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
@@ -36,6 +35,13 @@ import {
 } from "./did.js";
 import { canonicalize } from "./canonical.js";
 import { ensureDir, identityDir, writeJson, readJson } from "./storage.js";
+// Encoding primitives now live in encoding.ts (node-free). Imported here for
+// internal use; re-exported below so existing `@aithos/protocol-core/identity`
+// consumers keep resolving base64url/base64urlDecode/sha256Hex from here.
+import { base64url, base64urlDecode } from "./encoding.js";
+export { base64url, base64urlDecode, sha256Hex } from "./encoding.js";
+// signWithSphere / sphereDidUrl / rootDid now live in did.ts (node-free) and
+// are exported from there — import them from "./did.js", not from here.
 
 ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
 
@@ -516,35 +522,6 @@ export function verifyDidDocument(doc: DidDocument): boolean {
   return ed.verify(sig, bytes, rootPk);
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Signing helpers                                                           */
-/* -------------------------------------------------------------------------- */
-
-export function signWithSphere(identity: Identity, sphere: Sphere, payload: Uint8Array): Uint8Array {
-  return ed.sign(payload, identity[sphere].seed);
-}
-
-export function sphereDidUrl(identity: Identity, sphere: Sphere): string {
-  return didUrlForSphere(didAithosForRootKey(identity.root.publicKey), sphere);
-}
-
-export function rootDid(identity: Identity): string {
-  return didAithosForRootKey(identity.root.publicKey);
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Encoding                                                                  */
-/* -------------------------------------------------------------------------- */
-
-export function base64url(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64url");
-}
-
-export function base64urlDecode(s: string): Uint8Array {
-  return Uint8Array.from(Buffer.from(s, "base64url"));
-}
-
-export function sha256Hex(data: Uint8Array | string): string {
-  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
-  return "sha256:" + Buffer.from(sha256(bytes)).toString("hex");
-}
+// signWithSphere / sphereDidUrl / rootDid moved to did.ts (re-exported above).
+// base64url / base64urlDecode / sha256Hex moved to encoding.ts (re-exported
+// above). Both relocations keep the verify path free of node:fs/path.
