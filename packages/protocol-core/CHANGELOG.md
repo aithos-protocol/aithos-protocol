@@ -7,6 +7,19 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-06-01
+
+### Fixed
+
+- **`encoding.ts` is now `Buffer`-free so the verify/sign path runs in the
+  browser.** 0.6.4 made the verify path *bundle* without `node:` built-ins, but
+  `base64url` / `base64urlDecode` / `sha256Hex` still called the Node-only
+  `Buffer` global, so at runtime a browser app throws `Buffer is not defined`
+  the first time it signs an envelope (e.g. the example app's data flow). These
+  now use the cross-platform `btoa`/`atob` and manual hex, producing
+  byte-identical output (verified against `Buffer` over hundreds of random
+  vectors, plus a sign→verify roundtrip). No wire-format change.
+
 ## [0.6.4] — 2026-06-01
 
 ### Changed

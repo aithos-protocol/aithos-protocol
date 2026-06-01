@@ -1,6 +1,6 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "sideEffects": [
     "./dist/envelope.js",
     "./dist/mandate.js",
@@ -104,20 +104,20 @@
   },
   "dependencies": {
     "@noble/curves": "^2.2.0",
-    "@noble/ed25519": "^2.1.0",
-    "@noble/hashes": "^1.4.0",
-    "@scure/base": "^1.1.6",
+    "@noble/ed25519": "^2.3.0",
+    "@noble/hashes": "^1.8.0",
+    "@scure/base": "^1.2.6",
     "@stablelib/hkdf": "^2.0.1",
     "@stablelib/sha256": "^2.0.1",
     "@stablelib/xchacha20poly1305": "^2.0.1",
     "@types/adm-zip": "^0.5.8",
     "adm-zip": "^0.5.17",
-    "ulid": "^2.3.0"
+    "ulid": "^2.4.0"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
-    "tsx": "^4.11.0",
-    "typescript": "^5.5.0"
+    "@types/node": "^20.19.41",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=20"
