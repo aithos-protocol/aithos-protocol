@@ -7,6 +7,28 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-06-01
+
+### Added
+
+- **Optional dedicated `#data` sphere** on identities (spec/data/02-key-hierarchy.md
+  §2.2). `Identity` gains an optional `data?: KeyPair`; `createIdentity` is now
+  eager — new identities carry a `#data` keypair from creation. `writeIdentityToDisk`
+  seals a `data.sealed.json`; `loadIdentity` loads it when present. `buildDidDocument`
+  appends a `#data` verificationMethod + a `#data-kex` keyAgreement entry **after**
+  the three Ethos spheres (the canonical 3-sphere shape is preserved for identities
+  without a data key). `StoredSeed.role` widened to `SeedRole = "root" | Sphere | "data"`.
+
+  Purpose: owner data/asset PDS envelopes will sign under `#data` so the root key
+  stays cold and the data key can rotate independently — the convention the data
+  sub-protocol always intended (until now the PDS forced `#root` via a resolver stub).
+
+  **Backward compatible**: the field is optional. Identities, recovery files, and
+  keystores created before this release (root/public/circle/self only) still load
+  and operate; their DID document keeps exactly the three Ethos verification methods
+  and verifies unchanged. No envelope wire-format change — all 96 conformance + byte
+  snapshot tests pass, plus 4 new `#data` tests.
+
 ## [0.6.5] — 2026-06-01
 
 ### Fixed

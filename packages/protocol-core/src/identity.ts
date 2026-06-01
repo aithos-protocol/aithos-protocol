@@ -225,9 +225,13 @@ function modPow(b: bigint, e: bigint, m: bigint): bigint {
 /*  Identity creation and storage                                             */
 /* -------------------------------------------------------------------------- */
 
+/** Roles a sealed seed file can carry: the root, the three Ethos spheres, or
+ *  the optional dedicated `#data` sub-protocol sphere. */
+export type SeedRole = "root" | Sphere | "data";
+
 export interface StoredSeed {
   aithos: "0.1.0";
-  role: "root" | Sphere;
+  role: SeedRole;
   seed_hex: string; // stored in cleartext in v0.1.0 — see SECURITY NOTE in storage.ts
   created_at: string;
 }
@@ -239,6 +243,15 @@ export interface Identity {
   public: KeyPair;
   circle: KeyPair;
   self: KeyPair;
+  /**
+   * Dedicated data sub-protocol sphere (spec/data/02-key-hierarchy.md §2.2).
+   * Owner data/asset PDS envelopes sign under this `#data` key so the root key
+   * stays cold and the data key can rotate independently. OPTIONAL for backward
+   * compatibility: identities created before the #data sphere landed (and
+   * imported recovery files lacking it) have no `data` key and sign data ops
+   * under `#root` as before.
+   */
+  data?: KeyPair;
 }
 
 export function createIdentity(handle: string, displayName: string): Identity {
@@ -249,6 +262,9 @@ export function createIdentity(handle: string, displayName: string): Identity {
     public: generateKeyPair(),
     circle: generateKeyPair(),
     self: generateKeyPair(),
+    // New identities carry a #data sphere from creation (eager). Legacy
+    // identities without one still load and operate under #root.
+    data: generateKeyPair(),
   };
 }
 
@@ -257,7 +273,7 @@ export function writeIdentityToDisk(id: Identity): { dir: string; did: string } 
   ensureDir(dir);
 
   const now = new Date().toISOString();
-  const write = (role: "root" | Sphere, kp: KeyPair) => {
+  const write = (role: SeedRole, kp: KeyPair) => {
     const seed: StoredSeed = {
       aithos: "0.1.0",
       role,
@@ -271,6 +287,7 @@ export function writeIdentityToDisk(id: Identity): { dir: string; did: string } 
   write("public", id.public);
   write("circle", id.circle);
   write("self", id.self);
+  if (id.data) write("data", id.data);
 
   const did = didAithosForRootKey(id.root.publicKey);
   const didDoc = buildDidDocument(id);
@@ -398,7 +415,7 @@ export function loadIdentity(handle: string): Identity {
     .map((r) => `${r}.sealed.json`);
   if (missing.length > 0) throw new TrackedIdentityError(handle, missing);
 
-  const loadSeed = (role: "root" | Sphere): KeyPair => {
+  const loadSeed = (role: SeedRole): KeyPair => {
     const stored = readJson<StoredSeed>(join(dir, `${role}.sealed.json`));
     const seed = Uint8Array.from(Buffer.from(stored.seed_hex, "hex"));
     return { seed, publicKey: ed.getPublicKey(seed) };
@@ -408,6 +425,9 @@ export function loadIdentity(handle: string): Identity {
   const didDoc = readJson<DidDocument>(join(dir, "did.json"));
   const displayName = didDoc.aithos?.display_name ?? handle;
 
+  // The #data sphere is optional (eager on new identities, absent on legacy).
+  const hasData = existsSync(join(dir, "data.sealed.json"));
+
   return {
     handle,
     displayName,
@@ -415,6 +435,7 @@ export function loadIdentity(handle: string): Identity {
     public: loadSeed("public"),
     circle: loadSeed("circle"),
     self: loadSeed("self"),
+    ...(hasData ? { data: loadSeed("data") } : {}),
   };
 }
 
@@ -480,6 +501,27 @@ function buildDidDocument(id: Identity): DidDocument {
       publicKeyMultibase: x25519PublicKeyToMultibase(xPub),
     };
   });
+
+  // Optional dedicated #data sphere (spec/data/02-key-hierarchy.md). Appended
+  // after the three Ethos spheres so the canonical 3-sphere shape is preserved
+  // for identities without a data key. `#data` signs owner data/asset PDS
+  // envelopes; `#data-kex` is its X25519 key-agreement counterpart for CMK wraps.
+  if (id.data) {
+    verificationMethod.push({
+      id: `${did}#data`,
+      type: "Ed25519VerificationKey2020",
+      controller: did,
+      publicKeyMultibase: ed25519PublicKeyToMultibase(id.data.publicKey),
+    });
+    const dataXPriv = edSeedToX25519Secret(id.data.seed);
+    const dataXPub = x25519PublicFromSecret(dataXPriv);
+    keyAgreement.push({
+      id: `${did}#data-kex`,
+      type: "X25519KeyAgreementKey2020",
+      controller: did,
+      publicKeyMultibase: x25519PublicKeyToMultibase(dataXPub),
+    });
+  }
 
   return {
     "@context": ["https://www.w3.org/ns/did/v1", "https://aithos.dev/spec/v0.1"],
