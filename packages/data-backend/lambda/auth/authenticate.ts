@@ -22,7 +22,7 @@ import { ed25519PublicKeyToMultibase } from "@aithos/protocol-core/did";
 import type { DidDocument } from "@aithos/protocol-core/identity";
 
 import { RpcError } from "../jsonrpc.js";
-import { resolveIssuerDoc, withSphereOverride } from "./did-resolver.js";
+import { resolveIssuerDoc } from "./did-resolver.js";
 import { replayCache } from "./nonce-store.js";
 import { findRevocation } from "./revocations.js";
 
@@ -48,13 +48,9 @@ export interface Caller {
   /** Per-call params, with `_envelope` stripped. */
   readonly params: Record<string, unknown>;
   /**
-   * DID resolver to use when a handler needs to verify a mandate or
-   * decode a DID document — already enriched with `withSphereOverride`
-   * if the caller passed `_subject_sphere_pubkeys` in params (cf.
-   * HOTFIX-A2a-RESOLVER). Handlers SHOULD use this rather than calling
-   * `resolveIssuerDoc` directly, otherwise mandate signature
-   * verification will fail for custodial did:aithos users whose
-   * sphere keys are distinct from root.
+   * DID resolver a handler uses to verify a mandate or decode a DID
+   * document. Resolves purely from the subject's published DID document
+   * (or did:key synthesis) — never from caller-supplied key material.
    */
   readonly resolveIssuerDoc: (did: string) => Promise<DidDocument | null>;
 }
@@ -118,71 +114,6 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   } & Record<string, unknown>;
   void _envelope;
 
-  // HOTFIX-A2a-RESOLVER — `_subject_sphere_pubkeys` extension
-  // ─────────────────────────────────────────────────────────
-  // Callers (e.g. Linkedone backend signing delegate-path envelopes
-  // on behalf of a custodial did:aithos user) can pass the user's 4
-  // real sphere pubkeys via this params extension to enable mandate
-  // signature verification — the PDS's local did:aithos synthesis
-  // alone cannot recover per-sphere pubkeys (it only has the root
-  // pubkey from the multibase). The field IS part of params_hash (so
-  // it's covered by the envelope signature, can't be tampered with by
-  // a passive attacker), but we read it BEFORE running verifyEnvelope
-  // to wire up the resolver — the verifier will then re-hash params
-  // with the field included and find a match.
-  //
-  // Defense: extracted value must be a plain object whose 4 keys are
-  // multibase strings; anything else is silently ignored (the call
-  // falls back to plain did:aithos synthesis, which is fine for
-  // owner-path-#root envelopes and only fails for mandates as before).
-  //
-  // TODO retire once Aithos has a real did:aithos HTTP registry
-  // resolver (audit MEDIUM "did:aithos resolver stubbed").
-  const subjectDid =
-    typeof (envelope as { iss?: unknown }).iss === "string"
-      ? ((envelope as { iss: string }).iss)
-      : null;
-  const rawSphereKeys = businessParams._subject_sphere_pubkeys;
-  const enrichedResolver =
-    subjectDid &&
-    subjectDid.startsWith("did:aithos:") &&
-    rawSphereKeys !== undefined &&
-    rawSphereKeys !== null &&
-    typeof rawSphereKeys === "object"
-      ? withSphereOverride(
-          resolveIssuerDoc,
-          subjectDid,
-          rawSphereKeys as Partial<
-            Record<"root" | "public" | "circle" | "self", unknown>
-          >,
-        )
-      : resolveIssuerDoc;
-
-  // HOTFIX-A2a-RESOLVER — diagnostic log (temporaire, à retirer une fois
-  // le flow Linkedone vert). Affiche la présence et la forme des sphere
-  // pubkeys reçues — pas de leak (les pubkeys publiques sont publiques
-  // par construction). Permet de débugger les -32040 mandate did not
-  // verify : si on voit `has_override=false`, c'est que le caller
-  // n'envoie PAS le champ ; si on voit les pubkeys mais que verify
-  // échoue, c'est qu'elles ne matchent pas les seeds du mandate.
-  if (subjectDid && subjectDid.startsWith("did:aithos:")) {
-    const safe = rawSphereKeys && typeof rawSphereKeys === "object"
-      ? (rawSphereKeys as Record<string, unknown>)
-      : null;
-    console.log("AUTH_DIAG_SUBJECT_SPHERE_PUBKEYS", {
-      iss: subjectDid,
-      method: input.method,
-      has_override: safe !== null,
-      keys_present: safe ? Object.keys(safe).sort() : [],
-      // Premiers chars de chaque pubkey — pour matcher visuellement
-      // contre ce que la SPA / Linkedone backend dit envoyer
-      root_prefix: typeof safe?.root === "string" ? safe.root.slice(0, 12) : null,
-      public_prefix: typeof safe?.public === "string" ? safe.public.slice(0, 12) : null,
-      circle_prefix: typeof safe?.circle === "string" ? safe.circle.slice(0, 12) : null,
-      self_prefix: typeof safe?.self === "string" ? safe.self.slice(0, 12) : null,
-    });
-  }
-
   // Dual-aud resolution. `expectedAud` may be a set of acceptable endpoints
   // (vanity + origin host) during the edge migration. protocol-core's
   // verifyEnvelope only compares against a single value, so we pick the
@@ -203,7 +134,7 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
     expectedAud: matchedAud ?? acceptedAud[0],
     expectedMethod: input.method,
     params: businessParams,
-    resolveIssuerDoc: enrichedResolver,
+    resolveIssuerDoc,
     findRevocation: async (mandateId) => {
       const rev = await findRevocation(mandateId);
       if (!rev) return null;
@@ -232,12 +163,12 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   const mandate = (envelope as SignedEnvelope).mandate;
   const mode: "owner" | "delegate" = mandateId ? "delegate" : "owner";
 
-  // Strip the HOTFIX-A2a-RESOLVER extension from the params we hand to
-  // handlers — it was used for sig verification and has no business
-  // meaning. Keeps handlers ignorant of this transitional plumbing.
-  const { _subject_sphere_pubkeys: _hotfixStripped, ...handlerParams } =
+  // Drop the legacy `_subject_sphere_pubkeys` field if a stale client still
+  // sends it — it is no longer honoured (the resolver trusts only the
+  // published DID document). Stripped so handlers never see it.
+  const { _subject_sphere_pubkeys: _legacyStripped, ...handlerParams } =
     businessParams as Record<string, unknown>;
-  void _hotfixStripped;
+  void _legacyStripped;
 
   return {
     subjectDid: result.issuer,
@@ -247,11 +178,7 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
     signerPubkeyMultibase: ed25519PublicKeyToMultibase(result.signerKey),
     envelopeNonce: (envelope as SignedEnvelope).nonce,
     params: handlerParams,
-    // Expose le resolver enrichi (HOTFIX-A2a-RESOLVER) pour que les
-    // handlers qui font verifyMandate (authorize_app, revoke_app, etc.)
-    // bénéficient automatiquement de l'override sphère pubkeys, sans
-    // avoir à re-construire le wrapper localement.
-    resolveIssuerDoc: enrichedResolver,
+    resolveIssuerDoc,
   };
 }
 
