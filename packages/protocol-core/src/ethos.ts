@@ -268,6 +268,15 @@ export interface GammaManifestAnchor {
 export const AITHOS_VERSION = "0.2.0" as const;
 export type AithosVersion = typeof AITHOS_VERSION;
 
+/**
+ * v0.3 bundle marker (per-section encryption, spec draft
+ * `bundle-v0.3-per-section-encryption.md`). v0.2 remains the write default;
+ * v0.3 is opt-in via the per-section path in `bundle-v03.ts`, selected at the
+ * manifest level by `aithos: "0.3.0"` + per-zone `format_version: "v2"`.
+ */
+export const AITHOS_VERSION_V03 = "0.3.0" as const;
+export type AithosVersionV03 = typeof AITHOS_VERSION_V03;
+
 export interface Manifest {
   aithos: AithosVersion;
   bundle_id: string;
@@ -485,7 +494,15 @@ export function decryptZone(
   }
 }
 
-function wrapDek(dek: Uint8Array, recipientDidUrl: string, recipientPk: Uint8Array): ZoneWrap {
+/**
+ * Seal a 32-byte DEK to a single recipient via X25519-HKDF-SHA256-AEAD
+ * (spec §3.6). Exported so the v0.3 per-section path (`bundle-v03.ts`) reuses
+ * the identical, audited wrap construction rather than re-deriving it — the
+ * wrap shape is grain-agnostic (a DEK is a DEK, whether per-zone or
+ * per-section), so the only thing that differs in v0.3 is the AEAD AAD over
+ * the section body, not the key-wrapping.
+ */
+export function wrapDek(dek: Uint8Array, recipientDidUrl: string, recipientPk: Uint8Array): ZoneWrap {
   const esk = new Uint8Array(randomBytes(32));
   // clamp per X25519 convention (noble's x25519 internally clamps for scalarmult).
   const epk = x25519.getPublicKey(esk);
@@ -510,7 +527,8 @@ function wrapDek(dek: Uint8Array, recipientDidUrl: string, recipientPk: Uint8Arr
   };
 }
 
-function unwrapDek(wrap: ZoneWrap, mySk: Uint8Array): Uint8Array {
+/** Inverse of {@link wrapDek}. Exported for reuse by the v0.3 per-section path. */
+export function unwrapDek(wrap: ZoneWrap, mySk: Uint8Array): Uint8Array {
   if (wrap.alg !== "x25519-hkdf-sha256-aead") {
     throw new Error(`Unsupported wrap alg: ${wrap.alg}`);
   }

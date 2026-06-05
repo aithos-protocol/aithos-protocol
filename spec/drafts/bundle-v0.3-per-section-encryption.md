@@ -229,7 +229,7 @@ For each section `S` in an encrypted zone `Z`:
    ciphertext = XChaCha20-Poly1305.encrypt(
      key   = section_DEK,
      nonce = nonce,
-     aad   = "aithos-section-v1\0" ‖ bundle_id ‖ "\0" ‖ section_id,
+     aad   = "aithos-section-v1\0" ‖ subject_did ‖ "\0" ‖ section_id,
      plaintext = section_markdown
    )
    ```
@@ -256,12 +256,14 @@ A reader who cannot find a matching wrap MUST NOT attempt decryption of that sec
 The AEAD additional data MUST be:
 
 ```
-"aithos-section-v1\0" ‖ utf8(bundle_id) ‖ "\0" ‖ utf8(section_id)
+"aithos-section-v1\0" ‖ utf8(subject_did) ‖ "\0" ‖ utf8(section_id)
 ```
 
-(ASCII bytes for the literal prefix, including the trailing NUL after both `v1` and `bundle_id`; UTF-8 for `bundle_id` and `section_id`).
+(ASCII bytes for the literal prefix, including the trailing NUL after both `v1` and `subject_did`; UTF-8 for `subject_did` and `section_id`).
 
-This binds the ciphertext to **both** the bundle (resists replay across editions) **and** the specific section_id (resists swapping ciphertexts between sections within the same bundle). The v0.2 AAD `"aithos-zone-v1\0" ‖ bundle_id` is replaced by this section-grained variant; the prefix label changes to `"aithos-section-v1"` to make accidental cross-version reuse fail loudly.
+This binds the ciphertext to **both** the subject (resists replay into a different subject's bundle) **and** the specific section_id (resists swapping ciphertexts between sections within the same bundle).
+
+**Why `subject_did` and not `bundle_id`.** An earlier draft of this section bound the AAD to `bundle_id`. But `bundle_id` is *per-edition* (`urn:aithos:<handle>:<edition>`), so binding it into the AAD would force every section's ciphertext to change on every edition — re-encrypting the entire zone on each edit and defeating the per-section cost property that motivates v0.3 (it would make test B3 unsatisfiable). `subject_did` is stable across editions, so an unchanged section carries forward **byte-identical** (B3 / B14). Cross-*edition* replay resistance is not the AAD's job here: it is already provided by the signed manifest and the `edition.prev_hash` chain (§3.3.4′ / §3.8′), which commit to exactly which section ciphertext belongs to which edition. The AAD's remaining duties — cross-*subject* and cross-*section* binding — are both met by `subject_did ‖ section_id`. The v0.2 AAD `"aithos-zone-v1\0" ‖ subject_did` is replaced by this section-grained variant; the prefix label changes to `"aithos-section-v1"` to make accidental cross-version reuse fail loudly.
 
 ### 3.4.4′ Per-section DEK independence
 
@@ -404,8 +406,9 @@ The diff applies to all three zones for cost properties; metadata visibility cha
 | Server visibility — `public` zone | Already fully visible in v0.2 | Already fully visible in v0.3 (no regression) |
 | Section-grain access control (one delegate, one section) | Not expressible (zone-grain only) | **Expressible** (per-section wraps on `circle` / `self`) |
 | Authorship of a section's current state | v0.2 zone signature + per-section gamma | gamma alone (zone signature removed in §3.3.3′) |
-| Replay of a ciphertext into another bundle | AAD binds bundle_id | AAD binds bundle_id **and** section_id |
+| Replay of a ciphertext into another subject's bundle | AAD binds subject_did | AAD binds subject_did **and** section_id |
 | Replay of a section ciphertext into a different section_id within the same bundle | Implicitly possible (no section AAD binding) | **Prevented** (AAD includes section_id) |
+| Replay of a section ciphertext across editions of the *same* subject | N/A (whole-zone re-encrypt each edition) | Permitted by design — carried-forward sections are byte-identical (B3); edition provenance is committed by the manifest signature + `prev_hash` chain, not the AAD |
 
 Net: granular cost and granular blast radius are gained on every zone; server-side metadata visibility increases on encrypted zones only by the items listed above. The increase is documented and the mitigation (anodyne titles, opt-in encrypted manifest planned for v0.4) is explicit.
 
@@ -419,7 +422,7 @@ Every conformant v0.3 implementation MUST satisfy:
 | B2 — v0.3 round trip, many sections | 100 sections in self; each has independent DEK and nonce; reader decrypts all; per-section AADs distinct. |
 | B3 — Single-section edit cost | Modifying section 5 of 100 rewrites only `self/sec_5.enc` and updates only `manifest.zones.self.sections[4].sha256_of_plaintext`, `cipher.nonce`, `cipher.wraps`, `gamma_ref`. All other sections' ciphertexts are byte-identical to the prior edition. |
 | B4 — Cross-section AAD binding | Swapping `self/sec_A.enc` and `self/sec_B.enc` (same zone, different sections) makes both fail to decrypt: AAD mismatch on `section_id`. Verify MUST FAIL. |
-| B5 — Cross-bundle AAD binding | Copying a section ciphertext into a different bundle_id fails to decrypt for the same reason. |
+| B5 — Cross-subject AAD binding | Copying a section ciphertext into a **different subject's** bundle fails to decrypt: the AAD binds `subject_did`, so a re-homed ciphertext fails the AEAD tag even when the recipient wrap still resolves. (Copying a ciphertext into another *edition of the same subject* is legitimate carry-forward and MUST still decrypt — that is what B3 asserts.) |
 | B6 — Manifest tampering | Any byte change to `manifest.json` invalidates the manifest signature; verify MUST FAIL. |
 | B7 — Orphan ciphertext | A bundle containing `self/sec_X.enc` not listed in `manifest.zones.self.sections[]` MUST FAIL §3.8′ check 6. |
 | B8 — Missing ciphertext | A manifest entry for `sec_Y` whose corresponding file is absent from the ZIP MUST FAIL §3.8′ check 6. |

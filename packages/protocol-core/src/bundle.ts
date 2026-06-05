@@ -48,6 +48,11 @@ import {
 } from "./ethos.js";
 import { type DidDocument, verifyDidDocument } from "./identity.js";
 import { SPHERE_FRAGMENTS, type Sphere } from "./did.js";
+import { AITHOS_VERSION_V03 } from "./ethos.js";
+import {
+  verifyBundleV03AtPath,
+  type BundleV03VerifyResult,
+} from "./bundle-v03.js";
 
 /* -------------------------------------------------------------------------- */
 /*  Public API                                                                */
@@ -95,6 +100,14 @@ export function verifyBundleAtPath(
 ): BundleVerifyResult {
   if (!existsSync(pathArg)) {
     throw new Error(`Bundle path not found: ${pathArg}`);
+  }
+
+  // Dispatch on the top-level `aithos` marker (§3.10.1′): a v0.3 bundle uses the
+  // per-section verifier; everything else falls through to the v0.2 path below.
+  // (Reading a v0.2 bundle under a v0.3 runtime — the compat path of §3.10.2′ —
+  // is a later brick; for now v0.2 bundles keep using the v0.2 verifier.)
+  if (peekBundleAithosVersion(pathArg) === AITHOS_VERSION_V03) {
+    return adaptV03Result(verifyBundleV03AtPath(pathArg, {}));
   }
 
   let dir: string;
@@ -370,6 +383,45 @@ function verifyBundleDir(dir: string, opts: BundleVerifyOpts): BundleVerifyResul
     edition: { version: manifest.edition.version, height: manifest.edition.height },
     subject_handle: manifest.subject_handle,
     zones_skipped: zonesSkipped,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  v0.3 dispatch helpers                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Cheaply read the top-level `aithos` version marker from a bundle path (an
+ * unpacked dir or a `.ethos` zip) without fully extracting it. Returns the
+ * version string, or `null` if it cannot be determined.
+ */
+function peekBundleAithosVersion(pathArg: string): string | null {
+  try {
+    if (statSync(pathArg).isDirectory()) {
+      const m = JSON.parse(readFileSync(join(pathArg, "manifest.json"), "utf8")) as {
+        aithos?: unknown;
+      };
+      return typeof m.aithos === "string" ? m.aithos : null;
+    }
+    const entry = new AdmZip(pathArg).getEntry("manifest.json");
+    if (!entry) return null;
+    const m = JSON.parse(entry.getData().toString("utf8")) as { aithos?: unknown };
+    return typeof m.aithos === "string" ? m.aithos : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Adapt a v0.3 verify result into the shared {@link BundleVerifyResult} shape. */
+function adaptV03Result(r: BundleV03VerifyResult): BundleVerifyResult {
+  return {
+    ok: r.ok,
+    errors: r.errors,
+    warnings: r.warnings,
+    bundle_id: r.bundle_id,
+    edition: r.edition,
+    subject_handle: r.subject_handle,
+    zones_skipped: r.zonesSkipped,
   };
 }
 
