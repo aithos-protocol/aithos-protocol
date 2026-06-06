@@ -11,6 +11,20 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Encrypted `self` index (circle-clear / self-private).** The `self` zone
+  hides its section titles from the host: titles/tags move out of the clear
+  section descriptors into a per-zone `index_cipher` (XChaCha20-Poly1305 over
+  `jcs(IndexEntry[])`, sealed to `#self-kex`; AAD = `"aithos-index-v1\0" ‖
+  subject_did ‖ "\0" ‖ zone`). Structural fields stay clear so a keyless host
+  still verifies integrity/presence/orphans. New `BundleZoneV2.index_encrypted` +
+  `index_cipher`, `SectionDescriptor.title` now optional (absent on `self`),
+  `ZONE_INDEX_ENCRYPTED` policy, `encryptZoneIndex` / `decryptZoneIndex` /
+  `indexAad` / `readZoneIndex`. `authorBundleV03` seals the self index;
+  `verifyBundleV03` enforces the per-zone index policy and (with the key)
+  cross-checks the decrypted index against the clear section list. Tests B16/B16b.
+- **Gamma op `bundle.migrate.v0.3`** reserved in the `GammaOp` vocabulary so
+  strict verifiers accept the entry the keystore-native migration will emit
+  (spec §3.10.3′; emitter ships with that work).
 - **Bundle format v0.3 — per-section encryption** (opt-in; spec draft
   `spec/drafts/bundle-v0.3-per-section-encryption.md`). Every zone is split into
   independently-addressed per-section blobs: `public/<id>.md` plaintext,

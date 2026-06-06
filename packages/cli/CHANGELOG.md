@@ -5,6 +5,30 @@ All notable changes to the Aithos reference CLI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-06-06
+
+### Added
+- **`aithos ethos migrate-to-v0.3`** — migrate a subject's v0.2 ethos into a
+  v0.3 per-section bundle (decrypts with the owner's keys, splits each zone into
+  per-section blobs, chains the migration edition back to the v0.2 predecessor).
+  Writes a v0.3 bundle; the keystore ethos stays v0.2 until the format default
+  flips.
+- **`aithos ethos read`** — read a v0.3 bundle: `--index` prints the section
+  index per zone (the encrypted `self` index is decrypted with `--handle`,
+  otherwise titles show as `[hidden]`), `--section a,b,c` fetches one or several
+  sections by id, `--zone` filters. This is the surface the hosting platform
+  builds on.
+
+### Fixed
+- **`aithos mandate add`** now tracks `MANDATE_VERSION_CURRENT` from
+  protocol-core instead of a hardcoded allowlist that had drifted to
+  `0.1.0/0.2.1/0.3.0` — it rejected the current `0.4.0` mandates that `aithos
+  grant` mints, breaking the grant→import flow.
+
+### Changed
+- Requires `@aithos/protocol-core` `^0.7.0` (per-section v0.3 bundle support).
+- `--version` now reports the package version (was pinned to `0.4.0`).
+
 ## [0.6.0] — 2026-05-27
 
 ### Changed

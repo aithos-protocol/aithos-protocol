@@ -127,7 +127,11 @@ export type GammaOp =
   | "section.redact"
   | "identity.rotate"
   | "mandate.issue"
-  | "mandate.revoke";
+  | "mandate.revoke"
+  // Records a v0.2 → v0.3 bundle migration (spec §3.10.3′). Reserved in the
+  // vocabulary now so strict verifiers already accept the entry that the
+  // keystore-native migration will emit; the emitter ships with that work.
+  | "bundle.migrate.v0.3";
 
 export const GAMMA_VERSION = "0.3.0" as const;
 export const GAMMA_FILE_VERSION = "0.3.0" as const;

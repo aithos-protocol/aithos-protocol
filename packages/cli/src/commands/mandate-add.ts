@@ -38,6 +38,7 @@ import {
   mandatesDir,
   listIdentities,
   type DidDocument,
+  MANDATE_VERSION_CURRENT,
 } from "@aithos/protocol-core";
 
 export interface MandateAddOpts {
@@ -64,16 +65,13 @@ export function runMandateAdd(opts: MandateAddOpts): void {
     throw new Error(`Not valid JSON: ${(e as Error).message}`);
   }
 
-  // Accept the pre-E2E envelope (0.1.0), the delegate-aware envelope (0.2.1),
-  // and the v0.3 envelope that introduced the `gamma.read` scope.
-  // protocol-core's `verifyMandate` enforces the same set.
-  if (
-    mandate["aithos-mandate"] !== "0.1.0" &&
-    mandate["aithos-mandate"] !== "0.2.1" &&
-    mandate["aithos-mandate"] !== "0.3.0"
-  ) {
+  // Track protocol-core's accepted version rather than hardcoding a list that
+  // drifts: `verifyMandate` accepts exactly `MANDATE_VERSION_CURRENT`, so the
+  // friendly pre-check uses the same constant. (Previously pinned to 0.3.0,
+  // which rejected the current 0.4.0 mandates that `grant` mints.)
+  if (mandate["aithos-mandate"] !== MANDATE_VERSION_CURRENT) {
     throw new Error(
-      `Unsupported mandate version "${mandate["aithos-mandate"]}" (expected 0.1.0, 0.2.1, or 0.3.0)`,
+      `Unsupported mandate version "${mandate["aithos-mandate"]}" (expected ${MANDATE_VERSION_CURRENT})`,
     );
   }
   if (!mandate.id || !mandate.issuer) {
