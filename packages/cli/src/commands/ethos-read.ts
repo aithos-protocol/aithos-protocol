@@ -24,16 +24,16 @@ import AdmZip from "adm-zip";
 
 import {
   loadConfig,
-  loadIdentity,
-  subjectRecipientFor,
+  authorZoneDecryptRecipient,
   readSection,
   readZoneIndex,
   SPHERE_FRAGMENTS,
   type ManifestV03,
   type Sphere,
   type SectionReader,
-  type Identity,
+  type Author,
 } from "@aithos/protocol-core";
+import { resolveAuthor } from "./_author.js";
 
 export interface EthosReadOpts {
   path: string;
@@ -41,6 +41,9 @@ export interface EthosReadOpts {
   section?: string;
   zone?: string;
   index?: boolean;
+  /** Delegate read: mandate id + agent keyfile (reads only the scoped sections). */
+  mandate?: string;
+  agentKey?: string;
   json?: boolean;
 }
 
@@ -66,20 +69,24 @@ export function runEthosRead(opts: EthosReadOpts): void {
     }
     const subjectDid = manifest.subject_did;
 
-    // Keys are optional: with them you decrypt circle/self + the self index;
-    // without them you get the host view (public clear, self titles hidden).
+    // Keys are optional. Owner (--handle) decrypts everything + the self index;
+    // a delegate (--mandate + --agent-key) decrypts only the sections it is
+    // wrapped to; with no keys you get the host view (titles hidden).
     const handle = opts.handle ?? loadConfig().default_handle ?? undefined;
-    let identity: Identity | null = null;
-    if (handle) {
+    let author: Author | null = null;
+    if (opts.mandate) {
+      if (!handle) throw new Error("--mandate needs --handle <subject> + --agent-key <path>");
+      author = resolveAuthor({ handle, op: "read", mandate: opts.mandate, agentKey: opts.agentKey }).author;
+    } else if (handle) {
       try {
-        identity = loadIdentity(handle);
+        author = resolveAuthor({ handle }).author; // owner; tracked/no-keys → host view
       } catch {
-        identity = null;
+        author = null;
       }
     }
     const readerFor = (zone: Sphere): SectionReader | undefined => {
-      if (zone === "public" || !identity) return undefined;
-      const r = subjectRecipientFor(identity, zone as "circle" | "self");
+      if (zone === "public" || !author) return undefined;
+      const r = authorZoneDecryptRecipient(author, zone as "circle" | "self");
       return { didUrl: r.did, x25519Secret: r.x25519Secret };
     };
 

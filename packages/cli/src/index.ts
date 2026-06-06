@@ -44,6 +44,7 @@ import { runEthosPack, runEthosUnpack } from "./commands/ethos-pack.js";
 import { runEthosInstall } from "./commands/ethos-install.js";
 import { runEthosMigrateToV03 } from "./commands/ethos-migrate.js";
 import { runEthosRead } from "./commands/ethos-read.js";
+import { runEthosWrite, runEthosRm } from "./commands/ethos-edit.js";
 import { runGammaShow } from "./commands/gamma-show.js";
 import { runGammaVerify } from "./commands/gamma-verify.js";
 
@@ -339,8 +340,44 @@ ethos
   .option("--zone <zone>", "Restrict to a zone (public|circle|self)")
   .option("--index", "Print the section index (id + title) instead of bodies")
   .option("--handle <h>", "Identity providing the keys (defaults to the configured default)")
+  .option("--mandate <id>", "Delegate read: mandate id (reads only the scoped sections)")
+  .option("--agent-key <path>", "Delegate keyfile (required with --mandate)")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runEthosRead(opts)));
+
+ethos
+  .command("write")
+  .description(
+    "Edit (or add) a section in a v0.3 bundle by id, writing a new edition to --out. " +
+      "Owner via --handle; delegate via --mandate + --agent-key.",
+  )
+  .requiredOption("--path <dir>", "Path to the v0.3 bundle to edit")
+  .requiredOption("--section <id>", "Section id to modify or add")
+  .option("--zone <zone>", "Zone (required when adding a new section)")
+  .option("--title <title>", "New title")
+  .option("--body <markdown>", "New body (inline)")
+  .option("--body-file <path>", "Read the new body from a file")
+  .option("--tags <list>", "Comma-separated tag list (replaces existing tags)")
+  .option("--clear-tags", "Remove all tags")
+  .option("--out <dir>", "Output directory for the new edition (default: <path>-e<height+1>)")
+  .option("--handle <h>", "Subject identity")
+  .option("--mandate <id>", "Delegate write: mandate id")
+  .option("--agent-key <path>", "Delegate keyfile (required with --mandate)")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosWrite(opts)));
+
+ethos
+  .command("rm")
+  .description("Delete a section from a v0.3 bundle by id, writing a new edition to --out.")
+  .requiredOption("--path <dir>", "Path to the v0.3 bundle")
+  .requiredOption("--section <id>", "Section id to delete")
+  .option("--zone <zone>", "Zone (inferred from the manifest if omitted)")
+  .option("--out <dir>", "Output directory for the new edition (default: <path>-e<height+1>)")
+  .option("--handle <h>", "Subject identity")
+  .option("--mandate <id>", "Delegate: mandate id")
+  .option("--agent-key <path>", "Delegate keyfile (required with --mandate)")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosRm(opts)));
 
 ethos
   .command("install")
