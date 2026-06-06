@@ -41,7 +41,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@aithos/protocol-core": "^0.6.0",
+    "@aithos/protocol-core": "^0.7.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "zod": "^3.23.0"
