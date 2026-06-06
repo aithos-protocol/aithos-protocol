@@ -719,6 +719,8 @@ export interface BuildManifestV2Params {
   height: number;
   zones: Record<Sphere, BundleZoneV2>;
   sha256OfDidJson: string;
+  /** Gamma deep-memory anchor (§10.7) — the signed manifest commits to the log tail. */
+  gamma?: GammaManifestAnchor;
 }
 
 /**
@@ -741,6 +743,7 @@ export function buildManifestV2(p: BuildManifestV2Params): ManifestV03 {
       height: p.height,
     },
     zones: p.zones,
+    ...(p.gamma ? { gamma: p.gamma } : {}),
     integrity: {
       sha256_of_did_json: p.sha256OfDidJson,
       manifest_signature: { alg: "ed25519", key: `${p.subjectDid}#public`, value: "" },
@@ -865,6 +868,24 @@ export interface AuthorBundleV03Args {
   };
   /** Override recipients per encrypted zone (default: subject only). */
   recipientsFor?: (zone: "circle" | "self") => SectionRecipient[];
+  /**
+   * Gamma deep-memory anchor to record in the manifest (§10.7). When omitted,
+   * a v0.3 `prev`'s anchor carries forward. The `gamma.jsonl.enc` log file is
+   * carried forward from `prev.dir` when present.
+   */
+  gamma?: GammaManifestAnchor;
+  /** Path to a `gamma.jsonl.enc` to copy into the bundle (e.g. from a v0.2 source). */
+  gammaLogSrc?: string;
+}
+
+const GAMMA_LOG_FILE = "gamma.jsonl.enc";
+
+/** Copy `gamma.jsonl.enc` from a source dir (or file) into the bundle, if present. */
+function carryGammaLog(src: string | undefined, prevDir: string | undefined, outDir: string): void {
+  let from: string | undefined;
+  if (src && existsSync(src)) from = src;
+  else if (prevDir && existsSync(join(prevDir, GAMMA_LOG_FILE))) from = join(prevDir, GAMMA_LOG_FILE);
+  if (from) copyFileSync(from, join(outDir, GAMMA_LOG_FILE));
 }
 
 /**
@@ -995,6 +1016,11 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
   writeFileSync(join(outDir, "did.json"), didContent, { mode: 0o644 });
   const didHashHex = sha256hex(new TextEncoder().encode(didContent));
 
+  // Gamma: carry the log file forward (from an explicit source or prev) and
+  // record the anchor in the signed manifest.
+  carryGammaLog(args.gammaLogSrc, args.prev?.dir, outDir);
+  const gammaAnchor = args.gamma ?? args.prev?.manifest.gamma;
+
   const unsigned = buildManifestV2({
     subjectDid,
     handle,
@@ -1007,6 +1033,7 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
     height,
     zones: zoneEntries as Record<Sphere, BundleZoneV2>,
     sha256OfDidJson: didHashHex,
+    ...(gammaAnchor ? { gamma: gammaAnchor } : {}),
   });
 
   const signed = signManifestV03(author, unsigned);
@@ -1124,6 +1151,7 @@ export function patchEditionV03(args: PatchEditionV03Args): ManifestV03 {
 
   const didContent = readFileSync(join(identityDir(handle), "did.json"), "utf8");
   writeFileSync(join(args.outDir, "did.json"), didContent, { mode: 0o644 });
+  carryGammaLog(undefined, args.prev.dir, args.outDir); // carry the gamma log forward
   const unsigned = buildManifestV2({
     subjectDid,
     handle,
@@ -1136,6 +1164,7 @@ export function patchEditionV03(args: PatchEditionV03Args): ManifestV03 {
     height: prev.edition.height + 1,
     zones: zoneEntries as Record<Sphere, BundleZoneV2>,
     sha256OfDidJson: sha256hex(new TextEncoder().encode(didContent)),
+    ...(prev.gamma ? { gamma: prev.gamma } : {}),
   });
   const signed = signManifestV03(author, unsigned);
   writeFileSync(join(args.outDir, "manifest.json"), JSON.stringify(signed, null, 2) + "\n", { mode: 0o600 });

@@ -191,5 +191,9 @@ export function migrateBundleV02ToV03(args: MigrateV02ToV03Args): ManifestV03 {
       manifestHashHex: canonicalManifestHashHex(v02),
       height: v02.edition.height,
     },
+    // Carry the v0.2 deep-memory log + its signed anchor forward unchanged: the
+    // migration re-encrypts the bundle, not the gamma history (§3.10.4′).
+    ...(v02.gamma ? { gamma: v02.gamma } : {}),
+    gammaLogSrc: join(args.v02Dir, "gamma.jsonl.enc"),
   });
 }

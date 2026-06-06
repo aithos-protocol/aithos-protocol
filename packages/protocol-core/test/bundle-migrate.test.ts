@@ -8,7 +8,7 @@
 
 import { test, describe, before, after } from "node:test";
 import { strict as assert } from "node:assert";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -141,5 +141,39 @@ describe("v0.2 ↔ v0.3 boundary (§3.12′)", () => {
     const a = readFileSync(join(v03Dir, mig.zones.circle.sections[0].file));
     const b = readFileSync(join(nextDir, m2.zones.circle.sections[0].file));
     assert.equal(Buffer.compare(a, b), 0, "unchanged circle section carried forward byte-identical");
+  });
+
+  test("B10b — migration carries the gamma log + signed anchor forward (§3.10.4′)", () => {
+    const { owner, dir: v02Dir, manifest: v02 } = makeV02Bundle("b10b_alice");
+    // The v0.2 ethos was built with section.add edits → it has a gamma log + anchor.
+    assert.ok(existsSync(join(v02Dir, "gamma.jsonl.enc")), "v0.2 source has a gamma log");
+    assert.ok(v02.gamma && v02.gamma.count > 0, "v0.2 source has a gamma anchor");
+
+    const v03Dir = outDir();
+    const mig = core.migrateBundleV02ToV03({ identity: owner, v02Dir, outDir: v03Dir });
+
+    // The log file travelled (byte-identical) and the anchor is recorded in the signed v0.3 manifest.
+    assert.ok(existsSync(join(v03Dir, "gamma.jsonl.enc")), "v0.3 bundle carries the gamma log");
+    assert.equal(
+      Buffer.compare(readFileSync(join(v02Dir, "gamma.jsonl.enc")), readFileSync(join(v03Dir, "gamma.jsonl.enc"))),
+      0,
+      "gamma log byte-identical (history is not re-encrypted)",
+    );
+    assert.deepEqual(mig.gamma, v02.gamma, "v0.3 manifest carries the v0.2 gamma anchor verbatim");
+
+    // A subsequent v0.3 edit keeps the gamma log + anchor.
+    const back = core.readBundleSections(v03Dir, owner);
+    const nextDir = outDir();
+    const m2 = core.editSectionV03({
+      author: owner,
+      bundleDir: v03Dir,
+      outDir: nextDir,
+      zone: "self",
+      sectionId: mig.zones.self.sections[0].section_id,
+      change: { body: "edited" },
+    });
+    void back;
+    assert.ok(existsSync(join(nextDir, "gamma.jsonl.enc")), "edit keeps the gamma log");
+    assert.deepEqual(m2.gamma, v02.gamma, "edit carries the gamma anchor forward");
   });
 });
