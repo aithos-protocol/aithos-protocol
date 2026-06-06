@@ -89,6 +89,7 @@ import {
 import {
   type Mandate,
   type Revocation,
+  type SectionScope,
   hasGammaReadScope,
   verifyMandate,
 } from "./mandate.js";
@@ -731,6 +732,61 @@ export function activeDelegatesForZone(
     out.push({
       did: delegateWrapDid(m.grantee.id, m.grantee.pubkey),
       x25519PublicKey: xPub,
+    });
+  }
+  return out;
+}
+
+/**
+ * A delegate's recipient grant on a zone, carrying its optional `section_scope`
+ * (companion draft `bundle-v0.3-section-level-mandates.md`). A grant with no
+ * `sectionScope` covers the whole zone; a scoped grant covers only the sections
+ * matching it. Used by the v0.3 author path to wrap each section's DEK to the
+ * delegates entitled to that specific section (§3.5.4′).
+ */
+export interface DelegateGrant {
+  did: string;
+  x25519PublicKey: Uint8Array;
+  sectionScope?: SectionScope;
+}
+
+/**
+ * Like {@link activeDelegatesForZone} but also returns each grant's
+ * `section_scope`, so the caller can decide per-section who is entitled.
+ */
+export function activeDelegateGrantsForZone(
+  subjectDid: string,
+  zone: Sphere,
+): DelegateGrant[] {
+  const out: DelegateGrant[] = [];
+  if (!existsSync(mandatesDir())) return out;
+  const readScope = `ethos.read.${zone}` as const;
+  const writeScope = `ethos.write.${zone}` as const;
+  for (const fn of listMandates()) {
+    let m: Mandate;
+    try {
+      m = readJson<Mandate>(join(mandatesDir(), fn));
+    } catch {
+      continue;
+    }
+    if (m.issuer !== subjectDid) continue;
+    const covers =
+      m.scopes.includes(writeScope) ||
+      m.scopes.includes(readScope) ||
+      m.scopes.includes("ethos.read.all");
+    if (!covers) continue;
+    if (!m.grantee.pubkey) continue;
+    if (findRevocation(m.id)) continue;
+    let edPub: Uint8Array;
+    try {
+      edPub = multibaseToEd25519PublicKey(m.grantee.pubkey);
+    } catch {
+      continue;
+    }
+    out.push({
+      did: delegateWrapDid(m.grantee.id, m.grantee.pubkey),
+      x25519PublicKey: ed25519PubToX25519Pub(edPub),
+      ...(m.section_scope ? { sectionScope: m.section_scope } : {}),
     });
   }
   return out;

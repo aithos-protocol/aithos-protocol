@@ -75,7 +75,9 @@ import {
   unwrapDek,
   subjectRecipientFor,
   authorZoneWriteRecipients,
+  activeDelegateGrantsForZone,
 } from "./ethos.js";
+import { sectionMatchesScope } from "./mandate.js";
 import {
   type Author,
   ownerAuthor,
@@ -763,6 +765,56 @@ export function defaultZoneRecipients(
   return [{ did: r.did, x25519PublicKey: r.x25519PublicKey }];
 }
 
+/**
+ * Resolve the recipient policy for a zone: a per-section recipient function and
+ * the index-cipher recipient list (§3.5.4′ / §3.5.5′).
+ *
+ *   - Public / unencrypted → no recipients.
+ *   - Explicit `recipientsFor` override → used verbatim for every section + index.
+ *   - Owner author → subject sphere + delegates whose `section_scope` matches the
+ *     section; the index is sealed to the subject + WHOLE-zone delegates only.
+ *   - Delegate author → zone-level (owner + the delegate itself), as §3.5.2′.
+ */
+function resolveZoneRecipients(
+  author: Author,
+  zone: Sphere,
+  subjectDid: string,
+  encrypted: boolean,
+  recipientsFor: ((zone: "circle" | "self") => SectionRecipient[]) | undefined,
+): { forSection: (s: Section) => SectionRecipient[]; forIndex: SectionRecipient[] } {
+  if (!encrypted) return { forSection: () => [], forIndex: [] };
+
+  const z = zone as "circle" | "self";
+  if (recipientsFor) {
+    const fixed = recipientsFor(z);
+    return { forSection: () => fixed, forIndex: fixed };
+  }
+
+  if (author.kind === "owner") {
+    const r = subjectRecipientFor(author.identity, z);
+    const subjectRec: SectionRecipient = { did: r.did, x25519PublicKey: r.x25519PublicKey };
+    const grants = activeDelegateGrantsForZone(subjectDid, zone);
+    const asRec = (g: { did: string; x25519PublicKey: Uint8Array }): SectionRecipient => ({
+      did: g.did,
+      x25519PublicKey: g.x25519PublicKey,
+    });
+    return {
+      forSection: (s) => [
+        subjectRec,
+        ...grants
+          .filter((g) => sectionMatchesScope({ id: s.id, tags: s.tags }, g.sectionScope))
+          .map(asRec),
+      ],
+      // Index recipients: subject + whole-zone delegates only (no section_scope).
+      forIndex: [subjectRec, ...grants.filter((g) => !g.sectionScope).map(asRec)],
+    };
+  }
+
+  // Delegate author: zone-level recipients (owner + this delegate).
+  const r = authorZoneWriteRecipients(author, z, subjectDid);
+  return { forSection: () => r, forIndex: r };
+}
+
 export interface AuthorBundleV03Args {
   /** The owner identity. Provide this OR {@link author}. */
   identity?: Identity;
@@ -887,10 +939,13 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
 
     const encrypted = zone !== "public";
     if (encrypted) assertCanWrite(author, zone, now); // no-op for owner
-    const recipients = encrypted
-      ? args.recipientsFor?.(zone as "circle" | "self") ??
-        authorZoneWriteRecipients(author, zone as "circle" | "self", subjectDid)
-      : [];
+
+    // Recipients are resolved PER SECTION (§3.5.4′): the subject always, plus
+    // each delegate whose mandate's section_scope matches that section. The
+    // encrypted self index is sealed only to the subject + WHOLE-zone delegates
+    // (§3.5.5′) — a section-scoped delegate must not learn every self title.
+    const { forSection: recipientsForSection, forIndex: indexRecipients } =
+      resolveZoneRecipients(author, zone, subjectDid, encrypted, args.recipientsFor);
 
     const indexEncrypted = ZONE_INDEX_ENCRYPTED[zone];
     const prevZone = args.prev?.manifest.zones[zone];
@@ -898,6 +953,7 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
     const indexEntries: IndexEntry[] = [];
 
     for (const section of args.zones[zone] ?? []) {
+      const recipients = recipientsForSection(section);
       const plaintext = renderSectionMarkdown(section);
       const sha = sha256hex(plaintext);
       const prevDesc = prevZone?.sections.find((s) => s.section_id === section.id);
@@ -941,7 +997,7 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
     if (indexEncrypted) {
       zoneEntry.index_encrypted = true;
       if (indexEntries.length > 0) {
-        zoneEntry.index_cipher = encryptZoneIndex(indexEntries, subjectDid, zone, recipients);
+        zoneEntry.index_cipher = encryptZoneIndex(indexEntries, subjectDid, zone, indexRecipients);
       }
     }
     zoneEntries[zone] = zoneEntry;

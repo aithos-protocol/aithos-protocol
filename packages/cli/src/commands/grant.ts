@@ -31,6 +31,7 @@ import {
   issueMandateWithRewrap,
   ethosDir,
   type MandateConstraints,
+  type SectionScope,
   type Sphere,
 } from "@aithos/protocol-core";
 
@@ -45,6 +46,10 @@ export interface GrantOpts {
   domains?: string;
   rateLimit?: string;
   counterSign?: string;
+  /** Comma-separated section ids to scope the read/write to (§4.7′). */
+  sections?: string;
+  /** Comma-separated tags to scope the read/write to (a section matches if it carries any). */
+  sectionTags?: string;
   json?: boolean;
 }
 
@@ -86,6 +91,17 @@ export function runGrant(opts: GrantOpts): void {
       .filter(Boolean);
   }
 
+  // Optional section_scope (§4.7′): narrows the read/write to a subset.
+  let sectionScope: SectionScope | undefined;
+  const scopeIds = opts.sections?.split(",").map((s) => s.trim()).filter(Boolean);
+  const scopeTags = opts.sectionTags?.split(",").map((s) => s.trim()).filter(Boolean);
+  if ((scopeIds && scopeIds.length) || (scopeTags && scopeTags.length)) {
+    sectionScope = {
+      ...(scopeIds && scopeIds.length ? { ids: scopeIds } : {}),
+      ...(scopeTags && scopeTags.length ? { tags: scopeTags } : {}),
+    };
+  }
+
   const m = createMandate({
     issuer: id,
     actorSphere: opts.sphere as Sphere,
@@ -97,6 +113,7 @@ export function runGrant(opts: GrantOpts): void {
     scopes,
     ttlSeconds,
     ...(Object.keys(constraints).length ? { constraints } : {}),
+    ...(sectionScope ? { sectionScope } : {}),
   });
 
   const path = writeMandate(m);
@@ -122,13 +139,24 @@ export function runGrant(opts: GrantOpts): void {
       s.startsWith("ethos.read.") ||
       s === "gamma.read",
   );
-  if (touchesEthos && m.grantee.pubkey && existsSync(ethosDir(handle))) {
+  // A section_scope cannot be honored by the v0.2 whole-zone rewrap (one DEK per
+  // zone) — applying it would over-grant the whole zone. So a section-scoped
+  // mandate is recorded only; it takes effect when the ethos is authored in v0.3
+  // (the per-section author path wraps only the matching sections, §3.5.4′).
+  const deferredForV03 = !!sectionScope;
+  if (touchesEthos && !deferredForV03 && m.grantee.pubkey && existsSync(ethosDir(handle))) {
     issueMandateWithRewrap({ handle, identity: id, mandate: m });
     rewroteManifest = true;
   }
 
   if (opts.json) {
-    console.log(JSON.stringify({ mandate: m, path, rewrapped: rewroteManifest }, null, 2));
+    console.log(
+      JSON.stringify(
+        { mandate: m, path, rewrapped: rewroteManifest, section_scope_deferred_to_v03: deferredForV03 },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
@@ -148,10 +176,22 @@ export function runGrant(opts: GrantOpts): void {
       console.log(`    require_counter_sign: ${m.constraints.require_counter_sign.join(", ")}`);
     }
   }
+  if (m.section_scope) {
+    const parts: string[] = [];
+    if (m.section_scope.ids) parts.push(`ids=[${m.section_scope.ids.join(", ")}]`);
+    if (m.section_scope.tags) parts.push(`tags=[${m.section_scope.tags.join(", ")}]`);
+    console.log(`  Section:    ${parts.join(" ")}`);
+  }
   console.log(`  Path:       ${path}`);
   if (rewroteManifest) {
     console.log(
       `  Rewrap:     bumped a new ethos edition with the delegate on every wrap list (gamma + encrypted zones).`,
+    );
+  }
+  if (deferredForV03) {
+    console.log(
+      `  Note:       section-scoped grant recorded; it takes effect under v0.3 (per-section wraps). ` +
+        `The v0.2 whole-zone rewrap was skipped to avoid over-granting.`,
     );
   }
 }

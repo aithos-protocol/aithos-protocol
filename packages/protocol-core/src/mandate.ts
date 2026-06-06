@@ -86,6 +86,30 @@ export interface MandateConstraints {
 }
 
 /**
+ * Narrows a mandate's `ethos.read/write.<zone>` scopes to a SUBSET of the
+ * zone's sections (companion draft `bundle-v0.3-section-level-mandates.md`).
+ * Absent ⇒ the whole zone (back-compat). A section matches iff its id is in
+ * `ids` OR it carries a tag in `tags`.
+ */
+export interface SectionScope {
+  ids?: string[];
+  tags?: string[];
+}
+
+/** True iff `section` matches `scope` (§4.7.1′). Absent scope ⇒ whole zone. */
+export function sectionMatchesScope(
+  section: { id: string; tags?: string[] },
+  scope?: SectionScope,
+): boolean {
+  if (!scope) return true;
+  if (scope.ids && scope.ids.includes(section.id)) return true;
+  if (scope.tags && section.tags && section.tags.some((t) => scope.tags!.includes(t))) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Mandate envelope versions understood by this library.
  *
  * `0.1.0` — pre-delegate-E2E format shipped in v0.1.x / v0.2.0.
@@ -129,6 +153,8 @@ export interface Mandate {
   actor_sphere: Sphere;
   scopes: string[];
   constraints?: MandateConstraints;
+  /** Narrows read/write scopes to a subset of the zone's sections (§4.7′). */
+  section_scope?: SectionScope;
   not_before: string;
   not_after: string;
   issued_at: string;
@@ -220,12 +246,32 @@ export interface CreateMandateArgs {
   scopes: string[];
   ttlSeconds: number;
   constraints?: MandateConstraints;
+  /** Narrow the read/write scopes to a subset of sections (§4.7′). */
+  sectionScope?: SectionScope;
   notBefore?: Date; // defaults to now
 }
 
 export function createMandate(args: CreateMandateArgs): Mandate {
   validateScopesAgainstSphere(args.scopes, args.actorSphere);
   validateComputeAuthorization(args.scopes, args.constraints);
+
+  // A section_scope only makes sense alongside an ethos read/write scope on the
+  // actor sphere, and must name at least one section (by id or tag).
+  if (args.sectionScope) {
+    const z = args.actorSphere;
+    const narrows = args.scopes.some(
+      (s) => s === `ethos.read.${z}` || s === `ethos.write.${z}` || s === "ethos.read.all",
+    );
+    if (!narrows) {
+      throw new Error(
+        `section_scope requires an ethos.read.${z} / ethos.write.${z} (or ethos.read.all) scope`,
+      );
+    }
+    const { ids, tags } = args.sectionScope;
+    if ((!ids || ids.length === 0) && (!tags || tags.length === 0)) {
+      throw new Error("section_scope must list at least one section id or tag");
+    }
+  }
 
   // Write mandates MUST bind to a specific delegate key (§4.5.4).
   if (hasWriteScope(args.scopes) && !args.grantee.pubkey) {
@@ -269,6 +315,7 @@ export function createMandate(args: CreateMandateArgs): Mandate {
     actor_sphere: args.actorSphere,
     scopes: args.scopes,
     ...(args.constraints ? { constraints: args.constraints } : {}),
+    ...(args.sectionScope ? { section_scope: args.sectionScope } : {}),
     not_before: now.toISOString(),
     not_after: notAfter.toISOString(),
     issued_at: new Date().toISOString(),

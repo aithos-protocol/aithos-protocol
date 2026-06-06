@@ -104,6 +104,8 @@ program
   .option("--domains <list>", "Comma-separated domain restriction (* for any)")
   .option("--rate-limit <pairs>", "Rate limits, e.g. replies_per_hour=20")
   .option("--counter-sign <list>", "Scopes that require subject counter-signature")
+  .option("--sections <ids>", "Section-scope: comma-separated section ids the grant is limited to (§4.7′)")
+  .option("--section-tags <tags>", "Section-scope: comma-separated tags; a section matches if it carries any")
   .option("--json", "Output JSON")
   .action((agent, opts) => wrap(() => runGrant({ agent, ...opts })));
 
