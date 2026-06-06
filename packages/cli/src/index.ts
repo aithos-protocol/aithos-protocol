@@ -42,6 +42,7 @@ import { runEthosList } from "./commands/ethos-list.js";
 import { runEthosVerify } from "./commands/ethos-verify.js";
 import { runEthosPack, runEthosUnpack } from "./commands/ethos-pack.js";
 import { runEthosInstall } from "./commands/ethos-install.js";
+import { runEthosMigrateToV03 } from "./commands/ethos-migrate.js";
 import { runGammaShow } from "./commands/gamma-show.js";
 import { runGammaVerify } from "./commands/gamma-verify.js";
 
@@ -312,6 +313,17 @@ ethos
   .requiredOption("--out <dir>", "Output directory")
   .option("--json", "Output JSON")
   .action((path, opts) => wrap(() => runEthosUnpack({ path, out: opts.out, json: opts.json })));
+
+ethos
+  .command("migrate-to-v0.3")
+  .description(
+    "Migrate this identity's v0.2 ethos into a v0.3 per-section bundle (written to --out). " +
+      "The keystore ethos stays v0.2 — v0.3 is opt-in until the format default flips.",
+  )
+  .option("--handle <h>", "Identity handle (defaults to the configured default)")
+  .option("--out <dir>", "Output directory for the v0.3 bundle (default: cwd/<handle>-<version>-v0.3)")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosMigrateToV03(opts)));
 
 ethos
   .command("install")
