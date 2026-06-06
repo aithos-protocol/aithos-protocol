@@ -112,13 +112,38 @@ export interface SectionCipher {
   wraps: ZoneWrap[];
 }
 
+/** The plaintext sealed inside a section's {@link TitleCipher}. */
+export interface SectionTitle {
+  title: string;
+  tags?: string[];
+}
+
+/**
+ * A section's title+tags, sealed to that SECTION's recipients (§3.3.2′ revised).
+ * For an encrypted-index zone (self), each section carries its own
+ * `title_cipher` instead of the zone carrying one global index blob. Plaintext
+ * is `jcs({ title, tags? })`; AAD = `"aithos-title-v1\0" ‖ subject_did ‖ "\0" ‖
+ * section_id`. Because it is sealed to the same recipients as the section body,
+ * whoever can read the body can read the title — and a section-scoped delegate
+ * sees only its own sections' titles, never the others'.
+ */
+export interface TitleCipher {
+  alg: "xchacha20poly1305-ietf";
+  /** base64url, 24 bytes. */
+  nonce: string;
+  /** Per-recipient wraps (X25519-HKDF-SHA256-AEAD) — same recipient set as the body. */
+  wraps: ZoneWrap[];
+  /** base64url XChaCha20-Poly1305 ciphertext of `jcs({ title, tags? })`. */
+  ct: string;
+}
+
 /** One section's manifest descriptor (§3.3.2′). */
 export interface SectionDescriptor {
   section_id: string;
   /**
    * Section title in clear. Present for zones with a CLEAR index (public,
    * circle). MUST be absent when the zone's index is encrypted (self), where
-   * the title lives only inside {@link BundleZoneV2.index_cipher}.
+   * the title lives in {@link title_cipher} instead.
    */
   title?: string;
   /** `<zone>/<section_id>.md` (public) or `<zone>/<section_id>.enc` (encrypted). */
@@ -130,31 +155,8 @@ export interface SectionDescriptor {
   gamma_ref: string;
   /** Clear tags. Like {@link title}, MUST be absent when the zone index is encrypted. */
   tags?: string[];
-}
-
-/** One entry of a zone's section index (the sensitive per-section metadata). */
-export interface IndexEntry {
-  section_id: string;
-  title: string;
-  tags?: string[];
-}
-
-/**
- * Encrypted index blob for a zone whose index is private (self). Its plaintext
- * is `jcs(IndexEntry[])` — the per-section titles/tags — sealed to the zone's
- * recipients (the subject `#self-kex`). The structural fields (`section_id`,
- * `file`, `sha256_of_plaintext`, `cipher`, `gamma_ref`) stay in clear in
- * `sections[]` so a keyless host can still verify integrity; only the titles
- * are hidden.
- */
-export interface IndexCipher {
-  alg: "xchacha20poly1305-ietf";
-  /** base64url, 24 bytes. */
-  nonce: string;
-  /** Per-recipient DEK wraps (X25519-HKDF-SHA256-AEAD). */
-  wraps: ZoneWrap[];
-  /** base64url XChaCha20-Poly1305 ciphertext of `jcs(IndexEntry[])`. */
-  ct: string;
+  /** Encrypted title+tags. REQUIRED iff the zone's index is encrypted; absent otherwise. */
+  title_cipher?: TitleCipher;
 }
 
 /** A zone in the v0.3 per-section schema. Shared shape for all three zones. */
@@ -163,17 +165,15 @@ export interface BundleZoneV2 {
   /** `false` for public, `true` for circle/self. Fixed per zone identity. */
   encrypted: boolean;
   /**
-   * `true` when the section index (titles/tags) is encrypted into
-   * {@link index_cipher} rather than carried in clear on each section. Fixed per
-   * zone identity: `self` → true, `public`/`circle` → absent/false. This is the
-   * circle-clear / self-private compromise — the host sees circle titles but
-   * never self titles.
+   * `true` when each section's title/tags are encrypted into its own
+   * `title_cipher` rather than carried in clear. Fixed per zone identity:
+   * `self` → true, `public`/`circle` → absent/false. This is the circle-clear /
+   * self-private compromise — the host sees circle titles but never self titles,
+   * and a section-scoped delegate sees only the titles of sections it can read.
    */
   index_encrypted?: boolean;
   /** Ordered list of section descriptors (canonical display order). MAY be []. */
   sections: SectionDescriptor[];
-  /** Present iff `index_encrypted` and the zone has ≥1 section. */
-  index_cipher?: IndexCipher;
 }
 
 /**
@@ -323,78 +323,80 @@ export function decryptSection(
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Encrypted zone index (self) — titles sealed to the subject                */
+/*  Per-section encrypted title (self) — sealed to the section's recipients    */
 /* -------------------------------------------------------------------------- */
 
 // Literal label prefix INCLUDING the trailing NUL after "v1".
-const INDEX_AAD_PREFIX = new TextEncoder().encode("aithos-index-v1\0");
+const TITLE_AAD_PREFIX = new TextEncoder().encode("aithos-title-v1\0");
 
 /**
- * AEAD additional data for a zone index:
- *   "aithos-index-v1\0" ‖ utf8(subject_did) ‖ "\0" ‖ utf8(zone)
- * Binds the index blob to the subject and the zone (resists cross-subject /
- * cross-zone replay).
+ * AEAD additional data for a section title:
+ *   "aithos-title-v1\0" ‖ utf8(subject_did) ‖ "\0" ‖ utf8(section_id)
+ * Binds the title to the subject and the specific section (resists cross-subject
+ * and cross-section replay; distinct prefix from the body AAD).
  */
-export function indexAad(subjectDid: string, zone: Sphere): Uint8Array {
+export function titleAad(subjectDid: string, sectionId: string): Uint8Array {
   const enc = new TextEncoder();
-  return concatBytes(INDEX_AAD_PREFIX, enc.encode(subjectDid), NUL, enc.encode(zone));
+  return concatBytes(TITLE_AAD_PREFIX, enc.encode(subjectDid), NUL, enc.encode(sectionId));
 }
 
-/** Encrypt a zone's section index (titles/tags) under a fresh DEK sealed to `recipients`. */
-export function encryptZoneIndex(
-  entries: IndexEntry[],
+/** Seal a section's title/tags to `recipients` (the same set as the section body). */
+export function encryptSectionTitle(
+  meta: SectionTitle,
   subjectDid: string,
-  zone: Sphere,
+  sectionId: string,
   recipients: SectionRecipient[],
-): IndexCipher {
+): TitleCipher {
   const dek = new Uint8Array(randomBytes(32));
   const nonce = new Uint8Array(randomBytes(24));
-  const aad = indexAad(subjectDid, zone);
+  const aad = titleAad(subjectDid, sectionId);
   const aead = new XChaCha20Poly1305(dek);
-  const ct = aead.seal(nonce, new TextEncoder().encode(canonicalize(entries)), aad);
+  const ct = aead.seal(nonce, new TextEncoder().encode(canonicalize(meta)), aad);
   const wraps = recipients.map((r) => wrapDek(dek, r.did, r.x25519PublicKey));
   dek.fill(0);
   return { alg: "xchacha20poly1305-ietf", nonce: base64url(nonce), wraps, ct: base64url(ct) };
 }
 
-/** Decrypt a zone's encrypted index back to its {@link IndexEntry} list. Throws on no-wrap / tamper. */
-export function decryptZoneIndex(
-  index: IndexCipher,
+/** Decrypt a section's {@link TitleCipher}. Throws on no-wrap / tamper. */
+export function decryptSectionTitle(
+  title: TitleCipher,
   subjectDid: string,
-  zone: Sphere,
+  sectionId: string,
   reader: SectionReader,
-): IndexEntry[] {
-  const wrap = index.wraps.find((w) => w.recipient === reader.didUrl);
-  if (!wrap) throw new Error(`No index wrap for ${reader.didUrl} on zone ${zone}`);
+): SectionTitle {
+  const wrap = title.wraps.find((w) => w.recipient === reader.didUrl);
+  if (!wrap) throw new Error(`No title wrap for ${reader.didUrl} on section ${sectionId}`);
   const dek = unwrapDek(wrap, reader.x25519Secret);
   try {
-    const aad = indexAad(subjectDid, zone);
+    const aad = titleAad(subjectDid, sectionId);
     const aead = new XChaCha20Poly1305(dek);
-    const pt = aead.open(base64urlDecode(index.nonce), base64urlDecode(index.ct), aad);
-    if (!pt) throw new Error("zone index authentication failed");
-    return JSON.parse(new TextDecoder().decode(pt)) as IndexEntry[];
+    const pt = aead.open(base64urlDecode(title.nonce), base64urlDecode(title.ct), aad);
+    if (!pt) throw new Error("section title authentication failed");
+    return JSON.parse(new TextDecoder().decode(pt)) as SectionTitle;
   } finally {
     dek.fill(0);
   }
 }
 
-/** A resolved index row for display: `title` is undefined when the index is encrypted and no key was supplied. */
+/** A resolved index row for display: `title` is undefined when encrypted and no key was supplied. */
 export interface ZoneIndexRow {
   section_id: string;
   title?: string;
   tags?: string[];
-  /** True when the title is hidden (encrypted index, no/failed key). */
+  /** True when the title is hidden (encrypted, no/failed key for this section). */
   title_hidden: boolean;
 }
 
 /**
  * Resolve a zone's section index for display. Clear-index zones (public,
- * circle) return titles directly from the descriptors. For the encrypted
- * (self) index, titles are filled in from the decrypted `index_cipher` when a
- * matching `reader` is supplied; otherwise rows come back with `title_hidden`.
+ * circle) return titles directly from the descriptors. For the encrypted (self)
+ * index, each section's title is decrypted from its own `title_cipher` when the
+ * `reader` is one of that section's recipients — so a section-scoped delegate
+ * sees the titles of exactly the sections it can read, the host sees none, and
+ * the subject sees all.
  */
 export function readZoneIndex(
-  zoneName: Sphere,
+  _zoneName: Sphere,
   zone: BundleZoneV2,
   subjectDid: string,
   reader?: SectionReader,
@@ -407,24 +409,22 @@ export function readZoneIndex(
       title_hidden: false,
     }));
   }
-  if (reader && zone.index_cipher) {
-    try {
-      const entries = decryptZoneIndex(zone.index_cipher, subjectDid, zoneName, reader);
-      const byId = new Map(entries.map((e) => [e.section_id, e]));
-      return zone.sections.map((s) => {
-        const e = byId.get(s.section_id);
+  return zone.sections.map((s) => {
+    if (reader && s.title_cipher) {
+      try {
+        const meta = decryptSectionTitle(s.title_cipher, subjectDid, s.section_id, reader);
         return {
           section_id: s.section_id,
-          ...(e ? { title: e.title } : {}),
-          ...(e?.tags ? { tags: e.tags } : {}),
-          title_hidden: !e,
+          title: meta.title,
+          ...(meta.tags ? { tags: meta.tags } : {}),
+          title_hidden: false,
         };
-      });
-    } catch {
-      /* fall through to hidden */
+      } catch {
+        /* not a recipient of this section → hidden */
+      }
     }
-  }
-  return zone.sections.map((s) => ({ section_id: s.section_id, title_hidden: true }));
+    return { section_id: s.section_id, title_hidden: true };
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -487,15 +487,19 @@ export interface SectionWriteCtx {
   zone: Sphere;
   /** Gates the AEAD layer: false → plaintext .md, true → .enc ciphertext. */
   encrypted: boolean;
+  /** When true, the title/tags are sealed into `title_cipher` instead of clear (self). */
+  indexEncrypted: boolean;
   subjectDid: string;
-  /** Recipients for the per-section DEK (encrypted zones only). */
+  /** Recipients for the per-section DEK + title (encrypted zones only). */
   recipients: SectionRecipient[];
 }
 
 /**
  * Write one section's blob into the bundle and return its manifest descriptor.
  * Public → the markdown file is written directly; circle/self → the markdown is
- * encrypted with a fresh per-section DEK (§3.4.1′ / §3.4.5′).
+ * encrypted with a fresh per-section DEK (§3.4.1′ / §3.4.5′). When the zone's
+ * index is encrypted (self), the title/tags are sealed into a per-section
+ * `title_cipher` (sealed to the same recipients) instead of left clear.
  */
 export function writeSection(ctx: SectionWriteCtx, section: Section): SectionDescriptor {
   const plaintext = renderSectionMarkdown(section);
@@ -505,28 +509,32 @@ export function writeSection(ctx: SectionWriteCtx, section: Section): SectionDes
   ensureDir(join(ctx.bundleDir, ctx.zone));
   const abs = join(ctx.bundleDir, file);
 
-  const base: SectionDescriptor = {
+  const desc: SectionDescriptor = {
     section_id: section.id,
-    title: section.title,
     file,
     sha256_of_plaintext: sha,
     gamma_ref: section.gamma_ref,
-    ...(section.tags && section.tags.length > 0 ? { tags: section.tags } : {}),
   };
+  if (ctx.indexEncrypted) {
+    desc.title_cipher = encryptSectionTitle(
+      { title: section.title, ...(section.tags && section.tags.length > 0 ? { tags: section.tags } : {}) },
+      ctx.subjectDid,
+      section.id,
+      ctx.recipients,
+    );
+  } else {
+    desc.title = section.title;
+    if (section.tags && section.tags.length > 0) desc.tags = section.tags;
+  }
 
   if (!ctx.encrypted) {
     writeFileSync(abs, plaintext, { mode: 0o600 });
-    return base;
+    return desc;
   }
 
-  const { ciphertext, cipher } = encryptSection(
-    plaintext,
-    ctx.subjectDid,
-    section.id,
-    ctx.recipients,
-  );
+  const { ciphertext, cipher } = encryptSection(plaintext, ctx.subjectDid, section.id, ctx.recipients);
   writeFileSync(abs, ciphertext, { mode: 0o600 });
-  return { ...base, cipher };
+  return { ...desc, cipher };
 }
 
 export interface SectionReadResult {
@@ -766,13 +774,14 @@ export function defaultZoneRecipients(
 }
 
 /**
- * Resolve the recipient policy for a zone: a per-section recipient function and
- * the index-cipher recipient list (§3.5.4′ / §3.5.5′).
+ * Resolve the PER-SECTION recipient function for an encrypted zone (§3.5.4′).
+ * The returned function seals both the section body and its `title_cipher`.
  *
  *   - Public / unencrypted → no recipients.
- *   - Explicit `recipientsFor` override → used verbatim for every section + index.
+ *   - Explicit `recipientsFor` override → used verbatim for every section.
  *   - Owner author → subject sphere + delegates whose `section_scope` matches the
- *     section; the index is sealed to the subject + WHOLE-zone delegates only.
+ *     section (a section-scoped delegate is a recipient of — and sees the title
+ *     of — exactly its matching sections).
  *   - Delegate author → zone-level (owner + the delegate itself), as §3.5.2′.
  */
 function resolveZoneRecipients(
@@ -781,13 +790,13 @@ function resolveZoneRecipients(
   subjectDid: string,
   encrypted: boolean,
   recipientsFor: ((zone: "circle" | "self") => SectionRecipient[]) | undefined,
-): { forSection: (s: Section) => SectionRecipient[]; forIndex: SectionRecipient[] } {
-  if (!encrypted) return { forSection: () => [], forIndex: [] };
+): (s: Section) => SectionRecipient[] {
+  if (!encrypted) return () => [];
 
   const z = zone as "circle" | "self";
   if (recipientsFor) {
     const fixed = recipientsFor(z);
-    return { forSection: () => fixed, forIndex: fixed };
+    return () => fixed;
   }
 
   if (author.kind === "owner") {
@@ -798,21 +807,17 @@ function resolveZoneRecipients(
       did: g.did,
       x25519PublicKey: g.x25519PublicKey,
     });
-    return {
-      forSection: (s) => [
-        subjectRec,
-        ...grants
-          .filter((g) => sectionMatchesScope({ id: s.id, tags: s.tags }, g.sectionScope))
-          .map(asRec),
-      ],
-      // Index recipients: subject + whole-zone delegates only (no section_scope).
-      forIndex: [subjectRec, ...grants.filter((g) => !g.sectionScope).map(asRec)],
-    };
+    return (s) => [
+      subjectRec,
+      ...grants
+        .filter((g) => sectionMatchesScope({ id: s.id, tags: s.tags }, g.sectionScope))
+        .map(asRec),
+    ];
   }
 
   // Delegate author: zone-level recipients (owner + this delegate).
   const r = authorZoneWriteRecipients(author, z, subjectDid);
-  return { forSection: () => r, forIndex: r };
+  return () => r;
 }
 
 export interface AuthorBundleV03Args {
@@ -941,16 +946,13 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
     if (encrypted) assertCanWrite(author, zone, now); // no-op for owner
 
     // Recipients are resolved PER SECTION (§3.5.4′): the subject always, plus
-    // each delegate whose mandate's section_scope matches that section. The
-    // encrypted self index is sealed only to the subject + WHOLE-zone delegates
-    // (§3.5.5′) — a section-scoped delegate must not learn every self title.
-    const { forSection: recipientsForSection, forIndex: indexRecipients } =
-      resolveZoneRecipients(author, zone, subjectDid, encrypted, args.recipientsFor);
-
+    // each delegate whose mandate's section_scope matches that section. The same
+    // set seals the section's body AND its title_cipher, so a section-scoped
+    // delegate sees only the titles of the sections it can read (§3.5.5′).
+    const recipientsForSection = resolveZoneRecipients(author, zone, subjectDid, encrypted, args.recipientsFor);
     const indexEncrypted = ZONE_INDEX_ENCRYPTED[zone];
     const prevZone = args.prev?.manifest.zones[zone];
     const descriptors: SectionDescriptor[] = [];
-    const indexEntries: IndexEntry[] = [];
 
     for (const section of args.zones[zone] ?? []) {
       const recipients = recipientsForSection(section);
@@ -966,41 +968,25 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
         (!encrypted || recipientLabelsEqual(prevDesc.cipher?.wraps ?? [], recipients)) &&
         existsSync(join(args.prev.dir, prevDesc.file));
 
-      let desc: SectionDescriptor;
       if (canCarry && args.prev && prevDesc) {
         // Copy the prior blob verbatim → byte-identical ciphertext across
-        // editions; reuse the prior descriptor (same file/nonce/wraps).
+        // editions; reuse the prior descriptor (same file/nonce/wraps/title_cipher).
         ensureDir(join(outDir, zone)); // §3.2.2′: only create the subdir when non-empty
         copyFileSync(join(args.prev.dir, prevDesc.file), join(outDir, prevDesc.file));
-        desc = prevDesc;
+        descriptors.push(prevDesc);
       } else {
-        desc = writeSection({ bundleDir: outDir, zone, encrypted, subjectDid, recipients }, section);
-      }
-
-      if (indexEncrypted) {
-        // Move title/tags out of the clear descriptor into the encrypted index.
-        const { title: _t, tags: _g, ...structural } = desc;
-        void _t;
-        void _g;
-        descriptors.push(structural);
-        indexEntries.push({
-          section_id: section.id,
-          title: section.title,
-          ...(section.tags && section.tags.length > 0 ? { tags: section.tags } : {}),
-        });
-      } else {
-        descriptors.push(desc);
+        descriptors.push(
+          writeSection({ bundleDir: outDir, zone, encrypted, indexEncrypted, subjectDid, recipients }, section),
+        );
       }
     }
 
-    const zoneEntry: BundleZoneV2 = { format_version: "v2", encrypted, sections: descriptors };
-    if (indexEncrypted) {
-      zoneEntry.index_encrypted = true;
-      if (indexEntries.length > 0) {
-        zoneEntry.index_cipher = encryptZoneIndex(indexEntries, subjectDid, zone, indexRecipients);
-      }
-    }
-    zoneEntries[zone] = zoneEntry;
+    zoneEntries[zone] = {
+      format_version: "v2",
+      encrypted,
+      ...(indexEncrypted ? { index_encrypted: true } : {}),
+      sections: descriptors,
+    };
   }
 
   // did.json: copy the subject's signed DID document verbatim and hash its bytes.
@@ -1027,6 +1013,132 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
   writeFileSync(join(outDir, "manifest.json"), JSON.stringify(signed, null, 2) + "\n", {
     mode: 0o600,
   });
+  return signed;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  patchEditionV03 — incremental edit without re-reading siblings           */
+/* -------------------------------------------------------------------------- */
+
+/** Per-zone patch: sections to add/replace, and section ids to delete. */
+export interface ZonePatch {
+  upserts?: Section[];
+  deletes?: string[];
+}
+
+export interface PatchEditionV03Args {
+  identity?: Identity;
+  author?: Author;
+  /** Bundle dir to write the new edition into. */
+  outDir: string;
+  /** Predecessor v0.3 edition (its blobs are the carry-forward source). */
+  prev: { manifest: ManifestV03; dir: string };
+  /** What changes, per zone. Zones absent from the patch carry forward unchanged. */
+  patch: Partial<Record<Sphere, ZonePatch>>;
+  now?: Date;
+}
+
+/**
+ * Author a new edition by PATCHING the predecessor: changed/added sections are
+ * (re)encrypted; every other section carries forward VERBATIM (blob + descriptor
+ * + title_cipher) WITHOUT being decrypted. This is what lets a section-scoped
+ * delegate add/edit/delete its own sections (it only reads the section it is
+ * changing — never its siblings), and makes owner edits cheap (no whole-zone
+ * decrypt). Because each self title lives in its own `title_cipher`, adding a
+ * section just seals its title to the section's recipients — no global index to
+ * rebuild.
+ */
+export function patchEditionV03(args: PatchEditionV03Args): ManifestV03 {
+  if (!args.author && !args.identity) {
+    throw new Error("patchEditionV03: provide either `identity` or `author`");
+  }
+  const author = args.author ?? ownerAuthor(args.identity!);
+  const now = args.now ?? new Date();
+  const createdAt = now.toISOString();
+  const handle = authorHandle(author);
+  const subjectDid = authorSubjectDid(author);
+  const displayName =
+    author.kind === "owner" ? author.identity.displayName : author.subject.displayName;
+  const prev = args.prev.manifest;
+
+  const editionVersion = allocEditionVersion(now, prev.edition.version);
+  const bundleId = `urn:aithos:${handle}:${editionVersion}`;
+
+  ensureDir(args.outDir);
+  const copyBlob = (zone: Sphere, file: string) => {
+    ensureDir(join(args.outDir, zone));
+    copyFileSync(join(args.prev.dir, file), join(args.outDir, file));
+  };
+
+  const zoneEntries: Partial<Record<Sphere, BundleZoneV2>> = {};
+  for (const zone of SPHERE_FRAGMENTS) {
+    const prevZone = prev.zones[zone];
+    const zp = args.patch[zone];
+    const shouldAuthor = author.kind === "owner" || author.mandate.actor_sphere === zone;
+    const hasChanges = !!zp && ((zp.upserts?.length ?? 0) > 0 || (zp.deletes?.length ?? 0) > 0);
+
+    if (!shouldAuthor || !hasChanges) {
+      // Carry the whole zone forward verbatim.
+      for (const d of prevZone.sections) copyBlob(zone, d.file);
+      zoneEntries[zone] = prevZone;
+      continue;
+    }
+
+    const encrypted = zone !== "public";
+    if (encrypted) assertCanWrite(author, zone, now);
+    const indexEncrypted = ZONE_INDEX_ENCRYPTED[zone];
+    const recipientsForSection = resolveZoneRecipients(author, zone, subjectDid, encrypted, undefined);
+    const writeOne = (s: Section): SectionDescriptor =>
+      writeSection(
+        { bundleDir: args.outDir, zone, encrypted, indexEncrypted, subjectDid, recipients: recipientsForSection(s) },
+        s,
+      );
+
+    const delSet = new Set(zp!.deletes ?? []);
+    const upserts = new Map((zp!.upserts ?? []).map((s) => [s.id, s]));
+    const descriptors: SectionDescriptor[] = [];
+
+    for (const prevDesc of prevZone.sections) {
+      if (delSet.has(prevDesc.section_id)) continue; // deleted
+      const up = upserts.get(prevDesc.section_id);
+      if (up) {
+        descriptors.push(writeOne(up)); // modified
+        upserts.delete(prevDesc.section_id);
+      } else {
+        copyBlob(zone, prevDesc.file); // carried forward verbatim
+        descriptors.push(prevDesc);
+      }
+    }
+    // Brand-new sections (upserts with no prior descriptor), in insertion order.
+    for (const s of zp!.upserts ?? []) {
+      if (upserts.has(s.id)) descriptors.push(writeOne(s));
+    }
+
+    zoneEntries[zone] = {
+      format_version: "v2",
+      encrypted,
+      ...(indexEncrypted ? { index_encrypted: true } : {}),
+      sections: descriptors,
+    };
+  }
+
+  const didContent = readFileSync(join(identityDir(handle), "did.json"), "utf8");
+  writeFileSync(join(args.outDir, "did.json"), didContent, { mode: 0o644 });
+  const unsigned = buildManifestV2({
+    subjectDid,
+    handle,
+    displayName,
+    bundleId,
+    editionVersion,
+    createdAt,
+    supersedes: prev.bundle_id,
+    prevHash: "sha256:" + canonicalManifestHashHexV03(prev),
+    height: prev.edition.height + 1,
+    zones: zoneEntries as Record<Sphere, BundleZoneV2>,
+    sha256OfDidJson: sha256hex(new TextEncoder().encode(didContent)),
+  });
+  const signed = signManifestV03(author, unsigned);
+  writeFileSync(join(args.outDir, "manifest.json"), JSON.stringify(signed, null, 2) + "\n", { mode: 0o600 });
   return signed;
 }
 
@@ -1169,17 +1281,10 @@ export function verifyBundleV03Dir(
       errors.push(`zone ${zone}: sections must be an array`);
       continue;
     }
-    // Index-privacy policy: fixed by zone identity (self → encrypted index).
+    // Index-privacy policy: fixed by zone identity (self → encrypted per-section titles).
     const indexEncrypted = ZONE_INDEX_ENCRYPTED[zone];
     if (!!zm.index_encrypted !== indexEncrypted) {
       errors.push(`zone ${zone}: index_encrypted must be ${indexEncrypted} (index policy)`);
-    }
-    if (indexEncrypted) {
-      if (zm.sections.length > 0 && !zm.index_cipher) {
-        errors.push(`zone ${zone}: index_encrypted but no index_cipher for ${zm.sections.length} section(s)`);
-      }
-    } else if (zm.index_cipher) {
-      errors.push(`zone ${zone}: index_cipher present on a clear-index zone`);
     }
     const ext = mustEncrypt ? "enc" : "md";
     const badExt = mustEncrypt ? "md" : "enc";
@@ -1197,15 +1302,23 @@ export function verifyBundleV03Dir(
         );
       }
       if (indexEncrypted) {
-        // Titles/tags live only in the encrypted index — clear copies are forbidden.
+        // Titles/tags live only in the per-section title_cipher — clear copies forbidden.
         if (sec.title !== undefined) {
           errors.push(`zone ${zone} section ${sec.section_id}: clear title forbidden on an encrypted-index zone`);
         }
         if (sec.tags !== undefined) {
           errors.push(`zone ${zone} section ${sec.section_id}: clear tags forbidden on an encrypted-index zone`);
         }
-      } else if (typeof sec.title !== "string" || sec.title.length === 0) {
-        errors.push(`zone ${zone} section ${sec.section_id}: missing title`);
+        if (!sec.title_cipher) {
+          errors.push(`zone ${zone} section ${sec.section_id}: missing title_cipher on an encrypted-index zone`);
+        }
+      } else {
+        if (typeof sec.title !== "string" || sec.title.length === 0) {
+          errors.push(`zone ${zone} section ${sec.section_id}: missing title`);
+        }
+        if (sec.title_cipher) {
+          errors.push(`zone ${zone} section ${sec.section_id}: title_cipher present on a clear-index zone`);
+        }
       }
       if (typeof sec.sha256_of_plaintext !== "string" || sec.sha256_of_plaintext.length === 0) {
         errors.push(`zone ${zone} section ${sec.section_id}: missing sha256_of_plaintext`);
@@ -1299,26 +1412,19 @@ export function verifyBundleV03Dir(
       );
     }
 
-    // Encrypted-index integrity: with the key, the decrypted index MUST cover
-    // exactly the section_ids listed in clear. Without the key, the index blob
-    // is opaque-but-attested (committed by the manifest signature).
-    if (indexEncrypted && zm.index_cipher) {
-      const idxReader = findReader(opts.readers, zm.index_cipher);
-      if (idxReader) {
+    // Per-section title integrity: where we hold the key, the title_cipher MUST
+    // open (AEAD-authenticated). Sections we can't read leave their title opaque-
+    // but-attested (committed by the manifest signature).
+    if (indexEncrypted) {
+      for (const sec of zm.sections) {
+        if (!sec.title_cipher) continue;
+        const tr = findReader(opts.readers, sec.title_cipher);
+        if (!tr) continue;
         try {
-          const entries = decryptZoneIndex(zm.index_cipher, manifest.subject_did, zone, idxReader);
-          const idxIds = new Set(entries.map((e) => e.section_id));
-          const secIds = zm.sections.map((s) => s.section_id);
-          const mismatch =
-            idxIds.size !== secIds.length || secIds.some((id) => !idxIds.has(id));
-          if (mismatch) {
-            errors.push(`zone ${zone}: encrypted index does not match the clear section list`);
-          }
+          decryptSectionTitle(sec.title_cipher, manifest.subject_did, sec.section_id, tr);
         } catch (e) {
-          errors.push(`zone ${zone}: index decrypt failed (${(e as Error).message})`);
+          errors.push(`zone ${zone} section ${sec.section_id}: title decrypt failed (${(e as Error).message})`);
         }
-      } else if (opts.readers && opts.readers.length > 0) {
-        warnings.push(`zone ${zone}: encrypted index not decrypted (no matching reader key)`);
       }
     }
   }

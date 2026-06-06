@@ -106,9 +106,14 @@ describe("section-level mandates (lot 3)", () => {
     const noPriv = core.readSection(dir, m.zones.self, m.zones.self.sections[1], subjectDid, del.reader);
     assert.ok(!noPriv.accessible, "private section opaque to the section-scoped delegate");
 
-    // M3 — the delegate cannot decrypt the self index (not an index recipient).
+    // M3 — per-section titles: the delegate sees the title of the section it can
+    // read (gmail), but NOT the private section's title.
     const delIdx = core.readZoneIndex("self", m.zones.self, subjectDid, del.reader);
-    assert.deepEqual(delIdx.map((r) => r.title_hidden), [true, true], "delegate sees no self titles");
+    const byId = new Map(delIdx.map((r) => [r.section_id, r]));
+    assert.equal(byId.get("sec_gm1")!.title, "Inbox summary", "delegate sees its own section's title");
+    assert.equal(byId.get("sec_gm1")!.title_hidden, false);
+    assert.equal(byId.get("sec_priv")!.title_hidden, true, "delegate does NOT see the private title");
+    assert.equal(byId.get("sec_priv")!.title, undefined);
 
     // The subject still reads everything + the index.
     const subIdx = core.readZoneIndex("self", m.zones.self, subjectDid, ownerReader(owner, "self"));
@@ -209,5 +214,82 @@ describe("section-level mandates (lot 3)", () => {
     // ...and verifies (the field is covered by the signature).
     const didDoc = core.loadIdentityMetadata("ss_val").didDocument;
     assert.ok(core.verifyMandate(m, didDoc).ok);
+  });
+
+  test("M7 — a section-scoped delegate ADDS a self section (capture-agent case)", () => {
+    const owner = makeIdentity("ss_add");
+    const subjectDid = core.rootDid(owner);
+
+    // Delegate with write+read on self, scoped to the `gmail` tag.
+    const kp = core.generateKeyPair();
+    const mb = core.ed25519PublicKeyToMultibase(kp.publicKey);
+    const mandate = core.createMandate({
+      issuer: owner,
+      actorSphere: "self",
+      grantee: { id: "agent:gmail", pubkey: mb },
+      scopes: ["ethos.read.self", "ethos.write.self"],
+      sectionScope: { tags: ["gmail"] },
+      ttlSeconds: 3600,
+    });
+    core.writeMandate(mandate);
+    const da = core.delegateAuthor({
+      subject: core.loadIdentityMetadata("ss_add"),
+      seed: kp.seed,
+      pubkeyMultibase: mb,
+      mandate,
+    });
+
+    // Owner authors a self with a PRIVATE section the delegate must never touch.
+    const dir1 = outDir();
+    const m1 = core.authorBundleV03({
+      identity: owner,
+      outDir: dir1,
+      zones: { public: [], circle: [], self: [sec("sec_priv", "Journal", "secret", 1)] },
+    });
+
+    // The delegate APPENDS a new gmail section — reads nothing, just adds.
+    const dir2 = outDir();
+    const m2 = core.editSectionV03({
+      author: da,
+      bundleDir: dir1,
+      outDir: dir2,
+      zone: "self",
+      sectionId: "sec_mail1",
+      change: { title: "New mail", body: "From Bob.", tags: ["gmail"] },
+    });
+
+    // Delegate-signed; the private section carried forward byte-identical (untouched).
+    assert.equal(m2.integrity.manifest_signature.authorized_by, mandate.id);
+    assert.equal(
+      Buffer.compare(
+        readFileSync(join(dir1, "self", "sec_priv.enc")),
+        readFileSync(join(dir2, "self", "sec_priv.enc")),
+      ),
+      0,
+      "private section never re-encrypted by the delegate",
+    );
+
+    // The new section is sealed to subject + delegate (its title_cipher too).
+    const added = m2.zones.self.sections.find((s) => s.section_id === "sec_mail1")!;
+    assert.equal(added.cipher!.wraps.length, 2);
+    assert.ok(added.title_cipher && added.title_cipher.wraps.length === 2);
+
+    // The SUBJECT reads the new section's title + body (it is a recipient).
+    const ownerRd = ownerReader(owner, "self");
+    const ownerIdx = core.readZoneIndex("self", m2.zones.self, subjectDid, ownerRd);
+    const ownerById = new Map(ownerIdx.map((r) => [r.section_id, r]));
+    assert.equal(ownerById.get("sec_mail1")!.title, "New mail");
+    assert.equal(ownerById.get("sec_priv")!.title, "Journal", "subject still reads its private title");
+    const ownerBody = core.readSection(dir2, m2.zones.self, added, subjectDid, ownerRd);
+    assert.equal(ownerBody.section!.body, "From Bob.");
+
+    // The delegate reads its own new section's title, but NOT the private one.
+    const delRd = { didUrl: core.delegateWrapDid("agent:gmail", mb), x25519Secret: core.edSeedToX25519Secret(kp.seed) };
+    const delIdx = core.readZoneIndex("self", m2.zones.self, subjectDid, delRd);
+    const delById = new Map(delIdx.map((r) => [r.section_id, r]));
+    assert.equal(delById.get("sec_mail1")!.title, "New mail");
+    assert.equal(delById.get("sec_priv")!.title_hidden, true, "delegate never learns the private title");
+
+    void m1;
   });
 });

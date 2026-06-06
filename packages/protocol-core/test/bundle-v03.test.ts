@@ -574,14 +574,14 @@ describe("v0.3 per-section bundle (§3.12′)", () => {
 
     // circle: clear index — title visible, no index_cipher.
     assert.ok(!m.zones.circle.index_encrypted);
-    assert.equal(m.zones.circle.index_cipher, undefined);
+    assert.equal(m.zones.circle.sections[0].title_cipher, undefined);
     assert.equal(m.zones.circle.sections[0].title, "Day rate");
 
-    // self: encrypted index — no clear titles, index_cipher present, structural fields intact.
+    // self: encrypted per-section titles — no clear titles, each has a title_cipher.
     assert.equal(m.zones.self.index_encrypted, true);
-    assert.ok(m.zones.self.index_cipher && m.zones.self.index_cipher.ct.length > 0);
     for (const s of m.zones.self.sections) {
       assert.equal(s.title, undefined, "self section carries no clear title");
+      assert.ok(s.title_cipher && s.title_cipher.ct.length > 0, "self section carries a title_cipher");
       assert.ok(s.section_id && s.file && s.cipher && s.sha256_of_plaintext, "structural fields stay clear");
     }
 

@@ -2,21 +2,16 @@
 // Copyright 2026 Mathieu Colla
 
 /**
- * Targeted section editing on a v0.3 bundle (lot 4a).
+ * Targeted section editing on a v0.3 bundle (lot 4a / lot b).
  *
  * `editSectionV03` / `deleteSectionV03` produce a NEW edition of a v0.3 bundle
- * with a single section upserted or removed, carrying everything else forward
- * (the per-section carry-forward of §3.5.3′ re-encrypts only the touched
- * section). They are the reusable primitive behind `aithos ethos write` /
- * `aithos ethos rm` and the future keystore-native v0.3 mutation commands.
- *
- * Author model:
- *   - Owner → reads + re-authors all three zones (it holds every key).
- *   - Delegate → re-authors only its mandate's `actor_sphere`; the other zones
- *     are carried forward WHOLESALE by `authorBundleV03` (§3.8′ #5). A delegate
- *     must be able to read every section of the zone it authors (whole-zone
- *     read), since re-authoring re-renders the full zone — a section-scoped
- *     delegate that cannot read a sibling section will fail loudly here.
+ * with a single section upserted or removed, via {@link patchEditionV03}: only
+ * the touched section is (re)encrypted; every sibling carries forward verbatim
+ * WITHOUT being decrypted. To MODIFY, only the target section is read; to ADD or
+ * DELETE, nothing is read. This is what lets a section-scoped delegate manage
+ * its OWN self sections (add/edit/delete) — each self title lives in its own
+ * `title_cipher`, so adding a section just seals its title to that section's
+ * recipients, with no global index to rebuild.
  */
 
 import { readFileSync } from "node:fs";
@@ -28,10 +23,11 @@ import { type Author, ownerAuthor } from "./author.js";
 import { type Section, authorZoneDecryptRecipient } from "./ethos.js";
 import { newGammaId } from "./gamma.js";
 import {
-  authorBundleV03,
+  patchEditionV03,
   readSection,
   type ManifestV03,
   type SectionReader,
+  type ZonePatch,
 } from "./bundle-v03.js";
 
 function toAuthor(subject: Identity | Author): Author {
@@ -64,39 +60,8 @@ export interface EditSectionV03Args {
   now?: Date;
 }
 
-/** Read every section of `zone` from `bundleDir` as the author (throws if any is unreadable). */
-function readZoneAsAuthor(
-  bundleDir: string,
-  manifest: ManifestV03,
-  author: Author,
-  zone: Sphere,
-): Section[] {
-  const zm = manifest.zones[zone];
-  let reader: SectionReader | undefined;
-  if (zone !== "public") {
-    const r = authorZoneDecryptRecipient(author, zone as "circle" | "self");
-    reader = { didUrl: r.did, x25519Secret: r.x25519Secret };
-  }
-  const out: Section[] = [];
-  for (const desc of zm.sections) {
-    const res = readSection(bundleDir, zm, desc, manifest.subject_did, reader);
-    if (!res.accessible || !res.section) {
-      throw new Error(
-        `editSectionV03: cannot read section ${desc.section_id} of zone ${zone} ` +
-          `(needed to re-author the zone): ${res.reason ?? "inaccessible"}`,
-      );
-    }
-    out.push(res.section);
-  }
-  return out;
-}
-
 function applyChange(cur: Section | undefined, sectionId: string, change: SectionChange, gammaRef: string): Section {
-  const tags = change.clearTags
-    ? undefined
-    : change.tags !== undefined
-      ? change.tags
-      : cur?.tags;
+  const tags = change.clearTags ? undefined : change.tags !== undefined ? change.tags : cur?.tags;
   return {
     id: sectionId,
     title: change.title !== undefined ? change.title : (cur?.title ?? ""),
@@ -129,33 +94,44 @@ function mutate(args: EditSectionV03Args, del: boolean): ManifestV03 {
     author.kind === "owner" ? [...SPHERE_FRAGMENTS] : [author.mandate.actor_sphere];
   if (!authoredZones.includes(args.zone)) {
     throw new Error(
-      `editSectionV03: author may not write zone ${args.zone} ` +
-        `(authored: ${authoredZones.join(", ")})`,
+      `editSectionV03: author may not write zone ${args.zone} (authored: ${authoredZones.join(", ")})`,
     );
   }
 
-  const zones: Partial<Record<Sphere, Section[]>> = {};
-  for (const z of authoredZones) {
-    zones[z] = readZoneAsAuthor(args.bundleDir, manifest, author, z);
-  }
+  const zm = manifest.zones[args.zone];
+  const prevDesc = zm?.sections.find((s) => s.section_id === args.sectionId);
 
-  const list = zones[args.zone]!;
-  const idx = list.findIndex((s) => s.id === args.sectionId);
+  const patch: Partial<Record<Sphere, ZonePatch>> = {};
   if (del) {
-    if (idx < 0) throw new Error(`section ${args.sectionId} not found in zone ${args.zone}`);
-    list.splice(idx, 1);
+    if (!prevDesc) throw new Error(`section ${args.sectionId} not found in zone ${args.zone}`);
+    patch[args.zone] = { deletes: [args.sectionId] };
   } else {
     const gammaRef = args.gammaRef ?? newGammaId();
-    const next = applyChange(idx >= 0 ? list[idx] : undefined, args.sectionId, args.change ?? {}, gammaRef);
-    if (idx >= 0) list[idx] = next;
-    else list.push(next);
+    let cur: Section | undefined;
+    if (prevDesc) {
+      // Read ONLY the target section to apply a partial change.
+      let reader: SectionReader | undefined;
+      if (args.zone !== "public") {
+        const r = authorZoneDecryptRecipient(author, args.zone as "circle" | "self");
+        reader = { didUrl: r.did, x25519Secret: r.x25519Secret };
+      }
+      const res = readSection(args.bundleDir, zm, prevDesc, manifest.subject_did, reader);
+      if (!res.accessible || !res.section) {
+        throw new Error(
+          `editSectionV03: cannot read target section ${args.sectionId}: ${res.reason ?? "inaccessible"}`,
+        );
+      }
+      cur = res.section;
+    }
+    const next = applyChange(cur, args.sectionId, args.change ?? {}, gammaRef);
+    patch[args.zone] = { upserts: [next] };
   }
 
-  return authorBundleV03({
+  return patchEditionV03({
     author,
     outDir: args.outDir,
-    zones,
     prev: { manifest, dir: args.bundleDir },
+    patch,
     now: args.now,
   });
 }

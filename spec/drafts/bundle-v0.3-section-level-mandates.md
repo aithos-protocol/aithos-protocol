@@ -70,19 +70,14 @@ A whole-zone delegate (no `section_scope`) matches every section, reproducing th
 
 A **delegate** author (§3.8′ #5) does not re-derive other delegates' grants; its authored sections are wrapped to `{ subject, self }` as in §3.5.2′. Adding/removing section-scoped delegates is an **owner** operation (the owner re-authors the affected sections), mirroring `issueMandateWithRewrap` / `repinAfterRevocation`.
 
-### 3.5.5′ The encrypted self index and section-scoped delegates
+### 3.5.5′ Per-section titles and section-scoped delegates
 
-The `self` zone's `index_cipher` (the sealed title/tag map, §3.3.2′) is sealed to:
+The self index is **per section**: each section carries its own `title_cipher` (§3.3.2′), sealed to **that section's** recipients (the same set as the body). There is no zone-wide index blob. Consequences:
 
-```
-index_recipients :=
-    { subject #self-kex }
-  ∪ { delegate D : D's mandate covers read of self AND D.section_scope is ABSENT }
-```
+- A reader recovers a section's title iff it is one of that section's recipients. So the subject (recipient of every section) sees all self titles; a **section-scoped delegate sees the titles of exactly the sections it can read** — and never the others'. The host sees none.
+- **A section-scoped delegate can add/edit/delete its OWN self sections.** Adding a section just writes that section's body + `title_cipher`, both sealed to the section's recipients (subject + the adding delegate). No zone-wide index has to be rebuilt, so the delegate never needs the titles of sections it cannot read. Editing/deleting touches only the target section; all siblings carry forward verbatim (their blobs and `title_cipher`s are copied without decryption — the patch-authoring model). This is the capture-agent case: an email agent appending one self section per inbound message (spec §3 motivation), scoped to e.g. `gmail`, never sees the subject's other self titles.
 
-That is: **only the subject and whole-zone `self` delegates can decrypt the self index.** A section-scoped `self` delegate is deliberately **not** an index recipient. The rationale: the index reveals **every** self title, so handing it to a delegate that was granted only the `gmail` sections would leak the titles of the user's unrelated private sections. A section-scoped delegate does not need the index — its mandate already names the sections (by id or tag) it may read, and it learns each granted section's title from that section's own decrypted body (§2.6). The host-side index browse remains the subject's (and whole-zone delegates') privilege.
-
-`circle`'s index is clear, so this carve-out is a no-op there.
+`circle`'s index is clear, so a circle delegate's titles are visible to the host regardless.
 
 ### 3.5.6′ Recipient-set change ⇒ re-encryption
 
@@ -107,10 +102,11 @@ Authors who treat "which section is shared with whom" as sensitive should be awa
 |---|---|
 | M1 — Section-scoped read (by id) | A delegate with `ethos.read.self` + `section_scope.ids = [X]` decrypts section X but NOT section Y of the same zone (no wrap on Y). |
 | M2 — Section-scoped read (by tag) | A delegate with `section_scope.tags = ["gmail"]` decrypts exactly the `gmail`-tagged sections; untagged/other-tagged sections stay opaque to it. |
-| M3 — Index stays private | The section-scoped delegate of M1/M2 CANNOT decrypt the self `index_cipher` (it is not an index recipient); the subject still can. |
+| M3 — Per-section titles | The section-scoped delegate of M1/M2 decrypts the `title_cipher` of its granted section (sees its title) but NOT the `title_cipher` of a non-granted section (title stays hidden); the subject sees all. |
 | M4 — Whole-zone unchanged | A mandate with no `section_scope` still wraps every section (back-compat). |
 | M5 — Granting re-encrypts only matches | Adding a section-scoped delegate re-encrypts only the matching sections; non-matching sections carry forward byte-identical (§3.5.6′). |
 | M6 — Forward-looking scope | A `section_scope` matching no current section is valid; a later-authored matching section is wrapped to the delegate automatically. |
+| M7 — Section-scoped delegate appends | A delegate with `ethos.write.self` + a `section_scope` ADDS a new self section: its body + `title_cipher` are sealed to subject + delegate, every other self section carries forward byte-identical (never decrypted), the manifest is delegate-signed, the subject reads the new title, and the delegate never learns the subject's other self titles. |
 
 ## Open questions
 
