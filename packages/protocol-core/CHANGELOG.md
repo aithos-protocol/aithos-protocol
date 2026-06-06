@@ -7,6 +7,44 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-06
+
+### Added
+
+- **Bundle format v0.3 — per-section encryption** (opt-in; spec draft
+  `spec/drafts/bundle-v0.3-per-section-encryption.md`). Every zone is split into
+  independently-addressed per-section blobs: `public/<id>.md` plaintext,
+  `circle|self/<id>.enc` ciphertext under a fresh per-section DEK. New
+  `bundle-v03.ts`: `BundleZoneV2` / `SectionDescriptor` / `SectionCipher` types,
+  per-section AEAD (`encryptSection` / `decryptSection`), unified `writeSection` /
+  `readSection`, `buildManifestV2` + `authorBundleV03` with **byte-identical
+  carry-forward** of unchanged sections (a one-section edit rewrites one blob), and
+  `verifyBundleV03` implementing §3.8′ checks 1–8. `verifyBundleAtPath` now
+  dispatches `aithos: "0.3.0"` bundles to the v0.3 verifier.
+- **v0.2 ↔ v0.3 boundary** (`bundle-migrate.ts`): `decodeBundleV02` compat read
+  (§3.10.2′), `readBundleSections` unified reader (dispatches on the `aithos`
+  marker), and `migrateBundleV02ToV03` one-shot migration (§3.10.3′) that splits a
+  v0.2 bundle into per-section blobs and chains the migration edition back to the
+  unchanged v0.2 predecessor (no historical re-encryption — §3.10.4′).
+- `AITHOS_VERSION_V03 = "0.3.0"` constant; `wrapDek` / `unwrapDek` exported so the
+  v0.3 path reuses the identical X25519-HKDF-SHA256-AEAD key wrap.
+- Conformance tests **B1–B15** (§3.12′) — the full v0.3 test matrix. Suite is
+  115/115.
+
+### Notes
+
+- The per-section AEAD AAD binds `subject_did ‖ section_id`, **not** the draft's
+  per-edition `bundle_id` — so unchanged sections carry forward byte-identical
+  across editions (B3); cross-edition replay resistance is supplied by the manifest
+  signature + `edition.prev_hash` chain. Spec §3.4.3′, the B5 row (now
+  cross-subject), and the §3.11′ threat-model table were updated to match.
+- **Backward compatible.** The on-disk bundle format version (`AITHOS_VERSION` /
+  the manifest `aithos` field) stays at `0.2.0`: v0.3 is opt-in and read+written
+  alongside v0.2, which remains the write default. The format default flips to
+  `0.3.0` in a later release once v0.3 is promoted to normative.
+- Deferred: the migration's `bundle.migrate.v0.3` gamma entry (part of the
+  gamma-v0.3 op vocabulary, tracked separately).
+
 ## [0.6.6] — 2026-06-01
 
 ### Added
