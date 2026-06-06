@@ -38,9 +38,14 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sections by id decrypting ONLY those blobs, locating ids across zones
   (`SectionFetchResult`). `FilesystemStorage` is now v0.3-aware across
   `readZoneDoc` / `verifyEthos` / the new per-section reads, with the v0.2 path
-  kept as a fallback (it decrypts the whole zone, as before). Writes through the
-  storage surface are guarded on v0.3 pending the gamma-v0.3 log append (the CLI
-  `add/modify/delete-section` already write per-section editions directly).
+  kept as a fallback (it decrypts the whole zone, as before).
+- **v0.3 writes through `AithosStorage`** — `addSection` / `modifySection` /
+  the new `deleteSection` write per-section editions on a v0.3 keystore (via
+  `keystoreEditSection`), owner or delegate (the delegate author is built from
+  `WriteAuth.delegate` + the named mandate). `SectionWriteResult.gammaEntry` is
+  now optional and `SectionDeleteResult` is added: v0.3 writes stamp a fresh
+  `gamma_ref` on the section but defer the signed gamma-log append to the
+  gamma-v0.3 work (v0.2 writes still emit the signed entry).
 - The v0.2 → v0.3 migration now **carries the gamma deep-memory log and its
   signed anchor forward unchanged** (no historical re-encryption — §3.10.4′).
 

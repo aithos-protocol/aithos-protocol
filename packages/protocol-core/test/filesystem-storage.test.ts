@@ -245,11 +245,63 @@ describe("FilesystemStorage — v0.3 per-section reads", () => {
       const v = await fs.verifyEthos(handle, alice, didDoc);
       assert.equal(v.ok, true, `errors: ${v.errors.join("; ")}`);
 
-      // --- writes through the storage surface are guarded on v0.3 -----------
-      await assert.rejects(
-        fs.addSection({ handle, zone: "self", title: "x", body: "y" }, { identity: alice }),
-        /not yet wired/,
+    } finally {
+      cleanupKeystore(dir);
+    }
+  });
+
+  test("v0.3 write round-trip through the storage surface: add → modify → delete", async () => {
+    const dir = freshKeystore();
+    try {
+      const core = await loadCore();
+      const handle = uniqueHandle();
+      const alice = core.createIdentity(handle, "Alice");
+      core.writeIdentityToDisk(alice);
+      core.initKeystoreV03({ handle, identity: alice });
+
+      const fs = new core.FilesystemStorage();
+
+      // add (owner)
+      const added = await fs.addSection(
+        { handle, zone: "self", title: "Routine", body: "Up at six.", tags: ["am"] },
+        { identity: alice },
       );
+      assert.ok(added.section.id.startsWith("sec_"));
+      assert.equal(added.section.title, "Routine");
+      assert.deepEqual([...added.section.tags], ["am"]);
+      assert.equal(added.gammaEntry, undefined, "v0.3 writes omit the gamma entry for now");
+      const id = added.section.id;
+
+      // read back the body via the per-section read
+      const [r1] = await fs.readSections(handle, [id], { identity: alice });
+      assert.equal(r1.section!.body, "Up at six.");
+
+      // modify (body only) — title carries forward in the result
+      const modified = await fs.modifySection(
+        { handle, zone: "self", sectionId: id, body: "Up at five." },
+        { identity: alice },
+      );
+      assert.equal(modified.section.title, "Routine", "unchanged title read back accurately");
+      const [r2] = await fs.readSections(handle, [id], { identity: alice });
+      assert.equal(r2.section!.body, "Up at five.");
+
+      // a second section, so the index has two
+      await fs.addSection({ handle, zone: "self", title: "Goals", body: "ship v0.3" }, { identity: alice });
+      let idx = await fs.readSectionIndex(handle, "self", { identity: alice });
+      assert.deepEqual(idx.map((e) => e.title).sort(), ["Goals", "Routine"]);
+
+      // delete the first; it disappears from the live index, blob removed
+      const del = await fs.deleteSection({ handle, zone: "self", sectionId: id }, { identity: alice });
+      assert.equal(del.sectionId, id);
+      idx = await fs.readSectionIndex(handle, "self", { identity: alice });
+      assert.deepEqual(idx.map((e) => e.title), ["Goals"]);
+      const [gone] = await fs.readSections(handle, [id], { identity: alice });
+      assert.equal(gone.accessible, false);
+
+      // the ethos still verifies after the write round-trip
+      const didDoc = await fs.loadDidDocument(handle);
+      const v = await fs.verifyEthos(handle, alice, didDoc);
+      assert.equal(v.ok, true, `errors: ${v.errors.join("; ")}`);
     } finally {
       cleanupKeystore(dir);
     }

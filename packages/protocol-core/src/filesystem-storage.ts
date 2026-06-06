@@ -24,6 +24,7 @@ import type {
   AithosStorage,
   WriteAuth,
   SectionWriteResult,
+  SectionDeleteResult,
   SectionIndexEntry,
   SectionFetchResult,
   SectionReadOpts,
@@ -39,12 +40,15 @@ import {
 } from "./identity.js";
 import {
   addSection as coreAddSection,
+  authorZoneDecryptRecipient,
+  deleteSection as coreDeleteSection,
   ethosDir,
   ethosHistoryDir,
   ethosZoneFile,
   keystoreDelegateResolver,
   loadZoneDoc,
   modifySection as coreModifySection,
+  newSectionId,
   readManifest,
   subjectRecipientFor,
   verifyEthos,
@@ -55,7 +59,8 @@ import {
   type VerifyEthosResult,
   type ZoneDoc,
 } from "./ethos.js";
-import { isV03Keystore } from "./keystore-v3.js";
+import { type Author, delegateAuthor } from "./author.js";
+import { isV03Keystore, keystoreEditSection } from "./keystore-v3.js";
 import {
   readSection,
   readZoneIndex,
@@ -244,7 +249,17 @@ export class FilesystemStorage implements AithosStorage {
     args: Omit<CoreAddSectionArgs, "identity" | "author" | "delegate">,
     auth: WriteAuth,
   ): Promise<SectionWriteResult> {
-    if (isV03Keystore(args.handle)) throw new Error(v03WriteUnsupported(args.handle));
+    if (isV03Keystore(args.handle)) {
+      const author = v03Author(args.handle, auth, "addSection");
+      const sectionId = newSectionId();
+      const change = {
+        title: args.title,
+        body: args.body,
+        ...(args.tags ? { tags: args.tags } : {}),
+      };
+      const m = keystoreEditSection({ handle: args.handle, author, zone: args.zone, sectionId, change });
+      return v03WriteResult(args.handle, args.zone, sectionId, author, m);
+    }
     const identity = requireIdentity(auth, "addSection");
     const result = coreAddSection({
       ...args,
@@ -258,7 +273,22 @@ export class FilesystemStorage implements AithosStorage {
     args: Omit<CoreModifySectionArgs, "identity" | "author" | "delegate">,
     auth: WriteAuth,
   ): Promise<SectionWriteResult> {
-    if (isV03Keystore(args.handle)) throw new Error(v03WriteUnsupported(args.handle));
+    if (isV03Keystore(args.handle)) {
+      const author = v03Author(args.handle, auth, "modifySection");
+      const change = {
+        ...(args.title !== undefined ? { title: args.title } : {}),
+        ...(args.body !== undefined ? { body: args.body } : {}),
+        ...(args.tags !== undefined ? { tags: args.tags } : {}),
+      };
+      const m = keystoreEditSection({
+        handle: args.handle,
+        author,
+        zone: args.zone,
+        sectionId: args.sectionId,
+        change,
+      });
+      return v03WriteResult(args.handle, args.zone, args.sectionId, author, m);
+    }
     const identity = requireIdentity(auth, "modifySection");
     const result = coreModifySection({
       ...args,
@@ -266,6 +296,33 @@ export class FilesystemStorage implements AithosStorage {
       delegate: auth.delegate,
     });
     return toSectionWriteResult(result);
+  }
+
+  async deleteSection(
+    args: { handle: string; zone: Sphere; sectionId: string; reason?: string },
+    auth: WriteAuth,
+  ): Promise<SectionDeleteResult> {
+    if (isV03Keystore(args.handle)) {
+      const author = v03Author(args.handle, auth, "deleteSection");
+      const m = keystoreEditSection({
+        handle: args.handle,
+        author,
+        zone: args.zone,
+        sectionId: args.sectionId,
+        delete: true,
+      });
+      return { sectionId: args.sectionId, manifest: m as unknown as Manifest };
+    }
+    const identity = requireIdentity(auth, "deleteSection");
+    const { manifest, gammaEntry, deletedTitle } = coreDeleteSection({
+      handle: args.handle,
+      identity,
+      delegate: auth.delegate,
+      zone: args.zone,
+      sectionId: args.sectionId,
+      ...(args.reason !== undefined ? { reason: args.reason } : {}),
+    });
+    return { sectionId: args.sectionId, deletedTitle, manifest, gammaEntry };
   }
 
   /* -------- ethos verification ----------------------------------------- */
@@ -334,14 +391,59 @@ function zoneReader(identity: Identity | undefined, zone: Sphere): SectionReader
   return { didUrl: r.did, x25519Secret: r.x25519Secret };
 }
 
-/** Message for the not-yet-wired v0.3 write path through the storage surface. */
-function v03WriteUnsupported(handle: string): string {
-  return (
-    `FilesystemStorage: writes to the v0.3 per-section ethos "${handle}" are not yet ` +
-    `wired through this surface (the signed gamma-log append for v0.3 lands with the ` +
-    `gamma-v0.3 work). Use the CLI \`aithos ethos add-section/modify-section\`, which ` +
-    `writes per-section editions directly. Reads (index + by-id) are fully supported.`
-  );
+/**
+ * Resolve the v0.3 write author from a {@link WriteAuth}: the delegate when
+ * `auth.delegate` is set (built from the subject metadata + the mandate it
+ * names), otherwise the owner identity. The delegate path works on tracked
+ * installs (only `did.json` + the mandate are needed).
+ */
+function v03Author(handle: string, auth: WriteAuth, op: string): Identity | Author {
+  if (auth.delegate) {
+    const subject = loadIdentityMetadata(handle);
+    const mandate = loadMandate(auth.delegate.mandateId);
+    return delegateAuthor({
+      subject,
+      seed: auth.delegate.keySeed,
+      pubkeyMultibase: auth.delegate.keyMultibase,
+      mandate,
+    });
+  }
+  return requireIdentity(auth, op);
+}
+
+/**
+ * Build a {@link SectionWriteResult} after a v0.3 per-section write: read the
+ * authoritative section back (with the author's own reader, so a delegate sees
+ * the section it just wrote), then project it. `gammaEntry` is omitted on v0.3
+ * (the signed log append lands with gamma-v0.3); the section's `gamma_ref` is
+ * the provenance anchor.
+ */
+function v03WriteResult(
+  handle: string,
+  zone: Sphere,
+  sectionId: string,
+  author: Identity | Author,
+  manifest: ManifestV03,
+): SectionWriteResult {
+  const dir = ethosDir(handle);
+  const zm = manifest.zones[zone];
+  const desc = zm?.sections.find((s) => s.section_id === sectionId);
+  let reader: SectionReader | undefined;
+  if (zone !== "public") {
+    const r = authorZoneDecryptRecipient(author, zone as "circle" | "self");
+    reader = { didUrl: r.did, x25519Secret: r.x25519Secret };
+  }
+  const res = desc ? readSection(dir, zm, desc, manifest.subject_did, reader) : undefined;
+  const sec = res?.section;
+  return {
+    section: {
+      id: sectionId,
+      title: sec?.title ?? "",
+      gamma_ref: sec?.gamma_ref ?? desc?.gamma_ref ?? "",
+      tags: sec?.tags ?? [],
+    },
+    manifest: manifest as unknown as Manifest,
+  };
 }
 
 function requireIdentity(auth: WriteAuth, op: string): Identity {

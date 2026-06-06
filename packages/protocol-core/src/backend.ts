@@ -102,7 +102,26 @@ export interface SectionWriteResult {
     readonly tags: readonly string[];
   };
   readonly manifest: Manifest;
-  readonly gammaEntry: GammaEntry;
+  /**
+   * The signed gamma-log entry produced by the write. Present on v0.2 writes.
+   * Absent on v0.3 (per-section) writes for now: the new edition stamps a fresh
+   * `gamma_ref` on the section, but the signed gamma-log append for v0.3 lands
+   * with the gamma-v0.3 work — until then the section's `gamma_ref` is the
+   * provenance anchor.
+   */
+  readonly gammaEntry?: GammaEntry;
+}
+
+/**
+ * Result of a section delete. The section is removed from the live edition;
+ * `gammaEntry` follows the same v0.2-present / v0.3-pending rule as
+ * {@link SectionWriteResult}.
+ */
+export interface SectionDeleteResult {
+  readonly sectionId: string;
+  readonly deletedTitle?: string;
+  readonly manifest: Manifest;
+  readonly gammaEntry?: GammaEntry;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -262,6 +281,16 @@ export interface AithosStorage {
     args: Omit<ModifySectionArgs, "identity" | "author" | "delegate">,
     auth: WriteAuth,
   ): Promise<SectionWriteResult>;
+
+  /**
+   * Delete a section from its zone. v0.2: emits a signed `section.delete` gamma
+   * entry. v0.3: drops the section's blob and writes a new per-section edition.
+   * Owner or delegate (auth semantics mirror {@link addSection}).
+   */
+  deleteSection(
+    args: { handle: string; zone: Sphere; sectionId: string; reason?: string },
+    auth: WriteAuth,
+  ): Promise<SectionDeleteResult>;
 
   /* -------- ethos verification ----------------------------------------- */
 

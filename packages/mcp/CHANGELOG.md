@@ -13,15 +13,20 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `self` index shows titles only with the owner key. `aithos_ethos_show_section`
   fetches ONLY the requested section's blob instead of decrypting the whole zone.
 - The server is now v0.3-aware throughout (verify, the `aithos://ethos/{handle}/{zone}`
-  resource), so it works on the new v0.3-default keystore. Writes
-  (`add`/`modify_section`) on a v0.3 keystore return a clear "use the CLI"
-  message pending the gamma-v0.3 log append.
+  resource), so it works on the new v0.3-default keystore.
+- **Writes work on v0.3.** `aithos_ethos_add_section` / `aithos_ethos_modify_section`
+  write per-section editions on a v0.3 keystore (owner or delegate). The signed
+  gamma-log append is still deferred to gamma-v0.3, so `gamma_entry_id` falls
+  back to the section's `gamma_ref` on v0.3.
 - Requires `@aithos/protocol-core` `^0.8.0`.
 
 ### Added
 - **`aithos_ethos_read_sections`** — fetch several sections by id in a single
   call, decrypting only those sections; ids are located across all zones (or a
   single `zone`), and each result reports `accessible` + a `reason` when not.
+- **`aithos_ethos_delete_section`** — remove a section by id (owner or delegate);
+  v0.2 emits a signed `section.delete` gamma entry, v0.3 drops the section blob
+  and writes a new per-section edition.
 
 ## [0.7.0] — 2026-05-27
 

@@ -465,7 +465,9 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         section: sectionSummary(zone, section as Section),
         manifest_version: manifest.edition.version,
         manifest_height: manifest.edition.height,
-        gamma_entry_id: gammaEntry.id,
+        // v0.3 writes have no signed gamma entry yet — fall back to the
+        // section's gamma_ref as the provenance anchor.
+        gamma_entry_id: gammaEntry?.id ?? section.gamma_ref,
         gamma_head: manifest.gamma?.head ?? null,
         gamma_count: manifest.gamma?.count ?? 0,
       });
@@ -538,9 +540,59 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         section: sectionSummary(zone, section as Section),
         manifest_version: manifest.edition.version,
         manifest_height: manifest.edition.height,
-        gamma_entry_id: gammaEntry.id,
+        gamma_entry_id: gammaEntry?.id ?? section.gamma_ref,
         gamma_head: manifest.gamma?.head ?? null,
         gamma_count: manifest.gamma?.count ?? 0,
+      });
+    },
+  );
+
+  server.registerTool(
+    "aithos_ethos_delete_section",
+    {
+      title: "Delete a section",
+      description:
+        "Removes a section from its zone. v0.2 emits a signed `section.delete` " +
+        "gamma entry (audit trail); v0.3 drops the section blob and writes a new " +
+        "per-section edition. Auth semantics identical to " +
+        "`aithos_ethos_add_section` (owner key, or a write mandate + agent key).",
+      inputSchema: {
+        handle: z.string().optional(),
+        zone: z.enum(SPHERE_FRAGMENTS),
+        sectionId: z.string().describe("Section id (sec_<hex>)"),
+        reason: z
+          .string()
+          .optional()
+          .describe("Free-text reason, recorded in the gamma entry (v0.2)."),
+        mandate: z.string().optional(),
+        agentKey: z.string().optional(),
+      },
+    },
+    async ({ handle, zone, sectionId, reason, mandate, agentKey }) => {
+      const h = await resolveHandle(storage, handle);
+      const auth = await resolveWriteAuth(storage, { mandate, agentKey });
+      if (auth) {
+        const writeScope = `ethos.write.${zone}`;
+        if (!auth.mandate.scopes.includes(writeScope)) {
+          throw new Error(
+            `Mandate ${auth.mandate.id} does not include scope ${writeScope}`,
+          );
+        }
+      }
+      const identity = await loadWriteIdentity(storage, h, auth);
+      const result = await storage.deleteSection(
+        { handle: h, zone, sectionId, ...(reason !== undefined ? { reason } : {}) },
+        { identity, delegate: auth?.delegate },
+      );
+      return ok({
+        zone,
+        deleted_section_id: result.sectionId,
+        deleted_title: result.deletedTitle ?? null,
+        manifest_version: result.manifest.edition.version,
+        manifest_height: result.manifest.edition.height,
+        gamma_entry_id: result.gammaEntry?.id ?? null,
+        gamma_head: result.manifest.gamma?.head ?? null,
+        gamma_count: result.manifest.gamma?.count ?? 0,
       });
     },
   );
