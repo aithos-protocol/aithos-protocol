@@ -22,6 +22,8 @@ import {
   ethosDir,
   type Sphere,
   loadConfig,
+  isV03Keystore,
+  keystoreEditSection,
 } from "@aithos/protocol-core";
 import { resolveAuthor } from "./_author.js";
 
@@ -61,6 +63,29 @@ export function runEthosModifySection(opts: EthosModifySectionOpts): void {
     mandate: opts.mandate,
     agentKey: opts.agentKey,
   });
+
+  // v0.3-native keystore: edit the per-section blob in place.
+  if (isV03Keystore(handle)) {
+    const m = keystoreEditSection({
+      handle,
+      author,
+      zone,
+      sectionId: opts.sectionId,
+      change: {
+        ...(title !== undefined ? { title } : {}),
+        ...(body !== undefined ? { body } : {}),
+        ...(opts.clearTags ? { clearTags: true } : tags !== undefined ? { tags } : {}),
+      },
+    });
+    if (opts.json) {
+      console.log(JSON.stringify({ section_id: opts.sectionId, zone, manifest: m }, null, 2));
+      return;
+    }
+    console.log(`[handle=${handle}] Modified ${opts.sectionId} in ${zone} (v0.3)`);
+    console.log(`  edition:  ${m.edition.version} (height=${m.edition.height})`);
+    if (mandate) console.log(`  authorized: ${mandate.id}`);
+    return;
+  }
 
   const { section, manifest, gammaEntry } = modifySection({
     handle,

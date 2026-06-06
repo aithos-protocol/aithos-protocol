@@ -23,6 +23,7 @@ export * from "./bundle.js";
 export * from "./bundle-v03.js";
 export * from "./bundle-migrate.js";
 export * from "./bundle-edit.js";
+export * from "./keystore-v3.js";
 export * from "./canonical.js";
 export * from "./gamma.js";
 export * from "./author.js";

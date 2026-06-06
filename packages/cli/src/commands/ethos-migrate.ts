@@ -29,12 +29,14 @@ import {
   loadIdentity,
   packEthosToDir,
   migrateBundleV02ToV03,
+  migrateKeystoreInPlace,
   isV02Aithos,
 } from "@aithos/protocol-core";
 
 export interface EthosMigrateOpts {
   handle?: string;
   out?: string;
+  inPlace?: boolean;
   json?: boolean;
 }
 
@@ -52,6 +54,20 @@ export function runEthosMigrateToV03(opts: EthosMigrateOpts): void {
 
   // Owner keys are required to decrypt circle/self before re-encrypting per-section.
   const identity = loadIdentity(handle);
+
+  // --in-place: convert the live keystore ethos to v0.3 (it becomes the write format).
+  if (opts.inPlace) {
+    const mig = migrateKeystoreInPlace({ handle, identity });
+    if (opts.json) {
+      console.log(JSON.stringify({ handle, in_place: true, bundle_id: mig.bundle_id, edition: mig.edition }, null, 2));
+      return;
+    }
+    console.log(`[handle=${handle}] Migrated the live ethos to v0.3 IN PLACE`);
+    console.log(`  bundle_id:  ${mig.bundle_id}`);
+    console.log(`  edition:    ${mig.edition.version} (height=${mig.edition.height})`);
+    console.log(`  note: add/modify/delete-section now write per-section. v0.2 editions are archived in history/.`);
+    return;
+  }
 
   const outDir = opts.out ?? join(process.cwd(), `${handle}-${manifest.edition.version}-v0.3`);
 

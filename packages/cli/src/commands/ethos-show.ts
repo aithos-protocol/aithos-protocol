@@ -24,8 +24,10 @@ import {
   type Identity,
   type Sphere,
   loadConfig,
+  isV03Keystore,
 } from "@aithos/protocol-core";
 import { resolveAuthor } from "./_author.js";
+import { runEthosRead } from "./ethos-read.js";
 
 export interface EthosShowOpts {
   handle?: string;
@@ -43,6 +45,21 @@ export function runEthosShow(opts: EthosShowOpts): void {
   if (!handle) throw new Error("No identity handle. Pass --handle <h>.");
   if (!existsSync(ethosDir(handle))) {
     throw new Error(`No ethos for "${handle}". Run \`aithos ethos init\`.`);
+  }
+
+  // v0.3-native keystore: the ethos dir IS a v0.3 bundle — reuse the read path.
+  if (isV03Keystore(handle)) {
+    runEthosRead({
+      path: ethosDir(handle),
+      handle,
+      ...(opts.section ? { section: opts.section } : {}),
+      ...(opts.zone ? { zone: opts.zone } : {}),
+      ...(!opts.section && !opts.zone ? { index: true } : {}),
+      ...(opts.mandate ? { mandate: opts.mandate } : {}),
+      ...(opts.agentKey ? { agentKey: opts.agentKey } : {}),
+      ...(opts.json ? { json: true } : {}),
+    });
+    return;
   }
 
   const manifest = readManifest(handle);

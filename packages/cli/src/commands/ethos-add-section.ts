@@ -23,6 +23,9 @@ import {
   ethosDir,
   type Sphere,
   loadConfig,
+  isV03Keystore,
+  keystoreEditSection,
+  newSectionId,
 } from "@aithos/protocol-core";
 import { resolveAuthor } from "./_author.js";
 
@@ -57,6 +60,28 @@ export function runEthosAddSection(opts: EthosAddSectionOpts): void {
     mandate: opts.mandate,
     agentKey: opts.agentKey,
   });
+
+  // v0.3-native keystore: write a per-section edition via the v0.3 helpers.
+  if (isV03Keystore(handle)) {
+    const sectionId = newSectionId();
+    const m = keystoreEditSection({
+      handle,
+      author,
+      zone,
+      sectionId,
+      change: { title: opts.title, body, ...(tags ? { tags } : {}) },
+    });
+    if (opts.json) {
+      console.log(JSON.stringify({ section_id: sectionId, zone, manifest: m }, null, 2));
+      return;
+    }
+    console.log(`[handle=${handle}] Added section to zone ${zone} (v0.3)`);
+    console.log(`  id:       ${sectionId}`);
+    console.log(`  title:    ${opts.title}`);
+    console.log(`  edition:  ${m.edition.version} (height=${m.edition.height})`);
+    if (mandate) console.log(`  authorized: ${mandate.id}`);
+    return;
+  }
 
   const { section, manifest, gammaEntry } = addSection({
     handle,

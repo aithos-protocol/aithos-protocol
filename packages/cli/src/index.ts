@@ -326,6 +326,7 @@ ethos
   )
   .option("--handle <h>", "Identity handle (defaults to the configured default)")
   .option("--out <dir>", "Output directory for the v0.3 bundle (default: cwd/<handle>-<version>-v0.3)")
+  .option("--in-place", "Convert the live keystore ethos to v0.3 in place (add/modify/delete then write per-section)")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runEthosMigrateToV03(opts)));
 

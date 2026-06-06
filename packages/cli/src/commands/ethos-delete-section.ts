@@ -22,6 +22,8 @@ import {
   ethosDir,
   type Sphere,
   loadConfig,
+  isV03Keystore,
+  keystoreEditSection,
 } from "@aithos/protocol-core";
 import { resolveAuthor } from "./_author.js";
 
@@ -50,6 +52,19 @@ export function runEthosDeleteSection(opts: EthosDeleteSectionOpts): void {
     mandate: opts.mandate,
     agentKey: opts.agentKey,
   });
+
+  // v0.3-native keystore: drop the per-section blob in place.
+  if (isV03Keystore(handle)) {
+    const m = keystoreEditSection({ handle, author, zone, sectionId: opts.section, delete: true });
+    if (opts.json) {
+      console.log(JSON.stringify({ section_id: opts.section, zone, manifest: m }, null, 2));
+      return;
+    }
+    console.log(`[handle=${handle}] Deleted ${opts.section} from zone ${zone} (v0.3)`);
+    console.log(`  edition:  ${m.edition.version} (height=${m.edition.height})`);
+    if (mandate) console.log(`  authorized: ${mandate.id}`);
+    return;
+  }
 
   const { manifest, gammaEntry, deletedTitle } = deleteSection({
     handle,
