@@ -43,6 +43,7 @@ import { runEthosVerify } from "./commands/ethos-verify.js";
 import { runEthosPack, runEthosUnpack } from "./commands/ethos-pack.js";
 import { runEthosInstall } from "./commands/ethos-install.js";
 import { runEthosMigrateToV03 } from "./commands/ethos-migrate.js";
+import { runEthosRead } from "./commands/ethos-read.js";
 import { runGammaShow } from "./commands/gamma-show.js";
 import { runGammaVerify } from "./commands/gamma-verify.js";
 
@@ -324,6 +325,20 @@ ethos
   .option("--out <dir>", "Output directory for the v0.3 bundle (default: cwd/<handle>-<version>-v0.3)")
   .option("--json", "Output JSON")
   .action((opts) => wrap(() => runEthosMigrateToV03(opts)));
+
+ethos
+  .command("read")
+  .description(
+    "Read a v0.3 bundle: fetch section(s) by id (--section a,b,c), or print the " +
+      "index (--index). Self titles are encrypted — pass --handle to decrypt them with your key.",
+  )
+  .requiredOption("--path <dir>", "Path to the v0.3 bundle (directory or .ethos)")
+  .option("--section <ids>", "Comma-separated section id(s) to fetch")
+  .option("--zone <zone>", "Restrict to a zone (public|circle|self)")
+  .option("--index", "Print the section index (id + title) instead of bodies")
+  .option("--handle <h>", "Identity providing the keys (defaults to the configured default)")
+  .option("--json", "Output JSON")
+  .action((opts) => wrap(() => runEthosRead(opts)));
 
 ethos
   .command("install")

@@ -184,22 +184,26 @@ A v0.3 bundle MUST set `aithos: "0.3.0"` at the top level and MUST set `format_v
 
 ### 3.3.2′ Field reference for `format_version: "v2"` zone entries
 
-The schema is unified across `public`, `circle`, and `self`. The only zone-level discriminator is the boolean `encrypted` flag, which gates the presence of the per-section `cipher` field.
+The schema is unified across `public`, `circle`, and `self`. Two zone-level discriminators are fixed by zone identity: the boolean `encrypted` flag (gates the per-section `cipher`), and the boolean `index_encrypted` flag (gates whether the section titles/tags live in clear on each descriptor or sealed in `index_cipher`).
 
 | Field | Type | Description |
 |---|---|---|
 | `format_version` | string | `"v2"`. REQUIRED. |
 | `encrypted` | boolean | `false` for `public`, `true` for `circle` and `self`. REQUIRED. Fixed per zone identity — implementations MUST reject any other combination. |
+| `index_encrypted` | boolean | `true` for `self`, absent/`false` for `public` and `circle`. Fixed per zone identity. When `true`, `sections[].title` and `sections[].tags` MUST be absent (they live in `index_cipher`); when absent/`false`, `sections[].title` is REQUIRED. This is the circle-clear / self-private compromise (§3.7′). |
 | `sections` | array | Ordered list of section descriptors (below). REQUIRED. MAY be `[]`. |
 | `sections[].section_id` | string | Stable section identifier per §2.5.1. REQUIRED. Unique within the zone. |
-| `sections[].title` | string | Section title in clear. REQUIRED. Inherits the metadata-leak tradeoff of §3.7′. |
+| `sections[].title` | string | Section title in clear. REQUIRED when `index_encrypted` is absent/`false` (public, circle); MUST be absent when `index_encrypted: true` (self). Inherits the metadata-leak tradeoff of §3.7′. |
 | `sections[].file` | string | Path to the section blob within the bundle, of the form `<zone>/<section_id>.md` (when zone-level `encrypted: false`) or `<zone>/<section_id>.enc` (when zone-level `encrypted: true`). REQUIRED. |
 | `sections[].sha256_of_plaintext` | string | Hex SHA-256 of the section's plaintext markdown body (UTF-8, no BOM, LF line endings). For encrypted zones, computed before encryption; for `public`, computed directly over the on-disk file bytes (which are the plaintext). REQUIRED. |
 | `sections[].cipher` | object | Per-section AEAD parameters (§3.4′) — `alg`, `nonce`, `wraps`. REQUIRED when zone-level `encrypted: true`. MUST be absent when zone-level `encrypted: false`. |
 | `sections[].gamma_ref` | string | The gamma entry id that produced this section's current state. REQUIRED. Same semantics as §10.7. |
-| `sections[].tags` | array of strings | OPTIONAL. Same shape as §2.5.1's section `tags`. |
+| `sections[].tags` | array of strings | OPTIONAL. Same shape as §2.5.1's section `tags`. MUST be absent when `index_encrypted: true`. |
+| `index_cipher` | object | Encrypted section index — `alg`, `nonce`, `wraps`, `ct`. REQUIRED when `index_encrypted: true` and the zone has ≥1 section; MUST be absent otherwise. `ct` is the XChaCha20-Poly1305 ciphertext of `jcs(IndexEntry[])`, where each `IndexEntry` is `{ section_id, title, tags? }`, sealed to the zone's recipients (the subject `#self-kex`). AAD = `"aithos-index-v1\0" ‖ subject_did ‖ "\0" ‖ zone`. |
 
 Section ordering within `sections[]` is the canonical display order. Readers that present sections to a user SHOULD respect this order; verifiers SHOULD NOT rely on it for any chain check (gamma is the chain-of-custody record).
+
+**Encrypted index (self).** The `self` zone hides its section titles from the host: the structural fields (`section_id`, `file`, `sha256_of_plaintext`, `cipher`, `gamma_ref`) stay in clear so a keyless verifier can still check integrity, file presence, and orphans, but the titles/tags are sealed in `index_cipher`. Only a holder of the `#self-kex` key can decrypt the index to recover the title↔id map and browse self titles without decrypting every section body. `circle` keeps a clear index by design (the host / circle members can browse circle titles). The section **count** and per-section **sizes** of `self` remain visible — only the titles/tags are hidden; hiding the count is a further step (opaque filenames) deferred to a later revision (§3.13′).
 
 ### 3.3.3′ Removed: per-zone signature
 
@@ -311,21 +315,20 @@ Removing a recipient is the same operation: a new edition with the ex-recipient 
 
 v0.3 increases the metadata leak surface relative to v0.2 **for the encrypted zones only**. The `public` zone's content was already public in v0.2; per-section addressing on `public` adds no privacy regression because the underlying material was never private.
 
-For `circle` and `self`, the manifest now exposes, in clear, for every section:
+The exposure differs by zone, reflecting the **circle-clear / self-private** compromise (the `index_encrypted` flag of §3.3.2′):
 
-1. The **section title** (already leaked in v0.2 — see v0.2 §3.7).
-2. The **section count** per zone (newly visible: a v0.2 zone is one opaque blob, while a v0.3 zone announces N sections).
-3. The **per-section ciphertext size** (newly visible: a v0.3 reader can size each `<zone>/<section_id>.enc`, where in v0.2 only the total zone ciphertext size was visible).
-4. The **per-section recipient set** (newly visible at section grain: a v0.3 reader sees that section X is wrapped to two recipients while section Y is wrapped to one).
-5. The **per-section gamma_ref** (newly visible: links each section to its most recent mutation in the gamma log).
+- **`circle`** keeps a clear index. The manifest exposes, in clear, for every circle section: the **title**, the **section count**, the **per-section ciphertext size**, the **per-section recipient set**, and the **per-section gamma_ref**. This is intentional — the host (and circle members granted access) can browse circle titles.
+- **`self`** encrypts its index. The **title** and **tags** of every self section are sealed in `index_cipher` and are visible **only to the subject** (the `#self-kex` key holder). The host still sees, in clear, the self section **count**, **per-section sizes**, **recipient set**, and **gamma_ref** (the structural fields needed for keyless integrity checks), but **never the titles**.
 
-Items 2–5 are net-new leaks for encrypted zones compared to v0.2. The author tradeoff arguments from v0.2 §3.7 still apply (server-side indexing, agent-side pre-flight decisions, counterparty visibility into the *shape* of disclosure), and now apply at section grain. Authors who want minimal metadata exposure on `circle` and `self` should:
+So relative to v0.2, the net-new leaks (count, per-section size, per-section recipients, per-section gamma_ref) apply to both encrypted zones, but the **title** — the most semantically revealing field — is hidden on `self`.
 
-- Continue using anodyne section titles per v0.2 advice.
-- Be aware that a section's size is visible. A "very long section" or a "very short section" is itself a signal.
+The author tradeoff arguments from v0.2 §3.7 still apply (server-side indexing, agent-side pre-flight decisions, counterparty visibility into the *shape* of disclosure). Authors who want minimal metadata exposure should:
+
+- Use anodyne section titles on `circle` (its index is clear by design); `self` titles are already private.
+- Be aware that a section's size is visible on both zones. A "very long section" or a "very short section" is itself a signal, even on `self`.
 - Be aware that a section's recipient list is visible. Granting a delegate access to one specific section reveals that one specific section was singled out.
 
-The v0.2 open question about an opt-in encrypted section index becomes more salient in v0.3: with section-grain metadata on encrypted zones, the case for hiding the index increases. Specification of an opt-in encrypted manifest variant for `circle` / `self` is deferred to v0.4 and tracked in §3.13′ Open questions.
+Hiding the self **count** as well (not just titles) requires opaque, non-`section_id` filenames so `ls self/` does not enumerate the sections; that is a further step, deferred and tracked in §3.13′.
 
 ## 3.8′ Integrity (revised)
 
@@ -438,7 +441,8 @@ Implementations SHOULD publish test vectors for B1–B15 alongside their v0.3 re
 
 ## 3.13′ Open questions
 
-- **Encrypted manifest opt-in.** With v0.3's increased metadata leak surface (section count, per-section sizes, per-section recipients), the case for an opt-in encrypted manifest variant is stronger. A v0.4 candidate: a `manifest.outer.json` carrying only `aithos`, `bundle_id`, `subject_did`, and an encrypted `manifest.inner.enc` whose plaintext is the full v0.3 manifest. Out of scope for v0.3.
+- **Encrypted self index — DONE for titles (§3.3.2′ / §3.7′).** v0.3 seals the `self` zone's section titles/tags into a per-zone `index_cipher` (the circle-clear / self-private compromise). What remains open is hiding the self section **count** and **ids**: today `self/<section_id>.enc` filenames and the clear `sections[]` length still reveal how many self sections exist and their (opaque) ids. Fully hiding the count needs opaque, content-addressed filenames and an encrypted `sections[]` blob, at the cost of keyless structural verification of `self`. Deferred — revisit if the count leak matters for a real threat model.
+- **Whole-manifest encryption opt-in.** A stronger variant still: a `manifest.outer.json` carrying only `aithos`, `bundle_id`, `subject_did`, and an encrypted `manifest.inner.enc` whose plaintext is the full v0.3 manifest (hiding circle metadata too). Out of scope for v0.3; the per-zone `index_encrypted` mechanism is the lighter-weight first step.
 - **Per-section signatures.** §3.3.3′ removes the per-zone signature in favor of manifest signature + gamma authorship. Some verifiers may prefer an offline-from-gamma authorship check at section grain. The reserved `zones.<name>.zone_signature` slot is a placeholder; concrete shape and signing key (per-section sphere signature? per-zone aggregate signature over the section list?) is open.
 - **Diff payloads in gamma `section.modify`.** §2.9 already tracks this: gamma entries currently carry the full new body. With per-section bundle ciphertexts, the gamma log is the only place where multi-MB section bodies still get re-stated in full on every edit. Diff/patch payloads in gamma become more attractive, but are independent of this draft.
 - **Compaction of section ciphertexts within the ZIP.** ZIP per-entry overhead is small but not zero (~30 bytes per entry header, plus compression dictionaries). For bundles with thousands of sections, a sidecar storage format (e.g. a single `sections.dat` with offset table) MAY become preferable. Out of scope for v0.3; revisit if real-world bundle sizes warrant it.

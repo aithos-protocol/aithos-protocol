@@ -553,4 +553,81 @@ describe("v0.3 per-section bundle (§3.12′)", () => {
       `expected encrypted-flag error: ${v2.errors.join(", ")}`,
     );
   });
+
+  /* ------------------------------------------------------------------------ */
+  /*  B16 — encrypted self index (circle clear / self private)                */
+  /* ------------------------------------------------------------------------ */
+
+  test("B16 — self index is encrypted: host sees no titles, subject decrypts", () => {
+    const alice = makeIdentity("idx_alice");
+    const dir = outDir();
+    const m = core.authorBundleV03({
+      identity: alice,
+      outDir: dir,
+      zones: {
+        public: [],
+        circle: [sec("sec_c1", "Day rate", "1200/day.", 1)],
+        self: [sec("sec_s1", "Routine", "Up at six.", 2), sec("sec_s2", "Goals", "Ship v0.3.", 3)],
+      },
+    });
+    const subjectDid = core.rootDid(alice);
+
+    // circle: clear index — title visible, no index_cipher.
+    assert.ok(!m.zones.circle.index_encrypted);
+    assert.equal(m.zones.circle.index_cipher, undefined);
+    assert.equal(m.zones.circle.sections[0].title, "Day rate");
+
+    // self: encrypted index — no clear titles, index_cipher present, structural fields intact.
+    assert.equal(m.zones.self.index_encrypted, true);
+    assert.ok(m.zones.self.index_cipher && m.zones.self.index_cipher.ct.length > 0);
+    for (const s of m.zones.self.sections) {
+      assert.equal(s.title, undefined, "self section carries no clear title");
+      assert.ok(s.section_id && s.file && s.cipher && s.sha256_of_plaintext, "structural fields stay clear");
+    }
+
+    // Host (no key): self titles hidden; circle titles visible.
+    const hostSelf = core.readZoneIndex("self", m.zones.self, subjectDid);
+    assert.deepEqual(hostSelf.map((r) => r.title_hidden), [true, true]);
+    assert.deepEqual(hostSelf.map((r) => r.title), [undefined, undefined]);
+    const hostCircle = core.readZoneIndex("circle", m.zones.circle, subjectDid);
+    assert.equal(hostCircle[0].title, "Day rate");
+
+    // Subject (with key): decrypts the self index → titles.
+    const rd = reader(alice, "self");
+    const ownerSelf = core.readZoneIndex("self", m.zones.self, subjectDid, rd);
+    assert.deepEqual(ownerSelf.map((r) => r.title), ["Routine", "Goals"]);
+    assert.deepEqual(ownerSelf.map((r) => r.title_hidden), [false, false]);
+
+    // Read one section by id (title recovered from the decrypted body).
+    const one = core.readSection(dir, m.zones.self, m.zones.self.sections[0], subjectDid, rd);
+    assert.ok(one.accessible);
+    assert.equal(one.section!.title, "Routine");
+    assert.equal(one.section!.body, "Up at six.");
+
+    // Verifies both ways: host (opaque-but-attested) and subject (index cross-check).
+    assert.ok(core.verifyBundleV03AtPath(dir, {}).ok, "host verify");
+    assert.ok(core.verifyBundleV03AtPath(dir, { readers: [rd] }).ok, "subject verify");
+  });
+
+  test("B16b — a clear title leaked onto a self section fails verification", () => {
+    const alice = makeIdentity("idx_neg");
+    const dir = outDir();
+    core.authorBundleV03({
+      identity: alice,
+      outDir: dir,
+      zones: { public: [], circle: [], self: [sec("sec_s1", "Secret", "body", 1)] },
+    });
+    const mpath = join(dir, "manifest.json");
+    const t = JSON.parse(readFileSync(mpath, "utf8"));
+    t.zones.self.sections[0].title = "Secret"; // leak a clear title onto self
+    const resigned = core.signManifestV03(alice, t); // re-sign so it's a schema failure, not a sig failure
+    writeFileSync(mpath, JSON.stringify(resigned, null, 2) + "\n");
+
+    const v = core.verifyBundleV03AtPath(dir, {});
+    assert.ok(!v.ok);
+    assert.ok(
+      v.errors.some((e) => /clear title forbidden/i.test(e)),
+      `expected clear-title-forbidden error: ${v.errors.join(", ")}`,
+    );
+  });
 });
