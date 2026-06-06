@@ -5,6 +5,24 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-06-06
+
+### Changed
+- **Per-section reads (v0.3).** `aithos_ethos_list_sections` now reads the
+  section INDEX (id + title + `gamma_ref`, no body decryption); the encrypted
+  `self` index shows titles only with the owner key. `aithos_ethos_show_section`
+  fetches ONLY the requested section's blob instead of decrypting the whole zone.
+- The server is now v0.3-aware throughout (verify, the `aithos://ethos/{handle}/{zone}`
+  resource), so it works on the new v0.3-default keystore. Writes
+  (`add`/`modify_section`) on a v0.3 keystore return a clear "use the CLI"
+  message pending the gamma-v0.3 log append.
+- Requires `@aithos/protocol-core` `^0.8.0`.
+
+### Added
+- **`aithos_ethos_read_sections`** — fetch several sections by id in a single
+  call, decrypting only those sections; ids are located across all zones (or a
+  single `zone`), and each result reports `accessible` + a `reason` when not.
+
 ## [0.7.0] — 2026-05-27
 
 ### Changed

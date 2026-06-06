@@ -37,7 +37,6 @@ import {
   ethosManifestPath,
   FilesystemStorage,
   SPHERE_FRAGMENTS,
-  TrackedIdentityError,
   rootDid,
   verifyMandate,
   type AithosStorage,
@@ -47,7 +46,6 @@ import {
   type Manifest,
   type Section,
   type Sphere,
-  type ZoneDoc,
 } from "@aithos/protocol-core";
 import fs from "node:fs";
 import path from "node:path";
@@ -102,33 +100,6 @@ function sectionSummary(
 }
 
 /**
- * Best-effort zone loader: decrypts circle/self if the identity is owned,
- * errors with a tracked-identity message if only the public data is available.
- */
-async function readZone(
-  storage: AithosStorage,
-  handle: string,
-  zone: Sphere,
-): Promise<ZoneDoc> {
-  if (zone === "public") {
-    try {
-      return await storage.readZoneDoc(handle, zone);
-    } catch (e) {
-      throw new Error(
-        `failed to load public zone for ${handle}: ${(e as Error).message}`,
-      );
-    }
-  }
-  // circle / self need a local Identity (subject secret) to decrypt.
-  // `storage.loadIdentity` throws `TrackedIdentityError` if any sealed seed is
-  // missing (filesystem backend) — we let it bubble up so the caller gets a
-  // clear message.
-  const identity = await storage.loadIdentity(handle);
-  const manifest = await storage.readManifest(handle);
-  return storage.readZoneDoc(handle, zone, { identity, manifest });
-}
-
-/**
  * Load the subject identity for a write if the backend has it available
  * locally. If the caller supplied a delegate (mandate + agentKey), a missing
  * local identity is not fatal — the storage backend will accept delegate-only
@@ -143,6 +114,25 @@ async function loadWriteIdentity(
     return await storage.loadIdentity(handle);
   } catch (e) {
     if (!auth) throw e;
+    return undefined;
+  }
+}
+
+/**
+ * Best-effort load of the subject identity for a READ. Returns `undefined` for
+ * a tracked install or when the sphere keys aren't on disk — the per-section
+ * reads degrade gracefully to the host view (public + clear indexes; encrypted
+ * bodies and the self index stay hidden).
+ */
+async function loadReadIdentity(
+  storage: AithosStorage,
+  handle: string,
+  tracked: boolean,
+): Promise<Identity | undefined> {
+  if (tracked) return undefined;
+  try {
+    return await storage.loadIdentity(handle);
+  } catch {
     return undefined;
   }
 }
@@ -165,7 +155,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   const server = new McpServer(
     {
       name: opts.name ?? "aithos-mcp",
-      version: opts.version ?? "0.5.0",
+      version: opts.version ?? "0.8.0",
     },
     {
       // We expose tools + resources, not prompts.
@@ -252,30 +242,38 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     async ({ handle, zone }) => {
       const h = await resolveHandle(storage, handle);
       const tracked = await storage.isTrackedIdentity(h);
+      // The section INDEX is cheap: id + title + gamma_ref, no body decryption.
+      // For the encrypted self index, titles appear only with the owner key.
+      const identity = await loadReadIdentity(storage, h, tracked);
       const zones: Sphere[] = zone ? [zone] : [...SPHERE_FRAGMENTS];
-      const sections: ReturnType<typeof sectionSummary>[] = [];
+      const sections: Array<{
+        zone: Sphere;
+        id: string;
+        title: string | null;
+        title_hidden: boolean;
+        gamma_ref: string;
+        tags: string[];
+      }> = [];
       const skipped: Array<{ zone: Sphere; reason: string }> = [];
       for (const z of zones) {
-        // Fast path: tracked identity, encrypted zone — don't even try to
-        // decrypt, surface a clean "skipped" record instead of a synthetic
-        // error row shaped like a section.
-        if (tracked && z !== "public") {
-          skipped.push({
-            zone: z,
-            reason:
-              "encrypted — no sphere key (identity is tracked-only)",
-          });
-          continue;
-        }
         try {
-          const doc = await readZone(storage, h, z);
-          for (const s of doc.sections) sections.push(sectionSummary(z, s));
-        } catch (e) {
-          if (e instanceof TrackedIdentityError) {
-            skipped.push({ zone: z, reason: e.message });
-          } else {
-            skipped.push({ zone: z, reason: (e as Error).message });
+          const idx = await storage.readSectionIndex(
+            h,
+            z,
+            identity ? { identity } : undefined,
+          );
+          for (const r of idx) {
+            sections.push({
+              zone: z,
+              id: r.section_id,
+              title: r.title ?? null,
+              title_hidden: r.title_hidden,
+              gamma_ref: r.gamma_ref,
+              tags: [...(r.tags ?? [])],
+            });
           }
+        } catch (e) {
+          skipped.push({ zone: z, reason: (e as Error).message });
         }
       }
       return ok({ handle: h, tracked, sections, skipped });
@@ -298,27 +296,83 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
     async ({ handle, zone, sectionId }) => {
       const h = await resolveHandle(storage, handle);
-      // Short-circuit encrypted zones on a tracked identity with an explicit
-      // message — the on-disk ciphertext cannot be read without the sphere key,
-      // so there's no point trying and surfacing a generic decryption error.
-      if ((await storage.isTrackedIdentity(h)) && zone !== "public") {
+      const tracked = await storage.isTrackedIdentity(h);
+      const identity = await loadReadIdentity(storage, h, tracked);
+      // v0.3: fetch ONLY this section's blob (no whole-zone decryption).
+      const [res] = await storage.readSections(h, [sectionId], {
+        zone,
+        ...(identity ? { identity } : {}),
+      });
+      if (!res || !res.accessible || !res.section) {
         throw new Error(
-          `cannot read section in ${zone} zone of "${h}": identity is tracked-only ` +
-            `(no sphere key on disk). Only the public zone is readable.`,
+          res?.reason ??
+            `section ${sectionId} not found in zone ${zone}` +
+              (tracked && zone !== "public"
+                ? ` (identity is tracked-only — no sphere key for ${zone})`
+                : ""),
         );
       }
-      const doc = await readZone(storage, h, zone);
-      const section = doc.sections.find((s) => s.id === sectionId);
-      if (!section) {
-        throw new Error(`section ${sectionId} not found in zone ${zone}`);
-      }
       return ok({
-        zone,
-        id: section.id,
-        title: section.title,
-        tags: section.tags ?? [],
-        gamma_ref: section.gamma_ref,
-        body: section.body,
+        zone: res.zone,
+        id: res.section.id,
+        title: res.section.title,
+        tags: res.section.tags ?? [],
+        gamma_ref: res.section.gamma_ref,
+        body: res.section.body,
+      });
+    },
+  );
+
+  server.registerTool(
+    "aithos_ethos_read_sections",
+    {
+      title: "Read several sections by id",
+      description:
+        "Fetches one or more sections by id in a single call, decrypting ONLY " +
+        "those sections (not the whole zone). Ids are located across all zones " +
+        "unless `zone` restricts the search. Each result reports whether it was " +
+        "accessible; inaccessible ids (unknown, or no key) carry a `reason`.",
+      inputSchema: {
+        handle: z.string().optional(),
+        sectionIds: z
+          .array(z.string())
+          .min(1)
+          .describe("Section ids to fetch (sec_<hex>)."),
+        zone: z
+          .enum(SPHERE_FRAGMENTS)
+          .optional()
+          .describe("Restrict the lookup to a single zone (default: all zones)."),
+      },
+    },
+    async ({ handle, sectionIds, zone }) => {
+      const h = await resolveHandle(storage, handle);
+      const tracked = await storage.isTrackedIdentity(h);
+      const identity = await loadReadIdentity(storage, h, tracked);
+      const results = await storage.readSections(h, sectionIds, {
+        ...(zone ? { zone } : {}),
+        ...(identity ? { identity } : {}),
+      });
+      return ok({
+        handle: h,
+        tracked,
+        sections: results.map((r) =>
+          r.accessible && r.section
+            ? {
+                zone: r.zone,
+                id: r.section.id,
+                accessible: true as const,
+                title: r.section.title,
+                tags: r.section.tags ?? [],
+                gamma_ref: r.section.gamma_ref,
+                body: r.section.body,
+              }
+            : {
+                zone: r.zone,
+                id: r.section_id,
+                accessible: false as const,
+                reason: r.reason ?? "inaccessible",
+              },
+        ),
       });
     },
   );
@@ -659,20 +713,31 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         throw new Error(`malformed uri: ${uri.href}`);
       }
       if (zone === "public") {
-        const bytes = await storage.readZoneBytes(handle, zone);
-        return {
-          contents: [
-            {
-              uri: uri.href,
-              mimeType: "text/markdown",
-              text: new TextDecoder("utf-8").decode(bytes),
-            },
-          ],
-        };
+        // v0.2: the public zone is a single markdown file. v0.3: there is no
+        // single blob, so re-render the zone from its per-section docs.
+        try {
+          const bytes = await storage.readZoneBytes(handle, zone);
+          return {
+            contents: [
+              { uri: uri.href, mimeType: "text/markdown", text: new TextDecoder("utf-8").decode(bytes) },
+            ],
+          };
+        } catch {
+          const manifest = await storage.readManifest(handle);
+          const doc = await storage.readZoneDoc(handle, zone, { manifest });
+          const { renderZoneMarkdown } = await import("@aithos/protocol-core");
+          const md = renderZoneMarkdown(zone, doc, {
+            subjectDid: manifest.subject_did,
+            subjectHandle: handle,
+            editionVersion: manifest.edition.version,
+            createdAt: manifest.edition.created_at,
+          });
+          return { contents: [{ uri: uri.href, mimeType: "text/markdown", text: md }] };
+        }
       }
-      // For encrypted zones, try to decrypt with a local identity. If we don't
-      // have one, return the ciphertext blob — useful for synchronisation
-      // agents that never need plaintext.
+      // For encrypted zones, decrypt with a local identity and re-render. Without
+      // a key, fall back to the raw ciphertext (v0.2 sync agents); a v0.3
+      // per-section ethos has no single zone blob, so report that instead.
       try {
         const identity = await storage.loadIdentity(handle);
         const manifest = await storage.readManifest(handle);
@@ -698,16 +763,31 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           ],
         };
       } catch {
-        const bytes = await storage.readZoneBytes(handle, zone);
-        return {
-          contents: [
-            {
-              uri: uri.href,
-              mimeType: "application/octet-stream",
-              blob: Buffer.from(bytes).toString("base64"),
-            },
-          ],
-        };
+        try {
+          const bytes = await storage.readZoneBytes(handle, zone);
+          return {
+            contents: [
+              {
+                uri: uri.href,
+                mimeType: "application/octet-stream",
+                blob: Buffer.from(bytes).toString("base64"),
+              },
+            ],
+          };
+        } catch {
+          return {
+            contents: [
+              {
+                uri: uri.href,
+                mimeType: "text/plain",
+                text:
+                  `Zone "${zone}" of "${handle}" is encrypted and no sphere key is available. ` +
+                  `For a v0.3 per-section ethos, read individual sections by id ` +
+                  `(aithos_ethos_read_sections); there is no single zone blob.`,
+              },
+            ],
+          };
+        }
       }
     },
   );

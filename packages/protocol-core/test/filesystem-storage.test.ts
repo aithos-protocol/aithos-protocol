@@ -192,6 +192,70 @@ describe("FilesystemStorage — verification", () => {
   });
 });
 
+describe("FilesystemStorage — v0.3 per-section reads", () => {
+  test("readSectionIndex (entitlement) + readSections (by id, multi) + write guard", async () => {
+    const dir = freshKeystore();
+    try {
+      const core = await loadCore();
+      const handle = uniqueHandle();
+      const alice = core.createIdentity(handle, "Alice");
+      core.writeIdentityToDisk(alice);
+
+      // A v0.3 (per-section) keystore with one circle + two self sections.
+      core.initKeystoreV03({ handle, identity: alice });
+      core.keystoreEditSection({ handle, author: alice, zone: "circle", sectionId: "sec_rate", change: { title: "Rate", body: "1200" } });
+      core.keystoreEditSection({ handle, author: alice, zone: "self", sectionId: "sec_routine", change: { title: "Routine", body: "6h", tags: ["am"] } });
+      core.keystoreEditSection({ handle, author: alice, zone: "self", sectionId: "sec_goals", change: { title: "Goals", body: "ship v0.3" } });
+
+      const fs = new core.FilesystemStorage();
+
+      // --- index: owner sees self titles; host (no key) sees them hidden ------
+      const selfOwner = await fs.readSectionIndex(handle, "self", { identity: alice });
+      assert.deepEqual(selfOwner.map((r) => r.title).sort(), ["Goals", "Routine"]);
+      assert.ok(selfOwner.every((r) => !r.title_hidden && r.gamma_ref.startsWith("gamma_")));
+
+      const selfHost = await fs.readSectionIndex(handle, "self");
+      assert.ok(selfHost.every((r) => r.title_hidden && r.title === undefined), "self titles hidden without key");
+
+      // circle index is clear: titles visible even without a key.
+      const circleHost = await fs.readSectionIndex(handle, "circle");
+      assert.deepEqual(circleHost.map((r) => r.title), ["Rate"]);
+      assert.ok(!circleHost[0].title_hidden);
+
+      // --- readSections: multi-id, zone-agnostic locate ----------------------
+      const got = await fs.readSections(handle, ["sec_goals", "sec_rate", "sec_routine"], { identity: alice });
+      assert.equal(got.length, 3);
+      assert.ok(got.every((r) => r.accessible));
+      const byId = new Map(got.map((r) => [r.section_id, r]));
+      assert.equal(byId.get("sec_goals")!.zone, "self");
+      assert.equal(byId.get("sec_rate")!.zone, "circle");
+      assert.equal(byId.get("sec_routine")!.section!.body, "6h");
+      assert.deepEqual([...(byId.get("sec_routine")!.section!.tags ?? [])], ["am"]);
+
+      // unknown id → not accessible; self id without a key → not accessible.
+      const miss = await fs.readSections(handle, ["sec_nope"], { identity: alice });
+      assert.equal(miss[0].accessible, false);
+      const noKey = await fs.readSections(handle, ["sec_routine"]);
+      assert.equal(noKey[0].accessible, false);
+
+      // --- readZoneDoc + verify still work on v0.3 ---------------------------
+      const doc = await fs.readZoneDoc(handle, "self", { identity: alice });
+      assert.equal(doc.sections.length, 2);
+      const didDoc = await fs.loadDidDocument(handle);
+      const v = await fs.verifyEthos(handle, alice, didDoc);
+      assert.equal(v.ok, true, `errors: ${v.errors.join("; ")}`);
+
+      // --- writes through the storage surface are guarded on v0.3 -----------
+      await assert.rejects(
+        fs.addSection({ handle, zone: "self", title: "x", body: "y" }, { identity: alice }),
+        /not yet wired/,
+      );
+    } finally {
+      cleanupKeystore(dir);
+    }
+  });
+});
+
 describe("FilesystemStorage — mandate reads", () => {
   test("findRevocation returns null when none exists", async () => {
     const dir = freshKeystore();

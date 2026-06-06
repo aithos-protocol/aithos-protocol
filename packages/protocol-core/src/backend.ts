@@ -52,6 +52,7 @@ import type {
 import type {
   Manifest,
   ZoneDoc,
+  Section,
   AddSectionArgs,
   ModifySectionArgs,
   DelegateSigner,
@@ -102,6 +103,43 @@ export interface SectionWriteResult {
   };
   readonly manifest: Manifest;
   readonly gammaEntry: GammaEntry;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Per-section read shapes (v0.3)                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One row of a zone's section index — id + title + provenance, WITHOUT the
+ * body. For the encrypted `self` index, `title` is present only when the reader
+ * is entitled to that section (otherwise `title_hidden` is true and `title` is
+ * omitted), exactly as a keyless host sees it. This is the cheap discovery
+ * surface: fetch the index, then fetch the bodies you actually need by id.
+ */
+export interface SectionIndexEntry {
+  readonly section_id: string;
+  readonly title?: string;
+  readonly tags?: readonly string[];
+  readonly title_hidden: boolean;
+  readonly gamma_ref: string;
+}
+
+/**
+ * Result of a per-id section fetch. `accessible` is false (with a `reason`) when
+ * the section is absent or the reader is not a recipient of its DEK.
+ */
+export interface SectionFetchResult {
+  readonly zone: Sphere;
+  readonly section_id: string;
+  readonly accessible: boolean;
+  readonly section?: Section;
+  readonly reason?: string;
+}
+
+/** Options for the per-section reads: a subject identity enables decryption. */
+export interface SectionReadOpts {
+  identity?: Identity;
+  manifest?: Manifest;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -172,6 +210,36 @@ export interface AithosStorage {
    * the raw artefact without interpreting it.
    */
   readZoneBytes(handle: string, zone: Sphere): Promise<Uint8Array>;
+
+  /* -------- ethos domain (per-section reads, v0.3) --------------------- */
+
+  /**
+   * The section index of a zone: id + title + gamma_ref per section, WITHOUT
+   * decrypting any body. For the encrypted `self` index, titles appear only for
+   * sections the reader is entitled to (see {@link SectionIndexEntry}); pass an
+   * `identity` in `opts` to decrypt the index. This is the discovery surface a
+   * host fetches first, then it reads only the bodies it needs by id.
+   *
+   * On a v0.2 (monolithic) install the whole zone is decrypted internally to
+   * synthesize the index — the cost win is a v0.3 property.
+   */
+  readSectionIndex(
+    handle: string,
+    zone: Sphere,
+    opts?: SectionReadOpts,
+  ): Promise<SectionIndexEntry[]>;
+
+  /**
+   * Fetch one or more sections by id, decrypting ONLY those blobs (the v0.3
+   * payoff — no full-zone decryption). Ids are located across all zones (or the
+   * single zone in `opts.zone`); each result reports whether it was accessible.
+   * Order matches the input `ids`.
+   */
+  readSections(
+    handle: string,
+    ids: string[],
+    opts?: SectionReadOpts & { zone?: Sphere },
+  ): Promise<SectionFetchResult[]>;
 
   /* -------- ethos domain (writes) -------------------------------------- */
 

@@ -31,6 +31,16 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`autoMigrateKeystoreIfDefault`** — migrate a v0.2 keystore to v0.3 on the
   owner write path when v0.3 is the default; no-op for delegates, already-v0.3
   installs, or when opted out.
+- **Per-section reads on `AithosStorage`** (the future PDS contract):
+  `readSectionIndex(handle, zone)` returns id + title + `gamma_ref` per section
+  WITHOUT decrypting any body (self titles appear only with the owner key —
+  `SectionIndexEntry`), and `readSections(handle, ids[])` fetches one or more
+  sections by id decrypting ONLY those blobs, locating ids across zones
+  (`SectionFetchResult`). `FilesystemStorage` is now v0.3-aware across
+  `readZoneDoc` / `verifyEthos` / the new per-section reads, with the v0.2 path
+  kept as a fallback (it decrypts the whole zone, as before). Writes through the
+  storage surface are guarded on v0.3 pending the gamma-v0.3 log append (the CLI
+  `add/modify/delete-section` already write per-section editions directly).
 - The v0.2 → v0.3 migration now **carries the gamma deep-memory log and its
   signed anchor forward unchanged** (no historical re-encryption — §3.10.4′).
 

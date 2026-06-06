@@ -20,8 +20,15 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { AithosStorage, WriteAuth, SectionWriteResult } from "./backend.js";
-import type { Sphere } from "./did.js";
+import type {
+  AithosStorage,
+  WriteAuth,
+  SectionWriteResult,
+  SectionIndexEntry,
+  SectionFetchResult,
+  SectionReadOpts,
+} from "./backend.js";
+import { type Sphere, SPHERE_FRAGMENTS } from "./did.js";
 import {
   type DidDocument,
   type Identity,
@@ -32,17 +39,30 @@ import {
 } from "./identity.js";
 import {
   addSection as coreAddSection,
+  ethosDir,
+  ethosHistoryDir,
   ethosZoneFile,
+  keystoreDelegateResolver,
   loadZoneDoc,
   modifySection as coreModifySection,
   readManifest,
+  subjectRecipientFor,
   verifyEthos,
   type AddSectionArgs as CoreAddSectionArgs,
   type Manifest,
   type ModifySectionArgs as CoreModifySectionArgs,
+  type Section,
   type VerifyEthosResult,
   type ZoneDoc,
 } from "./ethos.js";
+import { isV03Keystore } from "./keystore-v3.js";
+import {
+  readSection,
+  readZoneIndex,
+  verifyBundleV03Dir,
+  type ManifestV03,
+  type SectionReader,
+} from "./bundle-v03.js";
 import { type Mandate, type Revocation } from "./mandate.js";
 import { findRevocation, loadMandate } from "./mandate-store.js";
 import {
@@ -95,11 +115,127 @@ export class FilesystemStorage implements AithosStorage {
     zone: Sphere,
     opts?: { identity?: Identity; manifest?: Manifest },
   ): Promise<ZoneDoc> {
+    if (isV03Keystore(handle)) {
+      const m = v03Manifest(handle);
+      const zm = m.zones[zone];
+      if (!zm) return { sections: [] };
+      const reader = zoneReader(opts?.identity, zone);
+      const sections: Section[] = [];
+      for (const desc of zm.sections) {
+        const res = readSection(ethosDir(handle), zm, desc, m.subject_did, reader);
+        if (res.accessible && res.section) sections.push(res.section);
+      }
+      return { sections };
+    }
     return loadZoneDoc(handle, zone, opts?.identity, opts?.manifest);
   }
 
   async readZoneBytes(handle: string, zone: Sphere): Promise<Uint8Array> {
+    if (isV03Keystore(handle)) {
+      throw new Error(
+        `readZoneBytes: "${handle}" is a v0.3 per-section ethos — there is no single ` +
+          `zone blob. Use readSectionIndex / readSections to fetch sections by id.`,
+      );
+    }
     return new Uint8Array(fs.readFileSync(ethosZoneFile(handle, zone)));
+  }
+
+  /* -------- ethos domain (per-section reads, v0.3) --------------------- */
+
+  async readSectionIndex(
+    handle: string,
+    zone: Sphere,
+    opts?: SectionReadOpts,
+  ): Promise<SectionIndexEntry[]> {
+    if (isV03Keystore(handle)) {
+      const m = v03Manifest(handle);
+      const zm = m.zones[zone];
+      if (!zm) return [];
+      const rows = readZoneIndex(zone, zm, m.subject_did, zoneReader(opts?.identity, zone));
+      return rows.map((r) => {
+        const desc = zm.sections.find((s) => s.section_id === r.section_id);
+        return {
+          section_id: r.section_id,
+          ...(r.title !== undefined ? { title: r.title } : {}),
+          ...(r.tags ? { tags: r.tags } : {}),
+          title_hidden: r.title_hidden,
+          gamma_ref: desc?.gamma_ref ?? "",
+        };
+      });
+    }
+    // v0.2 fallback: the monolithic zone has no clear index, so we decrypt the
+    // whole zone (requires the identity for circle/self) to synthesize one.
+    const doc = await this.readZoneDoc(handle, zone, opts);
+    return doc.sections.map((s) => ({
+      section_id: s.id,
+      title: s.title,
+      ...(s.tags ? { tags: s.tags } : {}),
+      title_hidden: false,
+      gamma_ref: s.gamma_ref,
+    }));
+  }
+
+  async readSections(
+    handle: string,
+    ids: string[],
+    opts?: SectionReadOpts & { zone?: Sphere },
+  ): Promise<SectionFetchResult[]> {
+    const zones: Sphere[] = opts?.zone ? [opts.zone] : [...SPHERE_FRAGMENTS];
+
+    if (isV03Keystore(handle)) {
+      const m = v03Manifest(handle);
+      const dir = ethosDir(handle);
+      return ids.map((id) => {
+        let zone: Sphere | null = null;
+        for (const z of zones) {
+          if (m.zones[z]?.sections.some((s) => s.section_id === id)) {
+            zone = z;
+            break;
+          }
+        }
+        if (!zone) {
+          return { zone: opts?.zone ?? "public", section_id: id, accessible: false, reason: "not found in manifest" };
+        }
+        const zm = m.zones[zone];
+        const desc = zm.sections.find((s) => s.section_id === id)!;
+        const res = readSection(dir, zm, desc, m.subject_did, zoneReader(opts?.identity, zone));
+        return res.accessible && res.section
+          ? { zone, section_id: id, accessible: true, section: res.section }
+          : { zone, section_id: id, accessible: false, reason: res.reason };
+      });
+    }
+
+    // v0.2 fallback: decrypt each needed zone once, then locate the ids.
+    const cache = new Map<Sphere, Section[]>();
+    const loadZone = async (z: Sphere): Promise<Section[]> => {
+      const hit = cache.get(z);
+      if (hit) return hit;
+      let secs: Section[] = [];
+      try {
+        secs = (await this.readZoneDoc(handle, z, opts)).sections;
+      } catch {
+        secs = [];
+      }
+      cache.set(z, secs);
+      return secs;
+    };
+    const out: SectionFetchResult[] = [];
+    for (const id of ids) {
+      let found: { zone: Sphere; section: Section } | null = null;
+      for (const z of zones) {
+        const s = (await loadZone(z)).find((x) => x.id === id);
+        if (s) {
+          found = { zone: z, section: s };
+          break;
+        }
+      }
+      out.push(
+        found
+          ? { zone: found.zone, section_id: id, accessible: true, section: found.section }
+          : { zone: opts?.zone ?? "public", section_id: id, accessible: false, reason: "not found" },
+      );
+    }
+    return out;
   }
 
   /* -------- ethos domain (writes) -------------------------------------- */
@@ -108,6 +244,7 @@ export class FilesystemStorage implements AithosStorage {
     args: Omit<CoreAddSectionArgs, "identity" | "author" | "delegate">,
     auth: WriteAuth,
   ): Promise<SectionWriteResult> {
+    if (isV03Keystore(args.handle)) throw new Error(v03WriteUnsupported(args.handle));
     const identity = requireIdentity(auth, "addSection");
     const result = coreAddSection({
       ...args,
@@ -121,6 +258,7 @@ export class FilesystemStorage implements AithosStorage {
     args: Omit<CoreModifySectionArgs, "identity" | "author" | "delegate">,
     auth: WriteAuth,
   ): Promise<SectionWriteResult> {
+    if (isV03Keystore(args.handle)) throw new Error(v03WriteUnsupported(args.handle));
     const identity = requireIdentity(auth, "modifySection");
     const result = coreModifySection({
       ...args,
@@ -137,6 +275,29 @@ export class FilesystemStorage implements AithosStorage {
     identity: Identity | null,
     didDoc: DidDocument,
   ): Promise<VerifyEthosResult> {
+    if (isV03Keystore(handle)) {
+      const readers: SectionReader[] = [];
+      if (identity) {
+        for (const z of ["circle", "self"] as const) {
+          const r = subjectRecipientFor(identity, z);
+          readers.push({ didUrl: r.did, x25519Secret: r.x25519Secret });
+        }
+      }
+      const dir = ethosDir(handle);
+      const cur = v03Manifest(handle);
+      let predecessorManifest: ManifestV03 | undefined;
+      if (cur.edition.supersedes) {
+        const pv = cur.edition.supersedes.split(":").pop();
+        const pp = path.join(ethosHistoryDir(handle), `${pv}.manifest.json`);
+        if (pv && fs.existsSync(pp)) predecessorManifest = readJson<ManifestV03>(pp);
+      }
+      const r = verifyBundleV03Dir(dir, {
+        readers,
+        resolveDelegatePubkey: keystoreDelegateResolver(didDoc),
+        ...(predecessorManifest ? { predecessorManifest } : {}),
+      });
+      return { ok: r.ok, errors: r.errors, warnings: r.warnings };
+    }
     return verifyEthos(handle, identity, didDoc);
   }
 
@@ -160,6 +321,28 @@ export class FilesystemStorage implements AithosStorage {
 /* -------------------------------------------------------------------------- */
 /*  internals                                                                 */
 /* -------------------------------------------------------------------------- */
+
+/** Read the v0.3 keystore manifest (per-section). */
+function v03Manifest(handle: string): ManifestV03 {
+  return readJson<ManifestV03>(path.join(ethosDir(handle), "manifest.json"));
+}
+
+/** Derive the per-section decrypt reader for an encrypted zone from the owner identity. */
+function zoneReader(identity: Identity | undefined, zone: Sphere): SectionReader | undefined {
+  if (zone === "public" || !identity) return undefined;
+  const r = subjectRecipientFor(identity, zone as "circle" | "self");
+  return { didUrl: r.did, x25519Secret: r.x25519Secret };
+}
+
+/** Message for the not-yet-wired v0.3 write path through the storage surface. */
+function v03WriteUnsupported(handle: string): string {
+  return (
+    `FilesystemStorage: writes to the v0.3 per-section ethos "${handle}" are not yet ` +
+    `wired through this surface (the signed gamma-log append for v0.3 lands with the ` +
+    `gamma-v0.3 work). Use the CLI \`aithos ethos add-section/modify-section\`, which ` +
+    `writes per-section editions directly. Reads (index + by-id) are fully supported.`
+  );
+}
 
 function requireIdentity(auth: WriteAuth, op: string): Identity {
   if (!auth.identity) {
