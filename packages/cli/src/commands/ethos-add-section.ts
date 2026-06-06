@@ -28,6 +28,7 @@ import {
   newSectionId,
 } from "@aithos/protocol-core";
 import { resolveAuthor } from "./_author.js";
+import { autoMigrateOwnerWrite } from "./_format.js";
 
 export interface EthosAddSectionOpts {
   zone: string;
@@ -60,6 +61,12 @@ export function runEthosAddSection(opts: EthosAddSectionOpts): void {
     mandate: opts.mandate,
     agentKey: opts.agentKey,
   });
+
+  // Default flip (lot 4b-3): the first owner write upgrades a v0.2 keystore to
+  // the per-section format. Delegates and `AITHOS_FORMAT=v0.2` skip this.
+  if (autoMigrateOwnerWrite(handle, Boolean(opts.mandate))) {
+    console.error(`[handle=${handle}] Ethos auto-migrated to v0.3 (per-section); prior v0.2 edition archived in history/.`);
+  }
 
   // v0.3-native keystore: write a per-section edition via the v0.3 helpers.
   if (isV03Keystore(handle)) {

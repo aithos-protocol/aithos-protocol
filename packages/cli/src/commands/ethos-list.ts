@@ -18,13 +18,20 @@ import {
   isTrackedIdentity,
   TrackedIdentityError,
   ethosDir,
+  ethosManifestPath,
   loadZoneDoc,
   readManifest,
   readGammaLog,
   latestGammaForSection,
+  isV03Keystore,
+  readBundleSections,
+  readZoneIndex,
+  readJson,
+  SPHERE_FRAGMENTS,
   type Sphere,
   type GammaEntry,
   type Identity,
+  type ManifestV03,
   loadConfig,
 } from "@aithos/protocol-core";
 
@@ -60,6 +67,12 @@ export function runEthosList(opts: EthosListOpts): void {
   // Tracked identities can only load the public zone; circle/self are encrypted
   // and we don't hold the sphere secrets to decrypt them.
   const identity = tracked ? null : loadIdentity(handle);
+
+  // v0.3-native keystore: rows come from the per-section layout.
+  if (isV03Keystore(handle)) {
+    return runListV03(handle, identity, tracked, opts);
+  }
+
   const manifest = readManifest(handle);
 
   // Pull the gamma log once when we have the identity; we'll look up each
@@ -107,6 +120,74 @@ export function runEthosList(opts: EthosListOpts): void {
     }
   }
 
+  renderListing(handle, tracked, opts, rows, skipped);
+}
+
+/**
+ * Build the listing for a v0.3 (per-section) keystore. Sections come from the
+ * per-section blobs (decrypted with the owner's keys when available); tracked
+ * installs see only `public`. The gamma `UPDATED`/`[delegated]` columns are
+ * derived from the section descriptors, which don't carry the gamma timestamp,
+ * so `at` shows "—" (the gamma-v0.3 listing join is a later brick).
+ */
+function runListV03(
+  handle: string,
+  identity: Identity | null,
+  tracked: boolean,
+  opts: EthosListOpts,
+): void {
+  const manifest = readJson<ManifestV03>(ethosManifestPath(handle));
+  const subjectDid = manifest.subject_did;
+  const zones: Sphere[] = opts.zone ? [ensureZone(opts.zone)] : [...SPHERE_FRAGMENTS];
+
+  const rows: Row[] = [];
+  const skipped: SkippedZone[] = [];
+
+  // Decrypted sections per zone (owner only). Entitlement filtering is applied
+  // inside readBundleSections; a tracked install can't decrypt circle/self.
+  const decoded = identity ? readBundleSections(ethosDir(handle), identity) : null;
+
+  for (const z of zones) {
+    const zm = manifest.zones?.[z];
+    if (!zm) continue;
+    if (z !== "public" && !identity) {
+      skipped.push({ zone: z, reason: "encrypted — no sphere key (identity is tracked-only)" });
+      continue;
+    }
+    if (decoded) {
+      for (const s of decoded[z]) {
+        rows.push({ zone: z, id: s.id, title: s.title, gamma_ref: s.gamma_ref, at: "—", delegated: false });
+      }
+    } else {
+      // Tracked + public: the index is clear, so titles + gamma_ref come
+      // straight off the section descriptors — no decryption needed.
+      const titles = new Map(
+        readZoneIndex(z, zm, subjectDid, undefined).map((r) => [r.section_id, r.title]),
+      );
+      for (const d of zm.sections) {
+        rows.push({
+          zone: z,
+          id: d.section_id,
+          title: titles.get(d.section_id) ?? "[hidden — need key]",
+          gamma_ref: d.gamma_ref,
+          at: "—",
+          delegated: false,
+        });
+      }
+    }
+  }
+
+  renderListing(handle, tracked, opts, rows, skipped);
+}
+
+/** Shared JSON + table renderer for both the v0.2 and v0.3 listing paths. */
+function renderListing(
+  handle: string,
+  tracked: boolean,
+  opts: EthosListOpts,
+  rows: Row[],
+  skipped: SkippedZone[],
+): void {
   if (opts.json) {
     console.log(JSON.stringify({ rows, skipped, tracked }, null, 2));
     return;

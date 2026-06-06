@@ -36,11 +36,15 @@ interface VerifyJson {
 describe("aithos ethos migrate-to-v0.3 (CLI e2e)", () => {
   test("migrates a v0.2 ethos into a verifiable v0.3 per-section bundle", () => {
     const home = freshHome();
+    // Seed a v0.2 ethos explicitly — this scenario tests the v0.2 → v0.3
+    // migration path for existing installs (the default for fresh installs is
+    // now v0.3, so we pin the legacy format for the seeding commands).
+    const v02 = { home, env: { AITHOS_FORMAT: "v0.2" } };
     try {
-      runCli(["init", "--handle", "alice", "--display-name", "Alice"], { home });
-      runCli(["ethos", "add-section", "--handle", "alice", "--zone", "public", "--title", "Bio", "--body", "Public bio."], { home });
-      runCli(["ethos", "add-section", "--handle", "alice", "--zone", "circle", "--title", "Day rate", "--body", "1200/day."], { home });
-      runCli(["ethos", "add-section", "--handle", "alice", "--zone", "self", "--title", "Routine", "--body", "Up at six."], { home });
+      runCli(["init", "--handle", "alice", "--display-name", "Alice"], v02);
+      runCli(["ethos", "add-section", "--handle", "alice", "--zone", "public", "--title", "Bio", "--body", "Public bio."], v02);
+      runCli(["ethos", "add-section", "--handle", "alice", "--zone", "circle", "--title", "Day rate", "--body", "1200/day."], v02);
+      runCli(["ethos", "add-section", "--handle", "alice", "--zone", "self", "--title", "Routine", "--body", "Up at six."], v02);
 
       const out = join(home, "alice-v03");
       const mig = runCliJson<MigrateJson>(

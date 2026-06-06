@@ -1,6 +1,6 @@
-# Draft · Section-level mandates (v0.3 companion)
+# Section-level mandates (v0.3 companion) (Promoted)
 
-> **Status:** Draft. Companion to `bundle-v0.3-per-section-encryption.md`. Defines the mandate vocabulary that lets an agent be a recipient of a **subset** of a zone's sections, rather than the whole zone. Not yet normative.
+> **Status:** **Promoted — normative as of protocol-core 0.8.0.** Companion to `bundle-v0.3-per-section-encryption.md`. Defines the mandate vocabulary that lets an agent be a recipient of a **subset** of a zone's sections, rather than the whole zone.
 >
 > **Scope.** This draft extends chapter 4 (mandates) with an optional `section_scope` and §3.5′ (recipients) with per-section recipient derivation. It depends on the per-section bundle format (`bundle-v0.3-per-section-encryption.md`) and the delegate-authoring model (manifest `authorized_by`, §3.8′ #5).
 

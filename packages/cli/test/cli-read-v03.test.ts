@@ -36,11 +36,15 @@ interface ReadJson {
 describe("aithos ethos read (CLI e2e — encrypted self index)", () => {
   test("host sees circle titles but not self; owner decrypts + reads by id array", () => {
     const home = freshHome();
+    // Seed a v0.2 ethos, then exercise the v0.3 read surface over the bundle
+    // produced by `migrate-to-v0.3` (fresh installs now default to v0.3, so the
+    // seeding commands pin the legacy format).
+    const v02 = { home, env: { AITHOS_FORMAT: "v0.2" } };
     try {
-      runCli(["init", "--handle", "demo", "--display-name", "Demo"], { home });
-      runCli(["ethos", "add-section", "--handle", "demo", "--zone", "circle", "--title", "Tarif jour", "--body", "1200 EUR/jour."], { home });
-      runCli(["ethos", "add-section", "--handle", "demo", "--zone", "self", "--title", "Routine", "--body", "Lever 6h."], { home });
-      runCli(["ethos", "add-section", "--handle", "demo", "--zone", "self", "--title", "Objectifs", "--body", "Lancer v0.3."], { home });
+      runCli(["init", "--handle", "demo", "--display-name", "Demo"], v02);
+      runCli(["ethos", "add-section", "--handle", "demo", "--zone", "circle", "--title", "Tarif jour", "--body", "1200 EUR/jour."], v02);
+      runCli(["ethos", "add-section", "--handle", "demo", "--zone", "self", "--title", "Routine", "--body", "Lever 6h."], v02);
+      runCli(["ethos", "add-section", "--handle", "demo", "--zone", "self", "--title", "Objectifs", "--body", "Lancer v0.3."], v02);
 
       const bundle = join(home, "demo-v03");
       runCli(["ethos", "migrate-to-v0.3", "--handle", "demo", "--out", bundle], { home });

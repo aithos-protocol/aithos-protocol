@@ -7,6 +7,41 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-06
+
+### Changed
+
+- **v0.3 (per-section) is now the default on-disk write format.** A fresh ethos
+  is created as a v0.3 bundle, and an existing v0.2 keystore migrates in place to
+  v0.3 on its first owner write. v0.2 bundles remain fully readable and
+  verifiable (compat path of §3.10.2′). Set `AITHOS_FORMAT=v0.2` to opt a fresh
+  install back into the legacy monolithic layout and suppress auto-migration.
+  New `defaultWriteFormat()` / `WriteFormat`.
+
+### Added
+
+- **Keystore-native v0.3** (`keystore-v3.ts`): the live ethos dir can now *be* a
+  v0.3 bundle. `migrateKeystoreInPlace` converts a v0.2 keystore to per-section
+  in place (prior v0.2 manifest archived under `history/`); `keystoreEditSection`
+  adds/modifies/deletes a single section by re-encrypting only that blob and
+  swapping the edition; `keystoreReadSectionsV03` reads it back. `isV03Keystore` /
+  `keystoreEthosVersion` discriminate the installed format.
+- **`initKeystoreV03`** — author a fresh, empty v0.3 ethos (edition height 1, no
+  predecessor) directly into the keystore.
+- **`autoMigrateKeystoreIfDefault`** — migrate a v0.2 keystore to v0.3 on the
+  owner write path when v0.3 is the default; no-op for delegates, already-v0.3
+  installs, or when opted out.
+- The v0.2 → v0.3 migration now **carries the gamma deep-memory log and its
+  signed anchor forward unchanged** (no historical re-encryption — §3.10.4′).
+
+### Notes
+
+- Auto-migration is owner-only: a delegate writing to a still-v0.2 tracked
+  install keeps using the v0.2 path (it holds no sphere key to re-encrypt with),
+  until the owner upgrades the install.
+- The two `bundle-v0.3-*` spec drafts are promoted to normative with this
+  release; §3 now declares v0.3 the default and v0.2 the readable legacy format.
+
 ## [0.7.0] — 2026-06-06
 
 ### Added

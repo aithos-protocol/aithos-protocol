@@ -1,5 +1,19 @@
 # 3 · Bundle — the `.ethos` container
 
+> **Format status (protocol-core 0.8.0).** The **default on-disk format is now
+> v0.3 (per-section)**: each zone is split into independently-addressed
+> per-section blobs (`public/<id>.md` plaintext, `circle|self/<id>.enc`
+> ciphertext under a fresh per-section DEK), the `self` index is encrypted via
+> per-section `title_cipher`, and editing one section costs O(section) instead
+> of O(zone). v0.3 is specified normatively by the two promoted drafts
+> [`bundle-v0.3-per-section-encryption.md`](./drafts/bundle-v0.3-per-section-encryption.md)
+> and [`bundle-v0.3-section-level-mandates.md`](./drafts/bundle-v0.3-section-level-mandates.md),
+> whose `§3.x′` sections amend the corresponding `§3.x` below. The **v0.2
+> monolithic format described in the rest of this chapter remains fully
+> readable and verifiable** (compat path §3.10.2′) and can be re-selected for a
+> fresh install with `AITHOS_FORMAT=v0.2`. A v0.3 runtime detects the format
+> from the manifest `aithos` marker (`0.2.x` vs `0.3.0`, §3.10.1′).
+
 ## 3.1 Overview
 
 A bundle is a **ZIP archive** (PKZIP) with the `.ethos` extension. It carries one ethos edition (chapter 2), its encrypted zones, the signed DID document, and a manifest that glues them together.

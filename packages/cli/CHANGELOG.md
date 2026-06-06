@@ -5,6 +5,22 @@ All notable changes to the Aithos reference CLI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-06-06
+
+### Changed
+- **v0.3 (per-section) is now the default on-disk format.** `aithos init` /
+  `aithos ethos init` create a v0.3 ethos, and the first owner `add/modify/
+  delete-section` on an existing v0.2 keystore auto-migrates it in place to v0.3
+  (the prior edition is archived under `history/`, and a one-line notice is
+  printed to stderr). v0.2 installs stay readable. Set `AITHOS_FORMAT=v0.2` to
+  keep a fresh install on the legacy format and suppress auto-migration.
+- `aithos ethos pack`, `verify --handle`, and `list` now dispatch to the v0.3
+  per-section path when the installed ethos is v0.3 (so they keep working on the
+  new default); `init` reports the on-disk `Format:` line.
+- **`aithos ethos migrate-to-v0.3 --in-place`** converts the live keystore ethos
+  to v0.3 instead of writing a separate bundle.
+- Requires `@aithos/protocol-core` `^0.8.0`.
+
 ## [0.7.0] — 2026-06-06
 
 ### Added

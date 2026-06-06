@@ -18,6 +18,9 @@ import {
   type Zones,
   loadConfig,
   type Manifest,
+  type ManifestV03,
+  defaultWriteFormat,
+  initKeystoreV03,
 } from "@aithos/protocol-core";
 
 export interface EthosInitOpts {
@@ -30,11 +33,15 @@ export interface EthosInitOpts {
  * Pure primitive — creates the ethos layout and persists the first edition.
  * Throws if an ethos already exists at the target path unless `force` is set.
  * Does not print anything.
+ *
+ * Writes in the default on-disk format ({@link defaultWriteFormat}): v0.3 (an
+ * empty per-section bundle) unless `AITHOS_FORMAT=v0.2` selects the legacy
+ * monolithic layout.
  */
 export function initializeEthos(
   handle: string,
   opts: { force?: boolean } = {},
-): { dir: string; manifest: Manifest } {
+): { dir: string; manifest: Manifest | ManifestV03 } {
   const dir = ethosDir(handle);
   if (existsSync(dir)) {
     if (!opts.force) {
@@ -43,8 +50,14 @@ export function initializeEthos(
     rmSync(dir, { recursive: true, force: true });
   }
 
-  ensureEthosLayout(handle);
   const identity = loadIdentity(handle);
+
+  if (defaultWriteFormat() === "v0.3") {
+    const manifest = initKeystoreV03({ handle, identity });
+    return { dir, manifest };
+  }
+
+  ensureEthosLayout(handle);
   const zones: Zones = {
     public: { sections: [] },
     circle: { sections: [] },
@@ -67,6 +80,7 @@ export function runEthosInit(opts: EthosInitOpts): void {
 
   console.log(`[handle=${handle}] Ethos initialized`);
   console.log(`  Directory:    ${dir}`);
+  console.log(`  Format:       ${manifest.aithos === "0.3.0" ? "v0.3 (per-section)" : "v0.2 (monolithic)"}`);
   console.log(`  Edition:      ${manifest.edition.version} (height=${manifest.edition.height})`);
   console.log(`  Bundle id:    ${manifest.bundle_id}`);
   console.log(`  Zones:        public (clear), circle (encrypted), self (encrypted)`);

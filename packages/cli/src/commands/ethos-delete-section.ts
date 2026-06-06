@@ -26,6 +26,7 @@ import {
   keystoreEditSection,
 } from "@aithos/protocol-core";
 import { resolveAuthor } from "./_author.js";
+import { autoMigrateOwnerWrite } from "./_format.js";
 
 export interface EthosDeleteSectionOpts {
   zone: string;
@@ -52,6 +53,11 @@ export function runEthosDeleteSection(opts: EthosDeleteSectionOpts): void {
     mandate: opts.mandate,
     agentKey: opts.agentKey,
   });
+
+  // Default flip (lot 4b-3): the first owner write upgrades a v0.2 keystore.
+  if (autoMigrateOwnerWrite(handle, Boolean(opts.mandate))) {
+    console.error(`[handle=${handle}] Ethos auto-migrated to v0.3 (per-section); prior v0.2 edition archived in history/.`);
+  }
 
   // v0.3-native keystore: drop the per-section blob in place.
   if (isV03Keystore(handle)) {

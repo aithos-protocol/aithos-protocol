@@ -27,12 +27,20 @@ import {
   loadIdentity,
   isTrackedIdentity,
   ethosDir,
+  ethosHistoryDir,
   verifyEthos,
   verifyBundleAtPath,
+  verifyBundleV03Dir,
+  isV03Keystore,
+  keystoreDelegateResolver,
+  subjectRecipientFor,
   identityDir,
   loadConfig,
   readJson,
   type DidDocument,
+  type Identity,
+  type ManifestV03,
+  type SectionReader,
 } from "@aithos/protocol-core";
 
 export interface EthosVerifyOpts {
@@ -66,6 +74,11 @@ function runVerifyHandle(opts: EthosVerifyOpts): void {
   const tracked = isTrackedIdentity(handle);
   const identity = opts.noDecrypt || tracked ? null : loadIdentity(handle);
 
+  // v0.3-native keystore: verify the per-section bundle in place (§3.8′).
+  if (isV03Keystore(handle)) {
+    return runVerifyHandleV03(handle, identity, didDoc, tracked, opts);
+  }
+
   const result = verifyEthos(handle, identity, didDoc);
 
   if (opts.json) {
@@ -81,6 +94,64 @@ function runVerifyHandle(opts: EthosVerifyOpts): void {
   }
 
   console.log(`[handle=${handle}]${trackedSuffix} ethos: FAILED`);
+  for (const e of result.errors) console.log(`  - ${e}`);
+  for (const w of result.warnings) console.log(`  warning: ${w}`);
+  process.exit(1);
+}
+
+/**
+ * Verify an installed v0.3 (per-section) keystore. Owner readers (when the
+ * identity is available) enable the deep section-decrypt checks; a delegate
+ * resolver lets a delegate-signed manifest verify against the granting mandate.
+ */
+function runVerifyHandleV03(
+  handle: string,
+  identity: Identity | null,
+  didDoc: DidDocument,
+  tracked: boolean,
+  opts: EthosVerifyOpts,
+): void {
+  const readers: SectionReader[] = [];
+  if (identity) {
+    for (const z of ["circle", "self"] as const) {
+      const r = subjectRecipientFor(identity, z);
+      readers.push({ didUrl: r.did, x25519Secret: r.x25519Secret });
+    }
+  }
+
+  // Inter-edition link (§3.8′ #8): load the predecessor manifest from history/
+  // (named `<prev-version>.manifest.json`, derived from the supersedes URN) so
+  // the chain check runs instead of being skipped with a warning.
+  let predecessorManifest: ManifestV03 | undefined;
+  const cur = readJson<ManifestV03>(join(ethosDir(handle), "manifest.json"));
+  if (cur.edition.supersedes) {
+    const prevVersion = cur.edition.supersedes.split(":").pop();
+    const prevPath = join(ethosHistoryDir(handle), `${prevVersion}.manifest.json`);
+    if (prevVersion && existsSync(prevPath)) {
+      predecessorManifest = readJson<ManifestV03>(prevPath);
+    }
+  }
+
+  const result = verifyBundleV03Dir(ethosDir(handle), {
+    readers,
+    resolveDelegatePubkey: keystoreDelegateResolver(didDoc),
+    ...(predecessorManifest ? { predecessorManifest } : {}),
+  });
+
+  if (opts.json) {
+    console.log(JSON.stringify({ mode: "handle", handle, tracked, format: "v0.3", ...result }, null, 2));
+    process.exit(result.ok ? 0 : 1);
+  }
+
+  const trackedSuffix = tracked ? " [tracked — public-only verify]" : "";
+  const skippedSuffix =
+    result.zonesSkipped.length > 0 ? ` [skipped: ${result.zonesSkipped.join(", ")} (encrypted)]` : "";
+  if (result.ok) {
+    console.log(`[handle=${handle}]${trackedSuffix} ethos (v0.3): OK${skippedSuffix}`);
+    for (const w of result.warnings) console.log(`  warning: ${w}`);
+    return;
+  }
+  console.log(`[handle=${handle}]${trackedSuffix} ethos (v0.3): FAILED${skippedSuffix}`);
   for (const e of result.errors) console.log(`  - ${e}`);
   for (const w of result.warnings) console.log(`  warning: ${w}`);
   process.exit(1);

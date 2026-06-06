@@ -34,9 +34,28 @@ import { type Sphere, SPHERE_FRAGMENTS } from "./did.js";
 import { type Identity } from "./identity.js";
 import { type Author } from "./author.js";
 import { type Section } from "./ethos.js";
-import { type ManifestV03 } from "./bundle-v03.js";
+import { type ManifestV03, authorBundleV03 } from "./bundle-v03.js";
 import { migrateBundleV02ToV03, isV02Aithos, readBundleSections } from "./bundle-migrate.js";
 import { editSectionV03, deleteSectionV03, type SectionChange } from "./bundle-edit.js";
+
+/* -------------------------------------------------------------------------- */
+/*  Write-format default (lot 4b-3)                                            */
+/* -------------------------------------------------------------------------- */
+
+/** The on-disk format a NEW edition is written in. */
+export type WriteFormat = "v0.2" | "v0.3";
+
+/**
+ * The default on-disk write format. v0.3 (per-section) is now the default;
+ * set `AITHOS_FORMAT=v0.2` (or `0.2.0`) to opt back into the legacy monolithic
+ * format for a fresh `init` and to suppress auto-migration on the first write.
+ * Any other value (unset, `v0.3`, `0.3.0`) selects v0.3.
+ */
+export function defaultWriteFormat(): WriteFormat {
+  const v = process.env.AITHOS_FORMAT?.trim();
+  if (v === "v0.2" || v === "0.2.0") return "v0.2";
+  return "v0.3";
+}
 
 /** The `aithos` version of the installed ethos, or `null` if there is no ethos. */
 export function keystoreEthosVersion(handle: string): string | null {
@@ -126,6 +145,46 @@ export function migrateKeystoreInPlace(args: MigrateKeystoreArgs): ManifestV03 {
     rmSync(v02tmp, { recursive: true, force: true });
     rmSync(v03tmp, { recursive: true, force: true });
   }
+}
+
+/**
+ * Create a fresh, EMPTY v0.3 ethos directly in the keystore (edition height 1,
+ * no predecessor). Used by `ethos init` / `aithos init` when v0.3 is the write
+ * default ({@link defaultWriteFormat}). The caller must have already ensured the
+ * target ethos dir is absent (or wiped under `--force`); the identity's
+ * `did.json` must exist on disk (authorBundleV03 copies + hashes it).
+ */
+export function initKeystoreV03(args: { handle: string; identity: Identity; now?: Date }): ManifestV03 {
+  const dir = ethosDir(args.handle);
+  const tmp = mkdtempSync(join(tmpdir(), "aithos-ks-init-"));
+  try {
+    const m = authorBundleV03({
+      identity: args.identity,
+      outDir: tmp,
+      zones: { public: [], circle: [], self: [] },
+      now: args.now,
+    });
+    ensureDir(dir);
+    copyTree(tmp, dir);
+    return m;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * On the owner write path, migrate an installed v0.2 ethos to v0.3 IN PLACE when
+ * v0.3 is the default write format ({@link defaultWriteFormat}). No-op when the
+ * default is v0.2, when the ethos is already v0.3, or when there is no ethos.
+ * Returns true iff a migration ran. Requires the owner identity (sphere keys);
+ * delegate writers cannot migrate and should not call this.
+ */
+export function autoMigrateKeystoreIfDefault(args: MigrateKeystoreArgs): boolean {
+  if (defaultWriteFormat() !== "v0.3") return false;
+  const v = keystoreEthosVersion(args.handle);
+  if (v === null || v === AITHOS_VERSION_V03) return false;
+  migrateKeystoreInPlace(args);
+  return true;
 }
 
 /* -------------------------------------------------------------------------- */

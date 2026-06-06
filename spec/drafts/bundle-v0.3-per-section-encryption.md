@@ -1,6 +1,6 @@
-# Draft · Bundle v0.3 — per-section encryption
+# Bundle v0.3 — per-section encryption (Promoted)
 
-> **Status:** Draft. Source of truth for the v0.3 bundle format. Not yet normative. Promotion target: `spec/03-bundle.md` on release, with v0.2 content moved to `spec/drafts/bundle-v0.2-archive.md`.
+> **Status:** **Promoted — normative as of protocol-core 0.8.0.** This document is the source of truth for the v0.3 bundle format, which is now the **default on-disk format**. Its `§3.x′` sections amend the corresponding `§3.x` of `spec/03-bundle.md`; the v0.2 monolithic format documented in that chapter remains the readable legacy format (compat §3.10.2′) and is re-selectable for a fresh install with `AITHOS_FORMAT=v0.2`.
 >
 > **Scope.** This draft replaces §3.2, §3.3, §3.4, §3.5, §3.7, and §3.8 of the current bundle spec. Chapter 2 (ethos data model) is unaffected — sections themselves are unchanged. Chapter 4 (mandates) is unaffected; the section-level mandate scopes that this format enables are specified in a separate companion draft (`bundle-v0.3-section-level-mandates.md`).
 >

@@ -102,6 +102,14 @@ describe("CLI delegate-on-tracked end-to-end", () => {
     const ownerHome = freshHome();
     const delegateHome = freshHome();
 
+    // This scenario exercises the v0.2 delegate-on-tracked mechanics (zone-DEK
+    // rewrap on grant, monolithic pack/install, repin on revoke). Fresh installs
+    // now default to v0.3, so pin the legacy format for the whole flow. runCli
+    // spreads process.env into every spawned child, and node:test runs each test
+    // file in its own process, so this stays local to this scenario.
+    const prevFormat = process.env.AITHOS_FORMAT;
+    process.env.AITHOS_FORMAT = "v0.2";
+
     try {
       /* ---------------------------------------------------------------- */
       /*  1. Owner: init + seed circle section                            */
@@ -356,6 +364,8 @@ describe("CLI delegate-on-tracked end-to-end", () => {
           `  stdout: ${forbidden.stdout}\n  stderr: ${forbidden.stderr}`,
       );
     } finally {
+      if (prevFormat === undefined) delete process.env.AITHOS_FORMAT;
+      else process.env.AITHOS_FORMAT = prevFormat;
       cleanupHome(ownerHome);
       cleanupHome(delegateHome);
     }

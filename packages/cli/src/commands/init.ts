@@ -78,6 +78,7 @@ export function runInit(opts: InitOpts): void {
     const { dir: ethosPath, manifest } = initializeEthos(opts.handle);
     console.log(`[handle=${opts.handle}] Ethos initialized`);
     console.log(`  Directory:    ${ethosPath}`);
+    console.log(`  Format:       ${manifest.aithos === "0.3.0" ? "v0.3 (per-section)" : "v0.2 (monolithic)"}`);
     console.log(`  Edition:      ${manifest.edition.version} (height=${manifest.edition.height})`);
     console.log(`  Bundle id:    ${manifest.bundle_id}`);
     console.log(`  Zones:        public (clear), circle (encrypted), self (encrypted)`);

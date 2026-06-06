@@ -11,7 +11,7 @@
  * Unpack reverses it into a target directory (for distribution / import).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import AdmZip from "adm-zip";
 
@@ -23,6 +23,8 @@ import {
   gammaFilePath,
   type Manifest,
   loadConfig,
+  isV03Keystore,
+  SPHERE_FRAGMENTS,
 } from "@aithos/protocol-core";
 
 const README_TXT = `This is an Aithos ethos bundle (.ethos).
@@ -55,19 +57,32 @@ export function runEthosPack(opts: EthosPackOpts): void {
   const manifest = readManifest(handle);
   const outPath = opts.out ?? join(process.cwd(), `${handle}-${manifest.edition.version}.ethos`);
 
+  const v03 = isV03Keystore(handle);
+
   const zip = new AdmZip();
   zip.addLocalFile(ethosManifestPath(handle));
   zip.addLocalFile(join(ethosDir(handle), "did.json"));
 
-  // Zone files
-  zip.addLocalFile(ethosZoneFile(handle, "public"));
-  if (existsSync(ethosZoneFile(handle, "circle"))) zip.addLocalFile(ethosZoneFile(handle, "circle"));
-  if (existsSync(ethosZoneFile(handle, "self"))) zip.addLocalFile(ethosZoneFile(handle, "self"));
+  if (v03) {
+    // v0.3 per-section layout: zip each zone subdir's blobs under its prefix
+    // (public/<id>.md, circle|self/<id>.enc).
+    for (const z of SPHERE_FRAGMENTS) {
+      const zd = join(ethosDir(handle), z);
+      if (!existsSync(zd)) continue;
+      for (const fn of readdirSync(zd)) zip.addLocalFile(join(zd, fn), z);
+    }
+  } else {
+    // v0.2 monolithic zone files.
+    zip.addLocalFile(ethosZoneFile(handle, "public"));
+    if (existsSync(ethosZoneFile(handle, "circle"))) zip.addLocalFile(ethosZoneFile(handle, "circle"));
+    if (existsSync(ethosZoneFile(handle, "self"))) zip.addLocalFile(ethosZoneFile(handle, "self"));
+  }
 
   // Sealed gamma log (spec §10). When present, the bundle carries the full
   // mutation history; when absent, the manifest's anchor still commits to the
-  // head hash so late delivery of the log stays verifiable.
-  const gammaPath = gammaFilePath(handle);
+  // head hash so late delivery of the log stays verifiable. v0.3 keeps the log
+  // at the bundle root (gamma.jsonl.enc); v0.2 reads it from the gamma path.
+  const gammaPath = v03 ? join(ethosDir(handle), "gamma.jsonl.enc") : gammaFilePath(handle);
   if (existsSync(gammaPath)) zip.addLocalFile(gammaPath);
 
   // README
@@ -103,10 +118,12 @@ export function runEthosUnpack(opts: EthosUnpackOpts): void {
   const zip = new AdmZip(opts.path);
   const entries = zip.getEntries();
 
-  // Reject forbidden entries (spec §3.2.4).
+  // Reject forbidden entries (spec §3.2.4). Plaintext markdown is allowed only
+  // for the public zone: the v0.2 monolithic `public.md`, or v0.3 per-section
+  // `public/<id>.md`. Any other `.md` (a leaked circle/self body) is rejected.
   for (const e of entries) {
     const n = e.entryName;
-    if (n.endsWith(".md") && n !== "public.md") {
+    if (n.endsWith(".md") && n !== "public.md" && !n.startsWith("public/")) {
       throw new Error(`Forbidden plaintext zone file in bundle: ${n}`);
     }
   }

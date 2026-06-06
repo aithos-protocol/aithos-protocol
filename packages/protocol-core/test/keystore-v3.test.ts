@@ -98,3 +98,62 @@ describe("keystore-native v0.3 (lot 4b-2)", () => {
     assert.throws(() => core.migrateKeystoreInPlace({ handle: "ks_alice", identity: owner }), /already v0\.3/i);
   });
 });
+
+describe("write-format default + init/auto-migrate (lot 4b-3)", () => {
+  function withFormat<T>(value: string | undefined, fn: () => T): T {
+    const prev = process.env.AITHOS_FORMAT;
+    if (value === undefined) delete process.env.AITHOS_FORMAT;
+    else process.env.AITHOS_FORMAT = value;
+    try {
+      return fn();
+    } finally {
+      if (prev === undefined) delete process.env.AITHOS_FORMAT;
+      else process.env.AITHOS_FORMAT = prev;
+    }
+  }
+
+  test("defaultWriteFormat: v0.3 unless AITHOS_FORMAT opts out", () => {
+    assert.equal(withFormat(undefined, () => core.defaultWriteFormat()), "v0.3");
+    assert.equal(withFormat("v0.2", () => core.defaultWriteFormat()), "v0.2");
+    assert.equal(withFormat("0.2.0", () => core.defaultWriteFormat()), "v0.2");
+    assert.equal(withFormat("v0.3", () => core.defaultWriteFormat()), "v0.3");
+    assert.equal(withFormat("garbage", () => core.defaultWriteFormat()), "v0.3");
+  });
+
+  test("initKeystoreV03 creates an empty v0.3 ethos at height 1", () => {
+    const owner = core.createIdentity("ks_init", "ks_init");
+    core.writeIdentityToDisk(owner);
+    const m = core.initKeystoreV03({ handle: "ks_init", identity: owner });
+    assert.equal(m.aithos, "0.3.0");
+    assert.equal(m.edition.height, 1);
+    assert.equal(m.edition.supersedes, null);
+    assert.ok(core.isV03Keystore("ks_init"));
+    for (const z of ["public", "circle", "self"] as const) {
+      assert.equal(m.zones[z].sections.length, 0, `${z} starts empty`);
+    }
+    // An owner add-section lands in the per-section layout.
+    core.keystoreEditSection({ handle: "ks_init", author: owner, zone: "self", sectionId: "sec_x1", change: { title: "T", body: "B" } });
+    assert.ok(core.keystoreReadSectionsV03("ks_init", owner).self.some((s) => s.title === "T"));
+  });
+
+  test("autoMigrateKeystoreIfDefault: migrates v0.2 under the v0.3 default, no-op otherwise", () => {
+    // Seed a v0.2 keystore.
+    const owner = core.createIdentity("ks_auto", "ks_auto");
+    core.writeIdentityToDisk(owner);
+    core.ensureEthosLayout("ks_auto");
+    core.addSection({ handle: "ks_auto", identity: owner, zone: "self", title: "Old", body: "v2" });
+    assert.equal(core.keystoreEthosVersion("ks_auto"), "0.2.0");
+
+    // Opt-out → no migration.
+    assert.equal(withFormat("v0.2", () => core.autoMigrateKeystoreIfDefault({ handle: "ks_auto", identity: owner })), false);
+    assert.equal(core.keystoreEthosVersion("ks_auto"), "0.2.0");
+
+    // Default → migrates in place.
+    assert.equal(withFormat(undefined, () => core.autoMigrateKeystoreIfDefault({ handle: "ks_auto", identity: owner })), true);
+    assert.ok(core.isV03Keystore("ks_auto"));
+    assert.ok(core.keystoreReadSectionsV03("ks_auto", owner).self.some((s) => s.title === "Old"));
+
+    // Already v0.3 → no-op.
+    assert.equal(withFormat(undefined, () => core.autoMigrateKeystoreIfDefault({ handle: "ks_auto", identity: owner })), false);
+  });
+});
