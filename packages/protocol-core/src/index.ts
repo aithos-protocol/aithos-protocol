@@ -21,6 +21,7 @@ export * from "./mandate-store.js";
 export * from "./ethos.js";
 export * from "./bundle.js";
 export * from "./bundle-v03.js";
+export * from "./bundle-migrate.js";
 export * from "./canonical.js";
 export * from "./gamma.js";
 export * from "./author.js";

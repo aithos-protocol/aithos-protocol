@@ -528,10 +528,10 @@ export function buildManifestV2(p: BuildManifestV2Params): ManifestV03 {
   };
 }
 
-function allocEditionVersion(now: Date, prev: ManifestV03 | undefined): string {
+function allocEditionVersion(now: Date, prevVersion: string | undefined): string {
   const day = now.toISOString().slice(0, 10).replace(/-/g, ".");
-  if (prev) {
-    const m = prev.edition.version.match(/^(\d{4}\.\d{2}\.\d{2})-(\d+)$/);
+  if (prevVersion) {
+    const m = prevVersion.match(/^(\d{4}\.\d{2}\.\d{2})-(\d+)$/);
     if (m && m[1] === day) return `${day}-${parseInt(m[2], 10) + 1}`;
   }
   return `${day}-1`;
@@ -561,11 +561,28 @@ export interface AuthorBundleV03Args {
   zones: Record<Sphere, Section[]>;
   now?: Date;
   /**
-   * Previous edition for the chain + carry-forward. `dir` is where the prior
-   * edition's section blobs live (so unchanged sections can be copied
+   * Previous v0.3 edition for the chain + carry-forward. `dir` is where the
+   * prior edition's section blobs live (so unchanged sections can be copied
    * byte-identical instead of re-encrypted — the property B3 asserts).
    */
   prev?: { manifest: ManifestV03; dir: string };
+  /**
+   * Explicit predecessor edition link, used when the predecessor is NOT a v0.3
+   * bundle (e.g. a v0.2 → v0.3 migration edition per §3.10.3′). Chains the
+   * edition (supersedes / prev_hash / height) without carry-forward — every
+   * section is freshly encrypted, since a v0.2 monolithic ciphertext cannot be
+   * reused per-section. Ignored when `prev` is also supplied.
+   */
+  prevEdition?: {
+    /** Predecessor `edition.version` (drives the new edition's N allocation). */
+    version: string;
+    /** Predecessor `bundle_id` → the new edition's `supersedes`. */
+    bundleId: string;
+    /** Hex SHA-256 of the predecessor's canonical (blank-sig) manifest, no prefix. */
+    manifestHashHex: string;
+    /** Predecessor `edition.height` (new height = this + 1). */
+    height: number;
+  };
   /** Override recipients per encrypted zone (default: subject only). */
   recipientsFor?: (zone: "circle" | "self") => SectionRecipient[];
 }
@@ -586,7 +603,32 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
   const createdAt = now.toISOString();
   const handle = identity.handle;
   const subjectDid = sphereDidUrl(identity, "public").split("#")[0];
-  const editionVersion = allocEditionVersion(now, args.prev?.manifest);
+
+  // Edition chain: a v0.3 predecessor (`prev`) enables carry-forward; an
+  // explicit `prevEdition` (e.g. a v0.2 migration) chains without it; neither
+  // means this is edition 1.
+  const carryPrev = args.prev;
+  let supersedes: string | null;
+  let prevHash: string | null;
+  let height: number;
+  let prevVersion: string | undefined;
+  if (carryPrev) {
+    supersedes = carryPrev.manifest.bundle_id;
+    prevHash = "sha256:" + canonicalManifestHashHexV03(carryPrev.manifest);
+    height = carryPrev.manifest.edition.height + 1;
+    prevVersion = carryPrev.manifest.edition.version;
+  } else if (args.prevEdition) {
+    supersedes = args.prevEdition.bundleId;
+    prevHash = "sha256:" + args.prevEdition.manifestHashHex;
+    height = args.prevEdition.height + 1;
+    prevVersion = args.prevEdition.version;
+  } else {
+    supersedes = null;
+    prevHash = null;
+    height = 1;
+    prevVersion = undefined;
+  }
+  const editionVersion = allocEditionVersion(now, prevVersion);
   const bundleId = `urn:aithos:${handle}:${editionVersion}`;
 
   ensureDir(outDir);
@@ -637,7 +679,6 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
   writeFileSync(join(outDir, "did.json"), didContent, { mode: 0o644 });
   const didHashHex = sha256hex(new TextEncoder().encode(didContent));
 
-  const prev = args.prev?.manifest;
   const unsigned = buildManifestV2({
     identity,
     subjectDid,
@@ -646,9 +687,9 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
     bundleId,
     editionVersion,
     createdAt,
-    supersedes: prev ? prev.bundle_id : null,
-    prevHash: prev ? "sha256:" + canonicalManifestHashHexV03(prev) : null,
-    height: prev ? prev.edition.height + 1 : 1,
+    supersedes,
+    prevHash,
+    height,
     zones: zoneEntries as Record<Sphere, BundleZoneV2>,
     sha256OfDidJson: didHashHex,
   });
