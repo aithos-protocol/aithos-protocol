@@ -74,8 +74,23 @@ import {
   wrapDek,
   unwrapDek,
   subjectRecipientFor,
+  authorZoneWriteRecipients,
 } from "./ethos.js";
+import {
+  type Author,
+  ownerAuthor,
+  authorSubjectDid,
+  authorHandle,
+  assertCanWrite,
+} from "./author.js";
 import { ensureDir, identityDir } from "./storage.js";
+
+/** Upgrade an Identity OR an Author into an Author (mirrors ethos.ts's toAuthor). */
+function toAuthor(subject: Identity | Author): Author {
+  const a = subject as Author;
+  if (a.kind === "owner" || a.kind === "delegate") return a;
+  return ownerAuthor(subject as Identity);
+}
 
 // @noble/ed25519 v2 needs a sync SHA-512 for sync sign/verify. Idempotent with
 // the same line in did.ts / identity.ts; repeated so this module's verify path
@@ -598,45 +613,80 @@ export function canonicalManifestHashHexV03(m: ManifestV03): string {
 }
 
 /**
- * Sign a v0.3 manifest with the subject's `#public` sphere key. Owner path only
- * in this pass; delegate signing (authorized_by) follows the v0.2 pattern and
- * is wired in a later brick.
+ * Sign a v0.3 manifest. Owner → the subject's `#public` sphere key. Delegate →
+ * the delegate Ed25519 seed, with `manifest_signature.key` = the delegate
+ * pubkey multibase and `authorized_by` = the mandate id (mirrors v0.2
+ * `signManifest`). The canonical bytes include `key` + `authorized_by` (value
+ * blanked) so the signature binds to both the signer and the mandate claimed.
  */
-export function signManifestV03(identity: Identity, m: ManifestV03): ManifestV03 {
-  const key = sphereDidUrl(identity, "public");
+export function signManifestV03(subject: Identity | Author, m: ManifestV03): ManifestV03 {
+  const author = toAuthor(subject);
+  const baseSig: ManifestSignature =
+    author.kind === "owner"
+      ? { alg: "ed25519", key: sphereDidUrl(author.identity, "public"), value: "" }
+      : {
+          alg: "ed25519",
+          key: author.pubkeyMultibase,
+          value: "",
+          authorized_by: author.mandate.id,
+        };
   const base: ManifestV03 = {
     ...m,
-    integrity: {
-      ...m.integrity,
-      manifest_signature: { alg: "ed25519", key, value: "" },
-    },
+    integrity: { ...m.integrity, manifest_signature: baseSig },
   };
   const bytes = new TextEncoder().encode(canonicalize(base));
-  const sig = signWithSphere(identity, "public", bytes);
+  const rawSig =
+    author.kind === "owner"
+      ? signWithSphere(author.identity, "public", bytes)
+      : ed.sign(bytes, author.seed);
   return {
     ...base,
     integrity: {
       ...base.integrity,
-      manifest_signature: { alg: "ed25519", key, value: base64url(sig) },
+      manifest_signature: { ...baseSig, value: base64url(rawSig) },
     },
   };
 }
 
-/** Verify the manifest signature against the `#public` key in `did.json` (§3.8′ #5). */
+/**
+ * Resolver for a delegate's Ed25519 public key when the manifest signature
+ * carries `authorized_by`. Returns the raw 32-byte key or throws. It is
+ * expected to validate the mandate (signature + window + scope) before
+ * returning — see `keystoreDelegateResolver`.
+ */
+export interface VerifyV03SignatureOpts {
+  resolveDelegatePubkey?: (keyId: string, mandateId: string) => Uint8Array;
+}
+
+/**
+ * Verify the manifest signature (§3.8′ #5). Owner signatures verify against the
+ * `#public` key in `did.json`; delegate signatures (`authorized_by`) resolve the
+ * delegate pubkey via `opts.resolveDelegatePubkey`.
+ */
 export function verifyManifestSignatureV03(
   m: ManifestV03,
   didDoc: DidDocument,
+  opts: VerifyV03SignatureOpts = {},
 ): { ok: boolean; error?: string } {
   const sig = m.integrity.manifest_signature;
+  let pk: Uint8Array;
   if (sig.authorized_by !== undefined) {
-    return {
-      ok: false,
-      error: `delegate-signed v0.3 manifest (authorized_by=${sig.authorized_by}) not supported in this pass`,
-    };
+    if (!opts.resolveDelegatePubkey) {
+      return {
+        ok: false,
+        error: `manifest is delegate-signed (authorized_by=${sig.authorized_by}) but no resolveDelegatePubkey provided`,
+      };
+    }
+    try {
+      pk = opts.resolveDelegatePubkey(sig.key, sig.authorized_by);
+    } catch (e) {
+      return { ok: false, error: `delegate key resolution failed: ${(e as Error).message}` };
+    }
+  } else {
+    const vm = didDoc.verificationMethod.find((v) => v.id === sig.key);
+    if (!vm) return { ok: false, error: `No verificationMethod for ${sig.key}` };
+    pk = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
   }
-  const vm = didDoc.verificationMethod.find((v) => v.id === sig.key);
-  if (!vm) return { ok: false, error: `No verificationMethod for ${sig.key}` };
-  const pk = multibaseToEd25519PublicKey(vm.publicKeyMultibase);
   const bytes = canonicalManifestV03Bytes(m);
   return ed.verify(base64urlDecode(sig.value), bytes, pk)
     ? { ok: true }
@@ -648,7 +698,6 @@ export function verifyManifestSignatureV03(
 /* -------------------------------------------------------------------------- */
 
 export interface BuildManifestV2Params {
-  identity: Identity;
   subjectDid: string;
   handle: string;
   displayName: string;
@@ -662,7 +711,11 @@ export interface BuildManifestV2Params {
   sha256OfDidJson: string;
 }
 
-/** Assemble an UNSIGNED v0.3 manifest (signature value blank). */
+/**
+ * Assemble an UNSIGNED v0.3 manifest (signature value blank). The placeholder
+ * signature key is the `#public` sphere URL of the subject; {@link signManifestV03}
+ * overwrites `key`/`value` (and adds `authorized_by` for delegate signatures).
+ */
 export function buildManifestV2(p: BuildManifestV2Params): ManifestV03 {
   return {
     aithos: AITHOS_VERSION_V03,
@@ -680,7 +733,7 @@ export function buildManifestV2(p: BuildManifestV2Params): ManifestV03 {
     zones: p.zones,
     integrity: {
       sha256_of_did_json: p.sha256OfDidJson,
-      manifest_signature: { alg: "ed25519", key: sphereDidUrl(p.identity, "public"), value: "" },
+      manifest_signature: { alg: "ed25519", key: `${p.subjectDid}#public`, value: "" },
     },
   };
 }
@@ -711,11 +764,24 @@ export function defaultZoneRecipients(
 }
 
 export interface AuthorBundleV03Args {
-  identity: Identity;
+  /** The owner identity. Provide this OR {@link author}. */
+  identity?: Identity;
+  /**
+   * The author abstraction (owner or delegate). A `DelegateAuthor` may only
+   * (re)author its mandate's `actor_sphere` zone; the other zones are carried
+   * forward WHOLESALE from {@link prev} (their blobs are copied verbatim — no
+   * decryption needed) and the manifest is signed with the delegate key +
+   * `authorized_by`. When omitted, `identity` is wrapped as an owner author.
+   */
+  author?: Author;
   /** Bundle root directory to (re)write. Created if absent. */
   outDir: string;
-  /** Sections per zone, in canonical display order. */
-  zones: Record<Sphere, Section[]>;
+  /**
+   * Sections per zone, in canonical display order. A delegate need only supply
+   * the zone they author (`actor_sphere`); other zones are ignored and carried
+   * forward from `prev`.
+   */
+  zones: Partial<Record<Sphere, Section[]>>;
   now?: Date;
   /**
    * Previous v0.3 edition for the chain + carry-forward. `dir` is where the
@@ -755,11 +821,17 @@ export interface AuthorBundleV03Args {
  * changed sections pay the re-encryption cost (§3.5.3′ / B3 / B14).
  */
 export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
-  const { identity, outDir } = args;
+  const { outDir } = args;
+  if (!args.author && !args.identity) {
+    throw new Error("authorBundleV03: provide either `identity` or `author`");
+  }
+  const author = args.author ?? ownerAuthor(args.identity!);
   const now = args.now ?? new Date();
   const createdAt = now.toISOString();
-  const handle = identity.handle;
-  const subjectDid = sphereDidUrl(identity, "public").split("#")[0];
+  const handle = authorHandle(author);
+  const subjectDid = authorSubjectDid(author);
+  const displayName =
+    author.kind === "owner" ? author.identity.displayName : author.subject.displayName;
 
   // Edition chain: a v0.3 predecessor (`prev`) enables carry-forward; an
   // explicit `prevEdition` (e.g. a v0.2 migration) chains without it; neither
@@ -792,10 +864,32 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
 
   const zoneEntries: Partial<Record<Sphere, BundleZoneV2>> = {};
   for (const zone of SPHERE_FRAGMENTS) {
+    // A delegate may only (re)author its mandate's actor_sphere; every other
+    // zone is carried forward WHOLESALE from prev (copy all blobs + reuse the
+    // prior zone entry verbatim — including the encrypted self index — without
+    // decrypting anything the delegate is not entitled to read).
+    const shouldAuthor =
+      author.kind === "owner" || author.mandate.actor_sphere === zone;
+    if (!shouldAuthor) {
+      const prevZone = args.prev?.manifest.zones[zone];
+      if (!prevZone) {
+        throw new Error(
+          `authorBundleV03: delegate cannot author zone ${zone} and has no prev edition to carry it forward`,
+        );
+      }
+      if (prevZone.sections.length > 0) ensureDir(join(outDir, zone));
+      for (const d of prevZone.sections) {
+        copyFileSync(join(args.prev!.dir, d.file), join(outDir, d.file));
+      }
+      zoneEntries[zone] = prevZone;
+      continue;
+    }
+
     const encrypted = zone !== "public";
+    if (encrypted) assertCanWrite(author, zone, now); // no-op for owner
     const recipients = encrypted
       ? args.recipientsFor?.(zone as "circle" | "self") ??
-        defaultZoneRecipients(identity, zone as "circle" | "self")
+        authorZoneWriteRecipients(author, zone as "circle" | "self", subjectDid)
       : [];
 
     const indexEncrypted = ZONE_INDEX_ENCRYPTED[zone];
@@ -860,10 +954,9 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
   const didHashHex = sha256hex(new TextEncoder().encode(didContent));
 
   const unsigned = buildManifestV2({
-    identity,
     subjectDid,
     handle,
-    displayName: identity.displayName,
+    displayName,
     bundleId,
     editionVersion,
     createdAt,
@@ -874,7 +967,7 @@ export function authorBundleV03(args: AuthorBundleV03Args): ManifestV03 {
     sha256OfDidJson: didHashHex,
   });
 
-  const signed = signManifestV03(identity, unsigned);
+  const signed = signManifestV03(author, unsigned);
   writeFileSync(join(outDir, "manifest.json"), JSON.stringify(signed, null, 2) + "\n", {
     mode: 0o600,
   });
@@ -901,6 +994,8 @@ export interface BundleV03VerifyOpts {
   readers?: SectionReader[];
   /** Predecessor edition's manifest, to verify `edition.prev_hash` (§3.8′ #8). */
   predecessorManifest?: ManifestV03;
+  /** Resolver for a delegate-signed manifest (`authorized_by`); see `keystoreDelegateResolver`. */
+  resolveDelegatePubkey?: (keyId: string, mandateId: string) => Uint8Array;
 }
 
 const SECTION_ID_RE = /^sec_[a-z0-9_-]+$/;
@@ -980,8 +1075,10 @@ export function verifyBundleV03Dir(
     );
   }
 
-  // Check 5: manifest signature.
-  const ms = verifyManifestSignatureV03(manifest, didDoc);
+  // Check 5: manifest signature (owner #public, or delegate via resolver).
+  const ms = verifyManifestSignatureV03(manifest, didDoc, {
+    resolveDelegatePubkey: opts.resolveDelegatePubkey,
+  });
   if (!ms.ok) errors.push(ms.error ?? "manifest signature failed");
 
   // §3.2.3′: forbidden v0.2 monolithic forms.

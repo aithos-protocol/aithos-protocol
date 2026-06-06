@@ -338,7 +338,7 @@ A v0.3 bundle is considered **valid** iff:
 2. `manifest.json` parses and validates against the v0.3 JSON Schema (TBD; reference implementation pins it).
 3. `did.json` parses and its root signature verifies (§1.6.2 unchanged).
 4. `integrity.sha256_of_did_json` matches the actual SHA-256 of `did.json`'s bytes.
-5. `integrity.manifest_signature` verifies against the `#public` sphere key, over the JCS-canonicalized form of the manifest with that `value` field blanked.
+5. `integrity.manifest_signature` verifies over the JCS-canonicalized form of the manifest with that `value` field blanked. An **owner** edition is signed by the subject's `#public` sphere key. A **delegate** edition (an agent authoring under a mandate — e.g. a `gmail:*` write agent) carries `manifest_signature.authorized_by = <mandate id>` and is signed by the delegate's Ed25519 key; the verifier resolves that key from the issuing mandate (validating its signature, validity window, and scope) before checking the signature. A delegate may only (re)author the mandate's `actor_sphere` zone; all other zones are carried forward byte-identical from the predecessor edition (their ciphertext is copied verbatim — the delegate never decrypts a zone it is not entitled to read), per §3.5.2′.
 6. For every zone with `format_version: "v2"`:
    - For every section listed in `sections[]`, the file `<zone>/<section_id>.<ext>` exists in the ZIP (where `<ext>` is `md` for `public`, `enc` for `circle` / `self`).
    - For every file under `<zone>/` in the ZIP, a corresponding section is listed in `sections[]` (no orphan files).
