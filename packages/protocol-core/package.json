@@ -1,6 +1,6 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "sideEffects": [
     "./dist/envelope.js",
     "./dist/mandate.js",
@@ -60,6 +60,10 @@
     "./ethos": {
       "types": "./dist/ethos.d.ts",
       "import": "./dist/ethos.js"
+    },
+    "./ethos-authz": {
+      "types": "./dist/ethos-authz.d.ts",
+      "import": "./dist/ethos-authz.js"
     },
     "./filesystem-storage": {
       "types": "./dist/filesystem-storage.d.ts",

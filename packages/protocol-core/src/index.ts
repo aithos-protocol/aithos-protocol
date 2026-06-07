@@ -17,6 +17,7 @@ export * from "./did.js";
 export * from "./storage.js";
 export * from "./identity.js";
 export * from "./mandate.js";
+export * from "./ethos-authz.js";
 export * from "./mandate-store.js";
 export * from "./ethos.js";
 export * from "./bundle.js";

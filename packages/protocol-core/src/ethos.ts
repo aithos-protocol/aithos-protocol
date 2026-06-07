@@ -93,6 +93,10 @@ import {
   hasGammaReadScope,
   verifyMandate,
 } from "./mandate.js";
+import {
+  coversRead,
+  hasReadBearingEthosScopeForZone,
+} from "./ethos-authz.js";
 import { findRevocation, loadMandate } from "./mandate-store.js";
 import {
   appendGammaEntryOnDisk,
@@ -747,6 +751,12 @@ export function activeDelegatesForZone(
 export interface DelegateGrant {
   did: string;
   x25519PublicKey: Uint8Array;
+  /** The mandate's full scope set — lets the caller evaluate per-section
+   *  readership via {@link coversRead} (v0.5 per-scope selectors). */
+  scopes: string[];
+  /** Legacy top-level `section_scope` (§4.7′). When present it narrows the
+   *  whole-zone read/write scopes uniformly; combined with `scopes` by the
+   *  caller (recipient iff coversRead AND sectionMatchesScope). */
   sectionScope?: SectionScope;
 }
 
@@ -760,8 +770,6 @@ export function activeDelegateGrantsForZone(
 ): DelegateGrant[] {
   const out: DelegateGrant[] = [];
   if (!existsSync(mandatesDir())) return out;
-  const readScope = `ethos.read.${zone}` as const;
-  const writeScope = `ethos.write.${zone}` as const;
   for (const fn of listMandates()) {
     let m: Mandate;
     try {
@@ -770,11 +778,10 @@ export function activeDelegateGrantsForZone(
       continue;
     }
     if (m.issuer !== subjectDid) continue;
-    const covers =
-      m.scopes.includes(writeScope) ||
-      m.scopes.includes(readScope) ||
-      m.scopes.includes("ethos.read.all");
-    if (!covers) continue;
+    // Any read-bearing ethos scope on this zone (read/edit/append/write, with or
+    // without a per-scope selector; plus the legacy ethos.read.all). Per-section
+    // narrowing happens at the call site via coversRead(grant.scopes, …).
+    if (!hasReadBearingEthosScopeForZone(m.scopes, zone)) continue;
     if (!m.grantee.pubkey) continue;
     if (findRevocation(m.id)) continue;
     let edPub: Uint8Array;
@@ -786,6 +793,7 @@ export function activeDelegateGrantsForZone(
     out.push({
       did: delegateWrapDid(m.grantee.id, m.grantee.pubkey),
       x25519PublicKey: ed25519PubToX25519Pub(edPub),
+      scopes: m.scopes,
       ...(m.section_scope ? { sectionScope: m.section_scope } : {}),
     });
   }

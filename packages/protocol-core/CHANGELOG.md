@@ -7,6 +7,34 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-07
+
+### Added
+
+- **Ethos verb-scopes** (`ethos-authz.ts`, draft `bundle-v0.3-section-verb-scopes.md`).
+  The mandate scope grammar gains a per-scope section selector and a verb
+  vocabulary: `ethos.<verb>.<zone>[#id=…|#prefix=…|#tag=…]` with
+  `verb ∈ read | edit | append | delete | write`. A single mandate can now carry
+  distinct read vs write perimeters (e.g. `["ethos.read.self", "ethos.edit.self#id=X"]`),
+  and bound what a delegate may do (`edit` ≠ may-create ≠ may-delete). New exports:
+  `parseEthosScope`, `matchSection`, `coversOperation` (the §4.8.3′ enforcement
+  predicate — the single source of truth shared by the Ethos API and
+  protocol-client), `coversRead`, `hasReadBearingEthosScopeForZone`,
+  `isEthosMutatingScope`, `hasEthosMutatingScope`.
+
+### Changed
+
+- **`aithos-mandate` bumped 0.4.0 → 0.5.0.** Purely additive: a bare
+  `ethos.read/write.<zone>` keeps its meaning and every pre-0.5.0 envelope still
+  verifies. `createMandate` now requires `grantee.pubkey` for any mutating ethos
+  verb (edit/append/delete, not just write) and matches the actor sphere for all
+  of them; the public-sphere allowlist and circle restriction are generalised
+  through `parseEthosScope`.
+- **Recipient derivation** (`activeDelegateGrantsForZone` / `DelegateGrant`) now
+  carries the mandate's full scope set and matches each section via `coversRead`
+  (union of per-scope read-bearing selectors), with the legacy top-level
+  `section_scope` honoured as a uniform narrowing for back-compat.
+
 ## [0.8.0] — 2026-06-06
 
 ### Changed

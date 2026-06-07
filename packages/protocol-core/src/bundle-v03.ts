@@ -78,6 +78,7 @@ import {
   activeDelegateGrantsForZone,
 } from "./ethos.js";
 import { sectionMatchesScope } from "./mandate.js";
+import { coversRead } from "./ethos-authz.js";
 import {
   type Author,
   ownerAuthor,
@@ -813,7 +814,16 @@ function resolveZoneRecipients(
     return (s) => [
       subjectRec,
       ...grants
-        .filter((g) => sectionMatchesScope({ id: s.id, tags: s.tags }, g.sectionScope))
+        .filter(
+          (g) =>
+            // v0.5 per-scope selectors: recipient iff some read-bearing scope
+            // matches this section …
+            coversRead(g.scopes, zone, { id: s.id, tags: s.tags }) &&
+            // … AND (legacy §4.7′) the top-level section_scope, if any, also
+            // matches — it narrows the whole-zone read/write scopes uniformly.
+            (!g.sectionScope ||
+              sectionMatchesScope({ id: s.id, tags: s.tags }, g.sectionScope)),
+        )
         .map(asRec),
     ];
   }

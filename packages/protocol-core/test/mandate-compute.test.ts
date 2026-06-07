@@ -99,7 +99,7 @@ describe("compute.invoke — mint-time validation", () => {
           compute: { daily_cap_microcredits: 5_000 },
         },
       });
-      assert.equal(m["aithos-mandate"], "0.4.0");
+      assert.equal(m["aithos-mandate"], "0.5.0");
       assert.ok(core.hasComputeInvokeScope(m.scopes));
       assert.equal(m.constraints?.compute?.daily_cap_microcredits, 5_000);
     } finally {

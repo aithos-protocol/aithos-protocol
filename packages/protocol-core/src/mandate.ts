@@ -26,6 +26,11 @@ import {
   signWithSphere,
   multibaseToEd25519PublicKey,
 } from "./did.js";
+import {
+  hasEthosMutatingScope,
+  isEthosMutatingScope,
+  parseEthosScope,
+} from "./ethos-authz.js";
 
 // @noble/ed25519 v2 requires a sync SHA-512 for sync sign/verify (used by
 // verifyMandate / createMandate / verifyRevocation). Set here so this module
@@ -129,12 +134,19 @@ export function sectionMatchesScope(
  *           ethos / gamma scope. A mandate carrying `compute.invoke`
  *           without at least one cap in `constraints.compute` is rejected
  *           at mint AND at verify time. See `validateComputeAuthorization`.
+ * `0.5.0` — introduces the ethos verb-scope grammar (draft
+ *           `bundle-v0.3-section-verb-scopes.md`): per-scope section selectors
+ *           (`ethos.<verb>.<zone>#id=…|#prefix=…|#tag=…`) and the verbs
+ *           `edit` / `append` / `delete` alongside `read` / `write`. A single
+ *           mandate can now carry distinct read vs write perimeters. Purely
+ *           additive — a bare `ethos.read/write.<zone>` keeps its meaning and
+ *           every pre-0.5.0 envelope still verifies. See `./ethos-authz.ts`.
  *
  * New mandates are minted at the latest version; the verifier accepts all
  * past envelopes for backward compatibility.
  */
-export const MANDATE_VERSION_CURRENT = "0.4.0" as const;
-export type MandateVersion = "0.1.0" | "0.2.1" | "0.3.0" | "0.4.0";
+export const MANDATE_VERSION_CURRENT = "0.5.0" as const;
+export type MandateVersion = "0.1.0" | "0.2.1" | "0.3.0" | "0.4.0" | "0.5.0";
 
 /**
  * The single scope that authorizes a delegate to spend the subject's
@@ -273,8 +285,13 @@ export function createMandate(args: CreateMandateArgs): Mandate {
     }
   }
 
-  // Write mandates MUST bind to a specific delegate key (§4.5.4).
-  if (hasWriteScope(args.scopes) && !args.grantee.pubkey) {
+  // Write mandates MUST bind to a specific delegate key (§4.5.4). Covers the
+  // classic `ethos.write.<zone>` and every v0.5 mutating verb
+  // (edit / append / delete / write, with or without a section selector).
+  if (
+    (hasWriteScope(args.scopes) || hasEthosMutatingScope(args.scopes)) &&
+    !args.grantee.pubkey
+  ) {
     throw new Error(
       `Write mandate requires grantee.pubkey (the delegate key). Generate one with \`aithos delegate-key\` and pass it via --pubkey.`,
     );
@@ -363,31 +380,25 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
     }
   }
 
-  // Write scopes must match the signing sphere.
+  // Mutating ethos scopes (write / edit / append / delete, with or without a
+  // section selector) must match the signing sphere — a write mandate must be
+  // signed by the sphere it writes to (§4.8′ generalises the v0.2 rule).
   for (const s of scopes) {
-    if (s === "ethos.write.public" && sphere !== "public") {
+    if (!isEthosMutatingScope(s)) continue;
+    const zone = parseEthosScope(s)!.zone as Sphere; // mutating ⇒ concrete zone
+    if (sphere !== zone) {
       throw new Error(
-        `Scope ${s} requires actor_sphere=public (got ${sphere}). A write mandate must be signed by the sphere it writes to.`,
-      );
-    }
-    if (s === "ethos.write.circle" && sphere !== "circle") {
-      throw new Error(
-        `Scope ${s} requires actor_sphere=circle (got ${sphere}).`,
-      );
-    }
-    if (s === "ethos.write.self" && sphere !== "self") {
-      throw new Error(
-        `Scope ${s} requires actor_sphere=self (got ${sphere}).`,
+        `Scope ${s} requires actor_sphere=${zone} (got ${sphere}). A mutating ethos mandate must be signed by the sphere it writes to.`,
       );
     }
   }
 
   if (sphere === "public") {
     for (const s of scopes) {
+      const p = parseEthosScope(s);
       const ok =
-        s === "ethos.read.public" ||
-        s === "ethos.read.all" ||
-        s === "ethos.write.public" ||
+        // Any ethos verb scope whose zone is public (or the legacy read-all).
+        (p !== null && (p.zone === "public" || p.zone === "all")) ||
         s === "gamma.read" ||
         s === COMPUTE_INVOKE_SCOPE ||
         // Data scopes (`data.<collection>.<action>`) are sphere-neutral: the
@@ -398,15 +409,16 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
         s.startsWith("data.");
       if (!ok) {
         throw new Error(
-          `Scope ${s} is not permitted for the public sphere. Only ethos.read.public, ethos.read.all, ethos.write.public, gamma.read, ${COMPUTE_INVOKE_SCOPE}, and data.* scopes are allowed.`,
+          `Scope ${s} is not permitted for the public sphere. Only ethos.<verb>.public, ethos.read.all, gamma.read, ${COMPUTE_INVOKE_SCOPE}, and data.* scopes are allowed.`,
         );
       }
     }
   }
   if (sphere === "circle") {
     for (const s of scopes) {
-      if (s === "ethos.read.self") {
-        throw new Error(`Scope ethos.read.self cannot be granted on a circle mandate.`);
+      const p = parseEthosScope(s);
+      if (p && p.zone === "self") {
+        throw new Error(`Scope ${s} (zone self) cannot be granted on a circle mandate.`);
       }
     }
   }
@@ -599,6 +611,7 @@ export function verifyMandate(
     mandate["aithos-mandate"] !== "0.1.0" &&
     mandate["aithos-mandate"] !== "0.2.1" &&
     mandate["aithos-mandate"] !== "0.3.0" &&
+    mandate["aithos-mandate"] !== "0.4.0" &&
     mandate["aithos-mandate"] !== MANDATE_VERSION_CURRENT
   ) {
     errors.push(`Unsupported mandate version: ${mandate["aithos-mandate"]}`);

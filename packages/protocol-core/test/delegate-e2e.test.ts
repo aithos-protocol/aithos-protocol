@@ -169,8 +169,8 @@ describe("ed25519PubToX25519Pub (public-key Edwards→Montgomery)", () => {
 /*  Mandate v0.2.1 — forbidden scopes + read scopes                           */
 /* -------------------------------------------------------------------------- */
 
-describe("mandate format v0.4.0", () => {
-  test("bumps the mandate envelope to 0.4.0", async () => {
+describe("mandate format v0.5.0", () => {
+  test("bumps the mandate envelope to 0.5.0", async () => {
     const dir = freshKeystore();
     try {
       const core = await loadCore();
@@ -187,7 +187,7 @@ describe("mandate format v0.4.0", () => {
         scopes: ["ethos.write.circle", "ethos.read.circle"],
         ttlSeconds: 3600,
       });
-      assert.equal(m["aithos-mandate"], "0.4.0", "mandate version must be 0.4.0");
+      assert.equal(m["aithos-mandate"], "0.5.0", "mandate version must be 0.5.0");
     } finally {
       cleanupKeystore(dir);
     }
