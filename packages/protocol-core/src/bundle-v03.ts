@@ -546,12 +546,14 @@ export function writeSection(ctx: SectionWriteCtx, section: Section): SectionDes
 
   if (!ctx.encrypted) {
     writeFileSync(abs, plaintext, { mode: 0o600 });
-    return desc;
+    // Public: the stored bytes ARE the plaintext, so blob_sha == sha256_of_plaintext.
+    return { ...desc, blob_sha: sha };
   }
 
   const { ciphertext, cipher } = encryptSection(plaintext, ctx.subjectDid, section.id, ctx.recipients);
   writeFileSync(abs, ciphertext, { mode: 0o600 });
-  return { ...desc, cipher };
+  // Encrypted: content-address the (nonce-prefixed) ciphertext actually stored.
+  return { ...desc, cipher, blob_sha: sha256hex(ciphertext) };
 }
 
 export interface SectionReadResult {
