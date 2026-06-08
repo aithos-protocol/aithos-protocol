@@ -151,6 +151,22 @@ export interface SectionDescriptor {
   file: string;
   /** Hex SHA-256 of the section's plaintext markdown body (no prefix). */
   sha256_of_plaintext: string;
+  /**
+   * Hex SHA-256 of the bytes AS STORED (no prefix) — the section's
+   * content-address. For public sections the stored bytes ARE the plaintext
+   * markdown, so `blob_sha === sha256_of_plaintext`; for encrypted zones the
+   * stored bytes are the (nonce-prefixed) ciphertext, so `blob_sha` differs from
+   * `sha256_of_plaintext` and is the ONLY stable address for the blob.
+   *
+   * Optional and additive (§3.3.2′ delta-upload): when present, the server stores
+   * and serves the blob content-addressed at
+   * `ethos/{subject_did}/blobs/{blob_sha}` (dedup across editions → per-section
+   * delta upload). When absent, readers fall back to the legacy per-edition path
+   * `editions/{height}/{file}`. Because the manifest is JCS-canonicalised before
+   * hashing/signing, `blob_sha` is covered by the manifest signature
+   * automatically — no `aithos` version bump required.
+   */
+  blob_sha?: string;
   /** REQUIRED iff the zone is encrypted; MUST be absent for public sections (B15). */
   cipher?: SectionCipher;
   gamma_ref: string;
