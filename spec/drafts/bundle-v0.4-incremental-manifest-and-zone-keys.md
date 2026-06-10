@@ -202,6 +202,9 @@ comme discriminant.
       "tags": ["…"],           // optionnel, clair là où title est clair
       "title_cipher": { "n": "...", "ct": "..." },  // self : AEAD(DEK) — voir N3
       "blob_sha": "…", "sha256_of_plaintext": "…", "gamma_ref": "…",
+      "n": "…",                // nonce du corps (REQUIS circle/self, absent public) —
+                               // v0.3 le portait dans cipher.nonce ; ici les blobs restent
+                               // bit-identiques à la migration (carry par sha)
       "approx_size_bytes": 1234,                        // hint P3 (optionnel, à coût zéro)
       "enc_dek": { "kid": "zk…", "n": "…", "c": "…" }   // absent ⇢ voir N9.3
   } ] }

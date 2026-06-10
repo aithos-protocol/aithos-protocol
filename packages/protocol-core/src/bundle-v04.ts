@@ -118,6 +118,14 @@ export interface ShardEntryV04 {
   sha256_of_plaintext: string;
   gamma_ref: string;
   /**
+   * Body-cipher nonce (base64url) — REQUIRED on circle/self entries, absent on
+   * public. v0.3 kept it in the descriptor's `cipher.nonce`; v0.4 moves it to
+   * the shard entry so the BLOB BYTES stay identical across the migration
+   * (carry by sha — prepending the nonce to blobs would have re-uploaded
+   * every body). alg is fixed: xchacha20poly1305-ietf (§3.4′ unchanged).
+   */
+  n?: string;
+  /**
    * Best-effort STORED-blob size in bytes (P3 read-planning hints — same
    * contract as backend.ts). v0.4 writers SHOULD fill it: they hold the
    * ciphertext when building the entry, so it costs nothing and keeps
