@@ -449,7 +449,21 @@ export interface DidDocument {
   verificationMethod: VerificationMethod[];
   keyAgreement: VerificationMethod[];
   service?: Service[];
-  aithos: { version: "0.1.0"; display_name?: string; created_at: string; rotated: RotatedEntry[] };
+  aithos: {
+    version: "0.1.0";
+    display_name?: string;
+    created_at: string;
+    rotated: RotatedEntry[];
+    /**
+     * Mandate-revocation EPOCH. When present (ISO-8601 UTC), every mandate
+     * whose `issued_at` is strictly before this instant is VOID — verifiers
+     * MUST reject it, regardless of individual revocation objects. One
+     * root-signed did.json write thus revokes ALL pre-epoch mandates at once,
+     * and makes garbage-collecting per-mandate revocation objects safe (the
+     * epoch subsumes them). Absent ⇒ no epoch (legacy: nothing rejected).
+     */
+    mandates_void_before?: string;
+  };
   proof?: Proof;
 }
 

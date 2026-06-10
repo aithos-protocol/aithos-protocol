@@ -668,6 +668,21 @@ export function verifyMandate(
     errors.push(`Mandate has expired (not_after=${mandate.not_after})`);
   }
 
+  // Revocation EPOCH (did.json `aithos.mandates_void_before`): every mandate
+  // issued strictly before the epoch is void — the subject's one-write
+  // "revoke all". No clock-skew tolerance here: both timestamps are authored
+  // and signed by the same owner, so there is no cross-clock to tolerate.
+  const epoch = didDoc.aithos?.mandates_void_before;
+  if (epoch) {
+    const epochMs = Date.parse(epoch);
+    const issuedMs = Date.parse(mandate.issued_at);
+    if (!Number.isNaN(epochMs) && !Number.isNaN(issuedMs) && issuedMs < epochMs) {
+      errors.push(
+        `Mandate voided by revocation epoch (issued_at=${mandate.issued_at} < mandates_void_before=${epoch})`,
+      );
+    }
+  }
+
   // Signature
   try {
     const toVerify: Mandate = {
