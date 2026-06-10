@@ -5,6 +5,33 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-06-10
+
+Phase P3 of PLAN-MCP-UNIFICATION-2026-06: **contextualization primitives**
+(V1/V2/V4/V5) — reading an ethos becomes cheap enough for recurring agents.
+
+### Added
+
+- **`ethos_search`** (V2/D2) — keyword search over readable titles/tags/
+  bodies (no NLP): index first, then capped lazy body reads (≤50), scoring
+  title ×3 / tags ×2 / body ×1, snippets + `est_tokens`. The searched zones
+  are ALWAYS the intersection of the request with the mandate's read scopes
+  — an explicit `zones` argument cannot escape them (T12).
+- **`ethos_context_pack`** (V4) — `guidance`-tagged sections, then `pinned`,
+  then task matches, deduplicated, bodies truncated to `budget_tokens`
+  (~4 chars/token), zero inference. Budget AND mandate respected (T14).
+- **`ethos_diff_since`** (V5) — added/modified/deleted since a height, by
+  content address (`blob_sha` → `gamma_ref` fallback), zero body reads.
+  Served only when the backend has the `readManifestAt` capability
+  (filesystem `history/`; platform PDS lands with P5). T16.
+- `ethos_list_sections` rows now carry `approx_size_bytes` + `est_tokens`
+  when the backend can stat blobs (V1 read planning).
+
+### Dependencies
+
+- `@aithos/protocol-core` ^0.10.3 (`approx_size_bytes`, `readManifestAt`),
+  `@aithos/agent-tools` ^0.3.0 (the P3 specs).
+
 ## [0.10.0] — 2026-06-10
 
 Phase P2 of PLAN-MCP-UNIFICATION-2026-06: **transactional editing (D3).**

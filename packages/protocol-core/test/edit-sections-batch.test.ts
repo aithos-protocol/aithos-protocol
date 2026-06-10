@@ -301,3 +301,37 @@ describe("FilesystemStorage.applyEdits — the AithosStorage capability (T13)", 
     );
   });
 });
+
+describe("P3 — index size hints + readManifestAt (diff foundation)", () => {
+  test("readSectionIndex carries approx_size_bytes; readManifestAt resolves archived heights", async () => {
+    const owner = makeIdentity("p3_store");
+    core.ensureEthosLayout("p3_store");
+    core.addSection({ handle: "p3_store", identity: owner, zone: "public", title: "Bio", body: "hello world" });
+    core.migrateKeystoreInPlace({ handle: "p3_store", identity: owner });
+
+    const storage = new core.FilesystemStorage();
+    const idx = await storage.readSectionIndex("p3_store", "public");
+    assert.equal(idx.length, 1);
+    assert.ok(
+      typeof idx[0]!.approx_size_bytes === "number" && idx[0]!.approx_size_bytes >= "hello world".length,
+      `approx_size_bytes present and plausible (got ${idx[0]!.approx_size_bytes})`,
+    );
+
+    // One batch on top → a new edition; the prior manifest is archived.
+    const h1 = (await storage.readManifest("p3_store")).edition.height;
+    await storage.applyEdits!(
+      "p3_store",
+      [{ op: "add", zone: "public", title: "Projets", body: "PACKD." }],
+      { identity: owner },
+    );
+    const h2 = (await storage.readManifest("p3_store")).edition.height;
+    assert.equal(h2, h1 + 1);
+
+    const atH1 = await storage.readManifestAt!("p3_store", h1);
+    assert.ok(atH1, "archived manifest resolved");
+    assert.equal(atH1.edition.height, h1);
+    const atH2 = await storage.readManifestAt!("p3_store", h2);
+    assert.equal(atH2.edition.height, h2, "current manifest answers its own height");
+    assert.equal(await storage.readManifestAt!("p3_store", 999), null);
+  });
+});

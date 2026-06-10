@@ -170,7 +170,8 @@ test("T10 — every listed tool matches its canonical @aithos/agent-tools spec",
   // the transactional trio is not served (commit/discard have nothing to
   // operate on); data_query still has no backend here.
   const names = listed.map((t) => t.name).sort();
-  const hidden = new Set(["data_query", "ethos_commit", "ethos_discard"]);
+  // ethos_diff_since needs the readManifestAt capability (edition history).
+  const hidden = new Set(["data_query", "ethos_commit", "ethos_discard", "ethos_diff_since"]);
   assert.deepEqual(
     names,
     [...catalogNames].filter((n) => !hidden.has(n)).sort(),
@@ -490,4 +491,181 @@ test("H1-tx — autoCommit: true forces the pre-0.10 behaviour on a capable stor
   assert.equal(add.staged, undefined);
   assert.equal(storage.writes.add, 1, "immediate per-write persistence");
   assert.equal(storage.batches.length, 0);
+});
+
+// ------------------------------------------------------ P3 (T12/T14/T16)
+//
+// Contextualization primitives over the in-memory fake: search never leaves
+// the mandate's read scopes (T12), the context pack respects budget AND
+// mandate (T14), diff_since reports content-address changes after a
+// transaction (T16).
+
+function contextStorage() {
+  const base = memoryStorage();
+  base.loadIdentity = async () => undefined;
+  // Sections across zones; circle/self readable by THIS fake regardless of
+  // session — scope-bounding must come from the SERVER (that's the point).
+  const all = {
+    public: [
+      { id: "sec_bio", title: "Bio", body: "I build Aithos, a protocol for digital incarnation.", tags: ["pinned"] },
+      { id: "sec_work", title: "Work", body: "Consulting on protocols and agents.", tags: [] },
+    ],
+    circle: [
+      { id: "sec_rate", title: "Rates", body: "Aithos consulting rate: 1200.", tags: ["guidance"] },
+    ],
+    self: [
+      { id: "sec_diary", title: "Diary", body: "Secret thoughts about aithos governance.", tags: [] },
+    ],
+  };
+  base.readSectionIndex = async (_h, zone) => {
+    return (all[zone] ?? []).map((s) => ({
+      section_id: s.id,
+      title: s.title,
+      title_hidden: false,
+      gamma_ref: `g_${s.id}`,
+      tags: s.tags,
+      approx_size_bytes: s.body.length,
+    }));
+  };
+  base.readSections = async (_h, ids, opts = {}) => {
+    const zone = opts.zone ?? "public";
+    return ids.map((id) => {
+      const s = (all[zone] ?? []).find((x) => x.id === id);
+      return s
+        ? { zone, section_id: id, accessible: true, section: { ...s, gamma_ref: `g_${id}` } }
+        : { zone, section_id: id, accessible: false, reason: "not found" };
+    });
+  };
+  return base;
+}
+
+test("T12 — search is bounded by the mandate's read scopes (never circle/self)", async () => {
+  const storage = contextStorage();
+  const { client } = await connect({
+    storage,
+    mandate: { scopes: ["ethos.read.public"] },
+  });
+
+  // "aithos" matches sections in ALL three zones — only public may surface.
+  const res = text(await client.callTool({
+    name: "ethos_search",
+    arguments: { query: "aithos" },
+  }));
+  assert.deepEqual(res.zones_searched, ["public"]);
+  assert.ok(res.matches.length >= 1);
+  assert.ok(res.matches.every((m) => m.zone === "public"), "no circle/self leakage");
+
+  // Even an EXPLICIT zones request cannot escape the scopes.
+  const forced = text(await client.callTool({
+    name: "ethos_search",
+    arguments: { query: "aithos", zones: ["circle", "self", "public"] },
+  }));
+  assert.deepEqual(forced.zones_searched, ["public"]);
+  assert.ok(forced.matches.every((m) => m.zone === "public"));
+});
+
+test("T12/owner — search ranks title/tag hits above body hits and snippets them", async () => {
+  const storage = contextStorage();
+  const { client } = await connect({ storage });
+  const res = text(await client.callTool({
+    name: "ethos_search",
+    arguments: { query: "consulting", limit: 5 },
+  }));
+  const ids = res.matches.map((m) => m.id);
+  assert.ok(ids.includes("sec_work"), "body+title match found");
+  assert.ok(ids.includes("sec_rate"), "circle match visible to the owner");
+  const work = res.matches.find((m) => m.id === "sec_work");
+  assert.ok(work.snippet.toLowerCase().includes("consulting"));
+  assert.ok(typeof work.est_tokens === "number" && work.est_tokens > 0);
+});
+
+test("T14 — context pack: guidance/pinned first, budget respected, mandate-bounded", async () => {
+  const storage = contextStorage();
+  const { client } = await connect({ storage });
+
+  const pack = text(await client.callTool({
+    name: "ethos_context_pack",
+    arguments: { task: "draft a consulting proposal for a protocol client", budget_tokens: 100 },
+  }));
+  // guidance (circle sec_rate) before pinned (public sec_bio).
+  assert.equal(pack.sections[0].id, "sec_rate");
+  assert.equal(pack.sections[0].reason, "guidance");
+  assert.equal(pack.sections[1].id, "sec_bio");
+  assert.equal(pack.sections[1].reason, "pinned");
+  assert.ok(pack.used_tokens_est <= pack.budget_tokens, "budget respected");
+  // dedup: anchors already included are not re-added as matches.
+  const keys = pack.sections.map((s) => `${s.zone}/${s.id}`);
+  assert.equal(new Set(keys).size, keys.length);
+
+  // Tiny budget → truncation flagged, hard cap held.
+  const tiny = text(await client.callTool({
+    name: "ethos_context_pack",
+    arguments: { task: "anything aithos", budget_tokens: 100 },
+  }));
+  assert.ok(tiny.used_tokens_est <= 100);
+
+  // Mandate-bounded (T14 second half): public-only session never packs circle/self.
+  const { client: bounded } = await connect({
+    storage: contextStorage(),
+    mandate: { scopes: ["ethos.read.public"] },
+  });
+  const bp = text(await bounded.callTool({
+    name: "ethos_context_pack",
+    arguments: { task: "consulting rates aithos" },
+  }));
+  assert.deepEqual(bp.zones_considered, ["public"]);
+  assert.ok(bp.sections.every((s) => s.zone === "public"), "no out-of-scope sections in the pack");
+  assert.ok(!bp.sections.some((s) => s.id === "sec_rate"), "guidance outside scope is excluded");
+});
+
+test("T16 — diff_since reports added/modified/deleted by content address", async () => {
+  const storage = contextStorage();
+  // Edition history capability: height 3 (old) vs current manifest shape.
+  const oldZones = {
+    public: { sections: [
+      { section_id: "sec_bio", blob_sha: "sha_bio_v1", gamma_ref: "g_bio" },
+      { section_id: "sec_gone", blob_sha: "sha_gone", gamma_ref: "g_gone" },
+    ] },
+  };
+  const curZones = {
+    public: { sections: [
+      { section_id: "sec_bio", blob_sha: "sha_bio_v2", gamma_ref: "g_bio2", title: "Bio" },
+      { section_id: "sec_new", blob_sha: "sha_new", gamma_ref: "g_new", title: "Projets" },
+    ] },
+  };
+  storage.readManifestAt = async (_h, height) =>
+    height === 3
+      ? { subject_did: DID, edition: { version: "1.0.3", height: 3, created_at: "x" }, zones: oldZones }
+      : null;
+  storage.readManifest = async () => ({
+    subject_did: DID,
+    edition: { version: "1.0.5", height: 5, created_at: "y" },
+    gamma: { head: "sha256:h", count: 9 },
+    zones: curZones,
+  });
+
+  const { client } = await connect({ storage });
+  const names = (await client.listTools()).tools.map((t) => t.name);
+  assert.ok(names.includes("ethos_diff_since"), "served when history capability exists");
+
+  const diff = text(await client.callTool({
+    name: "ethos_diff_since",
+    arguments: { height: 3 },
+  }));
+  assert.equal(diff.from_height, 3);
+  assert.equal(diff.to_height, 5);
+  assert.deepEqual(diff.changed.public.added, [{ id: "sec_new", title: "Projets" }]);
+  assert.deepEqual(diff.changed.public.modified, [{ id: "sec_bio", title: "Bio" }]);
+  assert.deepEqual(diff.changed.public.deleted, ["sec_gone"]);
+  assert.equal(diff.unchanged, false);
+
+  // Unknown height → clean error.
+  const bad = await client.callTool({ name: "ethos_diff_since", arguments: { height: 1 } });
+  assert.equal(bad.isError, true);
+
+  // Same height → unchanged.
+  storage.readManifestAt = async () => storage.readManifest();
+  const { client: c2 } = await connect({ storage });
+  const same = text(await c2.callTool({ name: "ethos_diff_since", arguments: { height: 5 } }));
+  assert.equal(same.unchanged, true);
 });
