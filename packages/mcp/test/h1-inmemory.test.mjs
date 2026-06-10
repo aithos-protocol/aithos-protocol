@@ -166,11 +166,14 @@ test("T10 — every listed tool matches its canonical @aithos/agent-tools spec",
     assert.deepEqual(gotReq, wantReq, `${t.name}: required drift`);
   }
 
-  // Owner session: full implemented surface (catalogue minus data_query).
+  // Owner session over a storage WITHOUT applyEdits: auto-commit fallback —
+  // the transactional trio is not served (commit/discard have nothing to
+  // operate on); data_query still has no backend here.
   const names = listed.map((t) => t.name).sort();
+  const hidden = new Set(["data_query", "ethos_commit", "ethos_discard"]);
   assert.deepEqual(
     names,
-    [...catalogNames].filter((n) => n !== "data_query").sort(),
+    [...catalogNames].filter((n) => !hidden.has(n)).sort(),
   );
 });
 
@@ -198,7 +201,10 @@ test("T4 — tools/list is filtered by the mandate scopes; no legacy names", asy
   for (const hidden of [
     "ethos_add_section",
     "ethos_update_section",
+    "ethos_append_section",
     "ethos_delete_section",
+    "ethos_commit",
+    "ethos_discard",
     "data_query",
   ]) {
     assert.ok(!names.includes(hidden), `${hidden} must be hidden`);
@@ -312,4 +318,176 @@ test("aliases — disabled with legacyAliases:false", async () => {
 
 test("createServer requires an explicit storage (isomorphic core)", () => {
   assert.throws(() => createServer({}), /storage is required/);
+});
+
+// ------------------------------------------------------- T13/T13b (H1-tx)
+//
+// Transactional staging over an in-memory storage WITH the applyEdits
+// capability: zero storage writes until commit, ONE applyEdits batch per
+// commit, discard drops everything, append composes over staged adds.
+
+function transactionalStorage() {
+  const base = memoryStorage();
+  // Self-signing host contract (the SdkStorage shape): the backend signs with
+  // its own session keys; loadIdentity resolves undefined instead of throwing.
+  base.loadIdentity = async () => undefined;
+  const batches = [];
+  let height = 3;
+  base.applyEdits = async (handle, edits, _auth) => {
+    batches.push({ handle, edits });
+    height += 1;
+    const results = edits.map((e) => {
+      if (e.op === "delete") {
+        return { op: "delete", zone: e.zone, sectionId: e.sectionId };
+      }
+      return {
+        op: e.op,
+        zone: e.zone,
+        section: {
+          id: e.sectionId ?? "sec_minted",
+          title: e.title ?? "(kept)",
+          gamma_ref: `g_batch_${height}`,
+          tags: e.tags ?? [],
+        },
+      };
+    });
+    return {
+      manifest: {
+        subject_did: DID,
+        edition: { version: `1.0.${height}`, height, created_at: "2026-06-10T00:00:00Z" },
+        gamma: { head: "sha256:batched", count: 7 + batches.length },
+      },
+      results,
+    };
+  };
+  return { ...base, batches };
+}
+
+test("T13 — three staged writes commit as ONE applyEdits batch; zero writes before", async () => {
+  const storage = transactionalStorage();
+  const { client } = await connect({ storage });
+
+  // The trio is served on a transactional host.
+  const names = (await client.listTools()).tools.map((t) => t.name);
+  for (const t of ["ethos_commit", "ethos_discard", "ethos_append_section"]) {
+    assert.ok(names.includes(t), `${t} listed`);
+  }
+
+  const s1 = text(await client.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "public", title: "Projets", body: "PACKD." },
+  }));
+  assert.equal(s1.staged, true);
+  assert.equal(s1.pending, 1);
+  const s2 = text(await client.callTool({
+    name: "ethos_update_section",
+    arguments: { zone: "public", section_id: "sec_bio", body: "I build Aithos, full-time." },
+  }));
+  assert.equal(s2.pending, 2);
+  const s3 = text(await client.callTool({
+    name: "ethos_delete_section",
+    arguments: { zone: "public", section_id: "sec_work" },
+  }));
+  assert.equal(s3.pending, 3);
+
+  // ZERO storage writes while staging (T13b guarantee half).
+  assert.deepEqual(storage.writes, { add: 0, modify: 0, delete: 0 });
+  assert.equal(storage.batches.length, 0);
+
+  const c = text(await client.callTool({ name: "ethos_commit", arguments: { message: "batch" } }));
+  assert.equal(c.committed, true);
+  assert.equal(c.edits, 3);
+  assert.equal(c.message, "batch");
+  assert.equal(c.manifest_height, 4);
+
+  // ONE batch, in staging order, legacy per-write paths never touched.
+  assert.equal(storage.batches.length, 1);
+  assert.deepEqual(storage.batches[0].edits.map((e) => e.op), ["add", "modify", "delete"]);
+  assert.equal(storage.batches[0].handle, "alice");
+  assert.deepEqual(storage.writes, { add: 0, modify: 0, delete: 0 });
+
+  // Committed: a second commit with nothing staged refuses.
+  const again = await client.callTool({ name: "ethos_commit", arguments: {} });
+  assert.equal(again.isError, true);
+});
+
+test("T13b — discard drops the staged batch: zero writes, zero batches", async () => {
+  const storage = transactionalStorage();
+  const { client } = await connect({ storage });
+
+  await client.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "public", title: "Tmp", body: "x" },
+  });
+  await client.callTool({
+    name: "ethos_delete_section",
+    arguments: { zone: "public", section_id: "sec_bio" },
+  });
+  const d = text(await client.callTool({ name: "ethos_discard", arguments: {} }));
+  assert.equal(d.discarded, 2);
+
+  assert.equal(storage.batches.length, 0, "no applyEdits call");
+  assert.deepEqual(storage.writes, { add: 0, modify: 0, delete: 0 });
+
+  // Discard with nothing staged is a polite no-op.
+  const d2 = text(await client.callTool({ name: "ethos_discard", arguments: {} }));
+  assert.equal(d2.discarded, 0);
+});
+
+test("H1-tx — append composes over a staged add; fail-fast on unknown targets", async () => {
+  const storage = transactionalStorage();
+  const { client } = await connect({ storage });
+
+  const add = text(await client.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "public", title: "Journal", body: "Day 1." },
+  }));
+  const id = add.section_id;
+
+  const ap = text(await client.callTool({
+    name: "ethos_append_section",
+    arguments: { zone: "public", section_id: id, content: "Day 2." },
+  }));
+  assert.equal(ap.staged, true);
+  assert.equal(ap.op, "append");
+
+  // Appending to a section that exists NOWHERE fails fast, stages nothing.
+  const bad = await client.callTool({
+    name: "ethos_append_section",
+    arguments: { zone: "public", section_id: "sec_ghost", content: "x" },
+  });
+  assert.equal(bad.isError, true);
+
+  const c = text(await client.callTool({ name: "ethos_commit", arguments: {} }));
+  assert.equal(c.edits, 2);
+  const [e1, e2] = storage.batches[0].edits;
+  assert.equal(e1.op, "add");
+  assert.equal(e2.op, "modify");
+  assert.equal(e2.sectionId, id);
+  assert.equal(e2.body, "Day 1.\nDay 2.", "append composed over the staged body");
+
+  // Modify of a persisted section also fail-fasts when unknown.
+  const badMod = await client.callTool({
+    name: "ethos_update_section",
+    arguments: { zone: "public", section_id: "sec_nope", body: "x" },
+  });
+  assert.equal(badMod.isError, true);
+  assert.equal(storage.batches.length, 1, "nothing extra staged or flushed");
+});
+
+test("H1-tx — autoCommit: true forces the pre-0.10 behaviour on a capable storage", async () => {
+  const storage = transactionalStorage();
+  const { client } = await connect({ storage, autoCommit: true });
+
+  const names = (await client.listTools()).tools.map((t) => t.name);
+  assert.ok(!names.includes("ethos_commit"), "commit hidden under autoCommit");
+  assert.ok(!names.includes("ethos_discard"), "discard hidden under autoCommit");
+
+  const add = text(await client.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "public", title: "Now", body: "persist me" },
+  }));
+  assert.equal(add.staged, undefined);
+  assert.equal(storage.writes.add, 1, "immediate per-write persistence");
+  assert.equal(storage.batches.length, 0);
 });

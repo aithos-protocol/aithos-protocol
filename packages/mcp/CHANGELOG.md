@@ -5,6 +5,42 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-06-10
+
+Phase P2 of PLAN-MCP-UNIFICATION-2026-06: **transactional editing (D3).**
+
+### Changed (breaking)
+
+- **Writes STAGE by default.** `ethos_add/update/append/delete_section`
+  no longer persist immediately: they validate (scope gate + fail-fast
+  existence checks) and stage in the session; `ethos_commit { message? }`
+  seals the whole batch as ONE edition through the storage backend's new
+  `applyEdits` capability (one manifest re-sign, one gamma anchor advance).
+  `ethos_discard` — or simply ending the session — drops the batch with
+  ZERO writes. Staged state is invisible to reads (persisted-only semantics).
+  One transaction = one handle + one write authority (mixing mandates or
+  subjects in a batch refuses at stage time).
+- **Opt-out:** `createServer({ autoCommit: true })` / `aithos-mcp
+  --auto-commit` restores the pre-0.10 per-write behaviour; storages
+  WITHOUT `applyEdits` fall back to it automatically (stderr notice);
+  stateless HTTP forces it (a per-request server cannot stage).
+
+### Added
+
+- **`ethos_commit` / `ethos_discard`** — registered only on transactional
+  hosts (T10 subset parity preserved).
+- **`ethos_append_section`** — journal pattern, served in BOTH modes;
+  appends compose in order over staged state.
+- H1-tx suite (T13: 3 staged writes → one `applyEdits` batch, zero prior
+  writes; T13b: discard = zero batches) and the H2 stdio e2e: full
+  transactional lifecycle incl. a pre-0.9 alias staging through the same
+  transaction, plus the `--auto-commit` fallback.
+
+### Dependencies
+
+- `@aithos/protocol-core` ^0.10.2 (`applyEdits` / `EthosEdit` types),
+  `@aithos/agent-tools` ^0.2.0 (the transactional trio specs).
+
 ## [0.9.1] — 2026-06-10
 
 ### Fixed
