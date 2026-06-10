@@ -118,6 +118,15 @@ export interface ShardEntryV04 {
   sha256_of_plaintext: string;
   gamma_ref: string;
   /**
+   * Best-effort STORED-blob size in bytes (P3 read-planning hints — same
+   * contract as backend.ts). v0.4 writers SHOULD fill it: they hold the
+   * ciphertext when building the entry, so it costs nothing and keeps
+   * `ethos_list_sections` / `context_pack` planning hints alive on migrated
+   * subjects. Excluded from server edit-detection fingerprints (it cannot
+   * change without blob_sha changing).
+   */
+  approx_size_bytes?: number;
+  /**
    * Absent on public entries, and on sections authored by a fenced delegate
    * that holds no zone key (N9.3) — ExtraWraps is then the only key path
    * until the owner's next edit/sealGrant resyncs it.

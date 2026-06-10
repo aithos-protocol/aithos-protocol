@@ -60,13 +60,13 @@ titre, mêmes destinataires par construction.
 ### 2.2 Manifest v0.4 (signé, ~3 Ko quelle que soit la taille)
 
 ```
-{ spec_version: "0.4", subject_did, edition_height, prev_hash, created_at,
-  sha256_of_did_json,
+{ aithos: "0.4.0", bundle_id, subject_did, subject_handle, display_name,
+  edition: { version, created_at, supersedes, prev_hash, height },
   zones: {
-    public: { shard_shas[], n },
-    circle: { shard_shas[], keyring_sha, extrawraps_sha, n },
+    public: { n, shard_count, shard_shas[] },
+    circle: { n, shard_count, shard_shas[], keyring_sha, extrawraps_sha },
     self:   { … } },
-  proof }
+  integrity: { sha256_of_did_json, manifest_signature } }   // enveloppe v0.3 conservée
 ```
 
 ### 2.3 Sharding déterministe
@@ -117,7 +117,7 @@ une fois (rare, amorti). Éditer une section = réécrire **son** shard.
 
 ## 5. Migration v0.3 → v0.4
 
-- **Dual-read partout** (serveur + client), discriminé par `spec_version`.
+- **Dual-read partout** (serveur + client), discriminé par `aithos`.
 - **Le format est piloté par l'owner** : son premier publish avec un client
   v0.4 migre l'Ethos en une édition. La migration est **bon marché** : les
   blobs sont portés par sha (zéro re-upload, zéro re-chiffrement) ; l'owner
@@ -202,6 +202,7 @@ comme discriminant.
       "tags": ["…"],           // optionnel, clair là où title est clair
       "title_cipher": { "n": "...", "ct": "..." },  // self : AEAD(DEK) — voir N3
       "blob_sha": "…", "sha256_of_plaintext": "…", "gamma_ref": "…",
+      "approx_size_bytes": 1234,                        // hint P3 (optionnel, à coût zéro)
       "enc_dek": { "kid": "zk…", "n": "…", "c": "…" }   // absent ⇢ voir N9.3
   } ] }
 ```
@@ -251,15 +252,18 @@ comme discriminant.
 ## N5. Manifest v0.4
 
 ```jsonc
-{ "spec_version": "0.4", "subject_did": "…", "edition_height": 107,
-  "prev_hash": "…", "created_at": "…", "sha256_of_did_json": "…",
+{ "aithos": "0.4.0", "bundle_id": "…", "subject_did": "…",
+  "subject_handle": "…", "display_name": "…",
+  "edition": { "version": "…", "created_at": "…", "supersedes": null,
+               "prev_hash": "…", "height": 107 },
   "zones": {
     "public": { "n": 3,   "shard_count": 1, "shard_shas": ["…"] },
     "circle": { "n": 209, "shard_count": 2, "shard_shas": ["…","…"],
                  "keyring_sha": "…", "extrawraps_sha": "…" },
     "self":   { "n": 12,  "shard_count": 1, "shard_shas": ["…"],
                  "keyring_sha": "…" } },
-  "proof": { /* signature root, JCS avec proofValue:"" — inchangé v0.3 */ } }
+  "integrity": { "sha256_of_did_json": "…",
+                  "manifest_signature": { /* §3.8′ inchangé : owner #public ou délégué+authorized_by, JCS valeur blanche */ } } }
 ```
 
 `extrawraps_sha` optionnel (absent ⇔ aucune entrée). `prev_hash` : inchangé
@@ -295,12 +299,12 @@ Validation serveur (ordre normatif) :
 5. Persistance : objets+blobs en parallèle, row DDB en DERNIER (inchangé).
 
 Dual-write : le serveur continue d'accepter les publishes v0.3 (un sujet migré
-en v0.4 REFUSE un publish v0.3 ultérieur : `spec_version` ne régresse jamais —
+en v0.4 REFUSE un publish v0.3 ultérieur : `aithos` ne régresse jamais —
 erreur dédiée `-32045 ethos_spec_version_regression`).
 
 ## N7. Lectures
 
-- `aithos.get_ethos_manifest` : renvoie le manifest tel que stocké (0.3 ou 0.4).
+- `aithos.get_ethos_manifest` : renvoie le manifest tel que stocké (`aithos` 0.3.0 ou 0.4.0).
 - **Nouveau** `aithos.get_ethos_objects` : `{ did, shas: [≤64] }` →
   `{ objects: [{sha, b64}], missing: [sha] }` (absent ≡ interdit, pas d'oracle).
   ACL par type d'objet : `zone_shard` suit l'ACL du manifest (lecteur anonyme
@@ -350,7 +354,7 @@ sans accès : mêmes surfaces que l'anonyme (parité v0.3 conservée).
    `blob_sha` carried, `enc_dek` scellé), keyring (owner + mandats ACTIFS à
    scope de zone — pubkey extraite du label v0.3), ExtraWraps (wraps v0.3
    copiés bit-à-bit pour les mandats actifs par-section ; morts élagués).
-3. Publier `spec_version: "0.4"`, `height+1` : uploads = objets + manifest,
+3. Publier `aithos: "0.4.0"`, `height+1` : uploads = objets + manifest,
    zéro blob. Le serveur valide le carry intégral via `carriedShaSet(prev)`.
 4. Un délégué n'initie JAMAIS la migration : sur un sujet v0.3 il écrit du
    v0.3. Les bundles de mandat sont inchangés et valides des deux côtés.
