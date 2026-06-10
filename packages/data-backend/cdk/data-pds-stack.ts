@@ -191,13 +191,13 @@ export class AithosDataPdsStack extends Stack {
         // dual-aud verification (vanity + execute-api origin) during the edge
         // migration — see lambda/router.ts buildExpectedAud. Override via the
         // PDS_PUBLIC_HOST shell env at synth time if the domain differs.
-        PDS_PUBLIC_HOST: process.env.PDS_PUBLIC_HOST ?? "pds.aithos.be",
+        PDS_PUBLIC_HOST: process.env.PDS_PUBLIC_HOST ?? "pds.dev.aithos.be",
         // Ethos identity registry the resolver calls to fetch a real, root-
         // signed did.json for did:aithos subjects (so owner data envelopes can
         // sign under the dedicated #data sphere instead of #root). See
         // lambda/auth/did-resolver.ts. Override via ETHOS_RESOLVER_URL at synth.
         ETHOS_RESOLVER_URL:
-          process.env.ETHOS_RESOLVER_URL ?? "https://api.aithos.be",
+          process.env.ETHOS_RESOLVER_URL ?? "https://api.dev.aithos.be",
       },
       bundling: {
         target: "node20",
