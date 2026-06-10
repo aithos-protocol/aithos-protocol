@@ -5,6 +5,18 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] — 2026-06-10
+
+### Fixed
+
+- **The isomorphic core is now importable.** 0.9.0 shipped as a CLI-only
+  package (`bin` entry, no `main`/`exports`, `declaration: false`), so
+  library hosts could not `import { createServer } from "@aithos/mcp"` —
+  which is the whole point of the P0 refactor. 0.9.1 adds the `exports`
+  map (`.` and `./server` → `dist/server.js`, `./auth` → `dist/auth.js`),
+  `main`/`types`, and ships `.d.ts` declarations. The CLI surface is
+  unchanged. First consumer: the SDK in-process host (P1, `sdk.agent.run`).
+
 ## [0.9.0] — 2026-06-10
 
 Phase P0 of PLAN-MCP-UNIFICATION-2026-06 (canonical catalogue + isomorphic
