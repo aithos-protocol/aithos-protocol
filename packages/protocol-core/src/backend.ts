@@ -165,6 +165,55 @@ export interface SectionReadOpts {
 /*  AithosStorage                                                             */
 /* -------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------- */
+/*  Transactional edits (P2)                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One semantic edit in a transactional batch (P2, decision D3). The shape
+ * mirrors the three write methods; `add` may carry an explicit `sectionId`
+ * (hosts mint one otherwise, so the result is addressable).
+ */
+export type EthosEdit =
+  | {
+      readonly op: "add";
+      readonly zone: Sphere;
+      readonly sectionId?: string;
+      readonly title: string;
+      readonly body: string;
+      readonly tags?: readonly string[];
+    }
+  | {
+      readonly op: "modify";
+      readonly zone: Sphere;
+      readonly sectionId: string;
+      readonly title?: string;
+      readonly body?: string;
+      readonly tags?: readonly string[];
+      readonly clearTags?: boolean;
+    }
+  | {
+      readonly op: "delete";
+      readonly zone: Sphere;
+      readonly sectionId: string;
+      readonly reason?: string;
+    };
+
+/** Per-edit projection of an {@link AithosStorage.applyEdits} batch, input order. */
+export type AppliedEditResult =
+  | {
+      readonly op: "add" | "modify";
+      readonly zone: Sphere;
+      readonly section: SectionWriteResult["section"];
+    }
+  | { readonly op: "delete"; readonly zone: Sphere; readonly sectionId: string };
+
+/** Result of a transactional batch: ONE new edition covering every edit. */
+export interface ApplyEditsResult {
+  readonly manifest: Manifest;
+  readonly results: readonly AppliedEditResult[];
+}
+
 /**
  * The minimum surface every Aithos backend must provide.
  *
@@ -316,6 +365,30 @@ export interface AithosStorage {
    * `verifyMandate` callers that want to honor the local revocation store.
    */
   findRevocation(mandateId: string): Promise<Revocation | null>;
+
+  /* -------- transactional edits (P2, optional capability) --------------- */
+
+  /**
+   * Apply N semantic edits as ONE edition (transactional batch, D3). The
+   * canonical consumer is the MCP server’s `ethos_commit`: writes staged
+   * during a session flush here exactly once — one manifest re-sign, one
+   * gamma anchor advance, one debit.
+   *
+   * OPTIONAL capability: hosts probe `typeof storage.applyEdits ===
+   * "function"`; absent, the server forces per-write auto-commit (legacy
+   * granularity). The filesystem backend supports it on v0.3 ethoses only
+   * (a v0.2 keystore throws — migrate first); SdkStorage implements it on
+   * the EthosClient staging buffer; RemoteStorage lands with B-5 (P5).
+   *
+   * Edits resolve IN ORDER against (persisted state + earlier edits in the
+   * batch); a batch that nets out to zero changes MUST throw rather than
+   * mint an empty edition.
+   */
+  applyEdits?(
+    handle: string,
+    edits: readonly EthosEdit[],
+    auth: WriteAuth,
+  ): Promise<ApplyEditsResult>;
 
   /* -------- backend-instance state ------------------------------------- */
 

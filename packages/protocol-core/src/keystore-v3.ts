@@ -36,7 +36,7 @@ import { type Author } from "./author.js";
 import { type Section } from "./ethos.js";
 import { type ManifestV03, authorBundleV03 } from "./bundle-v03.js";
 import { migrateBundleV02ToV03, isV02Aithos, readBundleSections } from "./bundle-migrate.js";
-import { editSectionV03, deleteSectionV03, type SectionChange } from "./bundle-edit.js";
+import { editSectionV03, deleteSectionV03, editSectionsV03, type BatchSectionEdit, type SectionChange } from "./bundle-edit.js";
 
 /* -------------------------------------------------------------------------- */
 /*  Write-format default (lot 4b-3)                                            */
@@ -242,4 +242,33 @@ export function keystoreEditSection(args: KeystoreEditArgs): ManifestV03 {
 /** Read the installed v0.3 ethos into per-zone sections (decrypting with the owner's keys). */
 export function keystoreReadSectionsV03(handle: string, owner: Identity): Record<Sphere, Section[]> {
   return readBundleSections(ethosDir(handle), owner);
+}
+
+/**
+ * Apply N section edits to the installed v0.3 ethos in ONE new edition
+ * (P2 transactional path — the batch counterpart of {@link keystoreEditSection}).
+ * Same tmp-build + atomic swap + history-archive flow.
+ */
+export function keystoreEditSections(args: {
+  handle: string;
+  author: Identity | Author;
+  edits: readonly BatchSectionEdit[];
+  now?: Date;
+}): ManifestV03 {
+  const dir = ethosDir(args.handle);
+  const cur = readJson<{ edition: { version: string } }>(join(dir, "manifest.json"));
+  const tmp = mkdtempSync(join(tmpdir(), "aithos-ks-edit-"));
+  try {
+    const m = editSectionsV03({
+      author: args.author,
+      bundleDir: dir,
+      outDir: tmp,
+      edits: args.edits,
+      now: args.now,
+    });
+    swapKeystoreEdition(args.handle, tmp, cur);
+    return m;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }

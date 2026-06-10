@@ -22,6 +22,9 @@ import path from "node:path";
 
 import type {
   AithosStorage,
+  AppliedEditResult,
+  ApplyEditsResult,
+  EthosEdit,
   WriteAuth,
   SectionWriteResult,
   SectionDeleteResult,
@@ -60,7 +63,8 @@ import {
   type ZoneDoc,
 } from "./ethos.js";
 import { type Author, delegateAuthor } from "./author.js";
-import { isV03Keystore, keystoreEditSection } from "./keystore-v3.js";
+import { isV03Keystore, keystoreEditSection, keystoreEditSections } from "./keystore-v3.js";
+import type { BatchSectionEdit } from "./bundle-edit.js";
 import {
   readSection,
   readZoneIndex,
@@ -323,6 +327,72 @@ export class FilesystemStorage implements AithosStorage {
       ...(args.reason !== undefined ? { reason: args.reason } : {}),
     });
     return { sectionId: args.sectionId, deletedTitle, manifest, gammaEntry };
+  }
+
+  /* -------- transactional edits (P2) ------------------------------------ */
+
+  /**
+   * Apply N semantic edits as ONE v0.3 edition ({@link keystoreEditSections}
+   * → `patchEditionV03`: touched sections re-encrypted, siblings carried
+   * forward byte-identical, one manifest re-sign). v0.2 keystores do not
+   * support batching — migrate to v0.3 (`aithos migrate`) or run the host
+   * with per-write auto-commit.
+   */
+  async applyEdits(
+    handle: string,
+    edits: readonly EthosEdit[],
+    auth: WriteAuth,
+  ): Promise<ApplyEditsResult> {
+    if (!isV03Keystore(handle)) {
+      throw new Error(
+        "FilesystemStorage.applyEdits: transactional edits require a v0.3 " +
+          "ethos (run `aithos migrate`); v0.2 hosts must use per-write " +
+          "auto-commit",
+      );
+    }
+    const author = v03Author(handle, auth, "applyEdits");
+    const batch: BatchSectionEdit[] = edits.map((e) => {
+      if (e.op === "delete") {
+        return { op: "delete", zone: e.zone, sectionId: e.sectionId };
+      }
+      if (e.op === "add") {
+        return {
+          op: "upsert",
+          zone: e.zone,
+          sectionId: e.sectionId ?? newSectionId(),
+          change: {
+            title: e.title,
+            body: e.body,
+            ...(e.tags ? { tags: [...e.tags] } : {}),
+          },
+        };
+      }
+      return {
+        op: "upsert",
+        zone: e.zone,
+        sectionId: e.sectionId,
+        change: {
+          ...(e.title !== undefined ? { title: e.title } : {}),
+          ...(e.body !== undefined ? { body: e.body } : {}),
+          ...(e.tags !== undefined ? { tags: [...e.tags] } : {}),
+          ...(e.clearTags ? { clearTags: true } : {}),
+        },
+      };
+    });
+    const m = keystoreEditSections({ handle, author, edits: batch });
+    const results: AppliedEditResult[] = batch.map((b, i) => {
+      const src = edits[i]!;
+      if (b.op === "delete") {
+        return { op: "delete", zone: b.zone, sectionId: b.sectionId };
+      }
+      const w = v03WriteResult(handle, b.zone, b.sectionId, author, m);
+      return {
+        op: src.op === "add" ? "add" : "modify",
+        zone: b.zone,
+        section: w.section,
+      };
+    });
+    return { manifest: m as unknown as Manifest, results };
   }
 
   /* -------- ethos verification ----------------------------------------- */
