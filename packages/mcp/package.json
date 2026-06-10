@@ -40,7 +40,8 @@
     "start:stdio": "node dist/bin.js --transport stdio",
     "start:http": "node dist/bin.js --transport http --port 8787",
     "clean": "rm -rf dist",
-    "check:browser": "esbuild scripts/iso-entry.mjs --bundle --platform=browser --format=esm --outfile=/dev/null --log-level=error"
+    "check:browser": "esbuild scripts/iso-entry.mjs --bundle --platform=browser --format=esm --outfile=/dev/null --log-level=error",
+    "prepublishOnly": "npm run clean && npm run build && npm run check-types"
   },
   "dependencies": {
     "@aithos/protocol-core": "^0.10.0",
