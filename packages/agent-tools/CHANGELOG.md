@@ -19,6 +19,21 @@ Initial release. Canonical catalogue ratified per decision D1
   `LegacyAlias`.
 - Zero runtime dependencies; `sideEffects: false`; isomorphic.
 
+## [0.4.0] — 2026-06-10
+
+Phase P4 of PLAN-MCP-UNIFICATION-2026-06 — the living mandate (V12/V13).
+
+### Added
+
+- **`mandate_describe { mandate? }`** — what THIS session may do, without
+  probing: mandate id/issuer/grantee/sphere/scopes, validity window, live
+  revocation status, and the exact exposed tool names. Owner sessions
+  report `session: "owner"`.
+- **`ethos_preflight_write { zone }`** — `authorized` + reason without
+  executing or staging (scope + validity + revocation check).
+- Both ungated (every session may introspect its own authority) and
+  non-mutating (kept in readOnly).
+
 ## [0.3.0] — 2026-06-10
 
 Phase P3 of PLAN-MCP-UNIFICATION-2026-06 — contextualization primitives.

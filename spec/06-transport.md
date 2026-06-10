@@ -13,13 +13,44 @@ This chapter specifies both, identifies the points where mandates (chapter 4) ar
 
 ### 6.2.1 Server shape
 
-An Aithos MCP server is launched with:
+The reference server is `@aithos/mcp` (`aithos-mcp`, packages/mcp). It speaks
+MCP over stdio (default) or Streamable HTTP, reads the local keystore at
+`$AITHOS_HOME` through the `AithosStorage` abstraction, and serves the
+canonical tool catalogue of `@aithos/agent-tools` (tool names, schemas, and
+normative descriptions are defined THERE, not here).
 
-- A path to a `.ethos` bundle (REQUIRED).
-- Zero or more sphere passphrases, so it can decrypt zones (OPTIONAL; a public-only server is a legitimate configuration).
-- Zero or more mandates the agent is presenting (OPTIONAL; used by the server to decide which encrypted zones the agent is entitled to).
+Two launch shapes:
 
-The reference server is at `Ethos-poc/mcp/`. It speaks JSON-RPC over stdio.
+**Owner shape** — `aithos-mcp` on the subject's machine: full authority over
+the local identities, all tools exposed, writes are transactional by default
+(staged until `ethos_commit`; `--auto-commit` restores per-write editions).
+
+**Delegated shape (mandate pack)** — `aithos-mcp --mandate-pack <path>`. The
+pack is ONE JSON file the subject hands to an agent host:
+
+```json
+{
+  "aithos-mandate-pack": "1",
+  "mandate":   { /* the signed mandate, §4 */ },
+  "agent_key": { "seed_hex": "…", "pubkey_multibase": "z…" },
+  "options":   { "auto_commit": false, "expose_tools": ["…"] }
+}
+```
+
+A server booted under a pack MUST:
+
+- expose only the tools the mandate's scopes allow (`tools/list` filtering),
+- sign writes with the pack's delegate key by default (no per-call `mandate`
+  / `agent_key` arguments needed),
+- refuse a pack whose `agent_key.pubkey_multibase` does not match
+  `mandate.grantee.pubkey`,
+- re-check the mandate's validity window and revocation status BEFORE
+  anything persists — at stage time and again at commit. An expired or
+  revoked mandate never writes.
+
+Sessions may introspect their own authority via `mandate_describe` (the
+mandate document, live status, and the EXACT served tool set) and
+`ethos_preflight_write` (authorized + reason, without executing).
 
 ### 6.2.2 Resources
 

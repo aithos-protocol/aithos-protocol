@@ -210,8 +210,24 @@ export interface CreateServerOptions {
    * Mandate-scoped exposure (P0.3). When set, `tools/list` only registers
    * the tools its scopes allow (see `toolsForScopes` in @aithos/agent-tools).
    * Per-call zone enforcement in handlers is unchanged (defense in depth).
+   *
+   * P4: pass the full signed mandate as `document` to power
+   * `mandate_describe` / `ethos_preflight_write` and the pre-write liveness
+   * re-check (validity window + revocation). Scope filtering keeps working
+   * with scopes alone.
    */
-  mandate?: { readonly scopes: readonly string[] };
+  mandate?: { readonly scopes: readonly string[]; readonly document?: Mandate };
+  /**
+   * Default write authority (P4.4 — mandate pack §6.2.1): when a write call
+   * carries no `mandate` / `agent_key` arguments, sign with THIS delegate
+   * key under the session mandate instead of requiring a local subject
+   * identity. The CLI's `--mandate-pack` wires it; library hosts may too.
+   */
+  delegate?: {
+    readonly mandateId: string;
+    readonly keySeed: Uint8Array;
+    readonly keyMultibase: string;
+  };
   /** Optional extra restriction: only expose these canonical tool names. */
   exposeTools?: readonly string[];
   /**
@@ -293,6 +309,11 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
    * runtime validation twin of the catalogue JSON Schema (T10 asserts the
    * structural match on the wire).
    */
+  /** Every tool ACTUALLY served by this instance — `mandate_describe`
+   *  reports exactly this set, so what it announces is what dispatch does
+   *  (T15 holds by construction, not by parallel bookkeeping). */
+  const registeredTools = new Set<string>();
+
   const register = (
     name: string,
     shape: z.ZodRawShape,
@@ -300,6 +321,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   ): void => {
     if (!exposed.has(name)) return;
     const s = spec(name);
+    registeredTools.add(name);
     server.registerTool(
       name,
       { title: s.title, description: s.description, inputSchema: shape },
@@ -865,15 +887,66 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
    * at STAGE time in transactional mode and re-checked structurally by the
    * storage layer at commit).
    */
+  /**
+   * Liveness guard (P4, T6): a mandated authority must be inside its
+   * validity window and unrevoked EVERY time it matters — at stage time and
+   * again at commit (authority can be revoked between the two). Throws with
+   * the precise reason; never writes.
+   */
+  const assertMandateLive = async (m: Mandate): Promise<void> => {
+    const now = Date.now();
+    const nbf = Date.parse(m.not_before);
+    const naf = Date.parse(m.not_after);
+    if (Number.isFinite(nbf) && now < nbf) {
+      throw new Error(
+        `mandate ${m.id} is not yet valid (not_before ${m.not_before})`,
+      );
+    }
+    if (Number.isFinite(naf) && now > naf) {
+      throw new Error(`mandate ${m.id} expired at ${m.not_after}`);
+    }
+    const rev = await storage.findRevocation(m.id);
+    if (rev) {
+      throw new Error(
+        `mandate ${m.id} was revoked at ${rev.revoked_at}` +
+          (rev.reason ? ` (${rev.reason})` : ""),
+      );
+    }
+  };
+
+  /** The session's default delegate auth (mandate pack), if configured. */
+  const packAuth = (): ResolvedWriteAuth | null => {
+    const doc = opts.mandate?.document;
+    const del = opts.delegate;
+    if (!doc || !del) return null;
+    return {
+      mandate: doc,
+      mandatePath: "mandate-pack",
+      agentKey: {
+        seed_hex: "",
+        pubkey_multibase: del.keyMultibase,
+      },
+      agentKeyPath: "mandate-pack",
+      delegate: {
+        mandateId: del.mandateId,
+        keySeed: del.keySeed,
+        keyMultibase: del.keyMultibase,
+      },
+    };
+  };
+
   const resolveWriteFor = async (
     zone: Sphere,
     args: { mandate?: string; agent_key?: string },
   ): Promise<ResolvedWriteAuth | null> => {
-    const auth = await resolveWriteAuth(
+    let auth = await resolveWriteAuth(
       storage,
       { mandate: args.mandate, agentKey: args.agent_key },
       io,
     );
+    // P4.4 — no per-call auth args: fall back to the session's mandate-pack
+    // delegate (the "agent chez le client" shape).
+    if (!auth) auth = packAuth();
     if (auth) {
       const writeScope = `ethos.write.${zone}`;
       if (!auth.mandate.scopes.includes(writeScope)) {
@@ -881,6 +954,12 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           `Mandate ${auth.mandate.id} does not include scope ${writeScope}`,
         );
       }
+      await assertMandateLive(auth.mandate);
+    } else if (opts.mandate?.document) {
+      // Session-level mandate WITHOUT a host delegate key (the SDK in-process
+      // shape: the storage signs with its own session keys). Exposure already
+      // gates the tool by scope — liveness must still hold here (T6).
+      await assertMandateLive(opts.mandate.document);
     }
     return auth;
   };
@@ -1292,6 +1371,11 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
           );
         }
         const t = tx;
+        // T6 — authority may have been revoked or expired since staging:
+        // re-check NOW, before anything persists (per-call auth OR the
+        // session-level mandate of a self-signing host).
+        if (t.auth) await assertMandateLive(t.auth.mandate);
+        else if (opts.mandate?.document) await assertMandateLive(opts.mandate.document);
         const identity = await loadWriteIdentity(storage, t.handle, t.auth);
         const result: ApplyEditsResult = await storage.applyEdits!(
           t.handle,
@@ -1333,6 +1417,132 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   }
 
   // ------------------------------------------------------------------ mandates
+
+  // ------------------------------------------------- living mandate (P4)
+
+  /** Window + revocation status of a mandate, as data (never throws). */
+  const mandateStatus = async (
+    m: Mandate,
+  ): Promise<{ valid: boolean; reasons: string[]; revoked: { revoked_at: string; reason?: string } | null }> => {
+    const reasons: string[] = [];
+    const now = Date.now();
+    const nbf = Date.parse(m.not_before);
+    const naf = Date.parse(m.not_after);
+    if (Number.isFinite(nbf) && now < nbf) reasons.push(`not yet valid (not_before ${m.not_before})`);
+    if (Number.isFinite(naf) && now > naf) reasons.push(`expired at ${m.not_after}`);
+    let revoked: { revoked_at: string; reason?: string } | null = null;
+    const rev = await storage.findRevocation(m.id);
+    if (rev) {
+      revoked = { revoked_at: rev.revoked_at, ...(rev.reason ? { reason: rev.reason } : {}) };
+      reasons.push(`revoked at ${rev.revoked_at}`);
+    }
+    return { valid: reasons.length === 0, reasons, revoked };
+  };
+
+  const describeMandate = async (m: Mandate) => {
+    const status = await mandateStatus(m);
+    return {
+      session: "delegate" as const,
+      id: m.id,
+      issuer: m.issuer,
+      grantee: { id: m.grantee.id, pubkey: m.grantee.pubkey },
+      actor_sphere: m.actor_sphere,
+      scopes: [...m.scopes],
+      ...(m.section_scope ? { section_scope: m.section_scope } : {}),
+      not_before: m.not_before,
+      not_after: m.not_after,
+      issued_at: m.issued_at,
+      status: {
+        valid: status.valid,
+        reasons: status.reasons,
+        // Signature + issuer-binding verification is `mandate_verify`'s job
+        // (needs the issuer DID document); this is the LIVE operational view.
+        signature_checked: false,
+      },
+      revoked: status.revoked,
+      tools: [...registeredTools].sort(),
+    };
+  };
+
+  register(
+    "mandate_describe",
+    { mandate: z.string().optional() },
+    async (args) => {
+      const { mandate } = args as { mandate?: string };
+      if (mandate) {
+        const m = await storage.loadMandate(mandate);
+        return ok(await describeMandate(m));
+      }
+      const doc = opts.mandate?.document;
+      if (doc) return ok(await describeMandate(doc));
+      if (opts.mandate) {
+        // Scope-filtered session without the full document (library host
+        // that passed scopes only): report what is knowable.
+        return ok({
+          session: "delegate" as const,
+          scopes: [...opts.mandate.scopes],
+          tools: [...registeredTools].sort(),
+          note:
+            "session is mandate-scoped but the host did not provide the " +
+            "mandate document — id/window/revocation unavailable here",
+        });
+      }
+      return ok({
+        session: "owner" as const,
+        scopes: null,
+        tools: [...registeredTools].sort(),
+        note: "owner session — full authority over the subject's own ethos",
+      });
+    },
+  );
+
+  register(
+    "ethos_preflight_write",
+    {
+      handle: z.string().optional(),
+      zone: z.enum(SPHERE_FRAGMENTS),
+    },
+    async (args) => {
+      const { handle, zone } = args as { handle?: string; zone: Sphere };
+      const h = await resolveHandle(storage, handle);
+      // Owner session (no mandate): full authority.
+      if (!opts.mandate) {
+        return ok({ handle: h, zone, authorized: true, authority: "owner" });
+      }
+      const writeScope = `ethos.write.${zone}`;
+      if (!opts.mandate.scopes.includes(writeScope)) {
+        return ok({
+          handle: h,
+          zone,
+          authorized: false,
+          authority: "delegate",
+          reason: `mandate does not include scope ${writeScope}`,
+        });
+      }
+      const doc = opts.mandate.document;
+      if (doc) {
+        const status = await mandateStatus(doc);
+        if (!status.valid) {
+          return ok({
+            handle: h,
+            zone,
+            authorized: false,
+            authority: "delegate",
+            reason: status.reasons.join("; "),
+          });
+        }
+      }
+      return ok({
+        handle: h,
+        zone,
+        authorized: true,
+        authority: "delegate",
+        ...(doc
+          ? { mandate_id: doc.id, rechecked_at_commit: true }
+          : { note: "scope check only — host provided no mandate document" }),
+      });
+    },
+  );
 
   register(
     "mandate_verify",

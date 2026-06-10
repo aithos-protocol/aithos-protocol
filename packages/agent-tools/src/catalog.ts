@@ -451,6 +451,51 @@ const ethosDiscard: AgentToolSpec = {
   write: true,
 };
 
+const mandateDescribe: AgentToolSpec = {
+  name: "mandate_describe",
+  title: "Describe the session's mandate",
+  description:
+    "Returns what THIS session is allowed to do, without trying anything: " +
+    "the active mandate's id, issuer, grantee, actor sphere, scopes, " +
+    "validity window, live revocation status, and the exact tool names the " +
+    "session may call. Owner sessions report `session: \"owner\"` (full " +
+    "authority, no mandate). Pass `mandate` to describe another mandate by " +
+    "id instead. Call this FIRST when unsure of your authority — it is " +
+    "cheaper and more reliable than probing with real calls.",
+  input_schema: {
+    type: "object",
+    properties: {
+      mandate: {
+        type: "string",
+        description:
+          "Mandate id (mandate_<ULID>) to describe instead of the session's.",
+      },
+    },
+  },
+  write: false,
+};
+
+const ethosPreflightWrite: AgentToolSpec = {
+  name: "ethos_preflight_write",
+  title: "Pre-flight a write",
+  description:
+    "Answers `authorized: true|false` (with a reason) for writing the given " +
+    "zone under the session's authority — WITHOUT executing or staging " +
+    "anything. Checks the write scope, the mandate's validity window, and " +
+    "live revocation. Use it before promising the subject an edit, or to " +
+    "explain a refusal; a `true` answer can still be re-checked at commit " +
+    "time (authority may be revoked between the two).",
+  input_schema: {
+    type: "object",
+    properties: {
+      handle: handleSchema,
+      zone: zoneSchema,
+    },
+    required: ["zone"],
+  },
+  write: false,
+};
+
 /* -------------------------------------------------------------------------- */
 /*  mandate_*                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -539,7 +584,9 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
   ethosDeleteSection,
   ethosCommit,
   ethosDiscard,
+  ethosPreflightWrite,
   mandateVerify,
+  mandateDescribe,
   dataQuery,
 ];
 
