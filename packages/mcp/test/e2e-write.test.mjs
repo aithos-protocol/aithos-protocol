@@ -5,12 +5,14 @@
  * End-to-end: the full section lifecycle through the BUILT MCP server over a
  * real stdio transport, against a v0.3 (per-section) keystore.
  *
- *   add (×2) → read several by id → modify → read → delete → list
+ *   add (×2) → read several by id → modify (via LEGACY alias) → read →
+ *   delete → list → verify
  *
  * This exercises the actual server process (dist/bin.js), the MCP client SDK
- * handshake, and the v0.3 write/read storage path wired in this lot. The
- * keystore is seeded with protocol-core directly; the server child inherits the
- * same throwaway $AITHOS_HOME.
+ * handshake, the v0.3 write/read storage path, the canonical D1 tool names,
+ * and the pre-0.9 `aithos_*` alias bridge (accepted at tools/call, never
+ * listed). The keystore is seeded with protocol-core directly; the server
+ * child inherits the same throwaway $AITHOS_HOME.
  */
 
 import { test } from "node:test";
@@ -53,22 +55,26 @@ async function withClient(fn) {
   }
 }
 
-test("MCP v0.3 section lifecycle over stdio (add/read-many/modify/delete)", async () => {
+test("MCP v0.3 section lifecycle over stdio (add/read-many/update/delete)", async () => {
   try {
     await withClient(async (client) => {
       const call = (name, args) =>
         client.callTool({ name, arguments: args }).then(payload);
 
-      // --- the delete tool is now part of the surface ---------------------
+      // --- tools/list exposes ONLY the canonical D1 names ------------------
       const tools = (await client.listTools()).tools.map((t) => t.name);
-      assert.ok(tools.includes("aithos_ethos_delete_section"), "delete tool registered");
-      assert.ok(tools.includes("aithos_ethos_read_sections"), "multi-read tool registered");
+      assert.ok(tools.includes("ethos_delete_section"), "delete tool registered");
+      assert.ok(tools.includes("ethos_read_sections"), "multi-read tool registered");
+      assert.ok(
+        tools.every((t) => !t.startsWith("aithos_")),
+        `legacy aithos_* names must not be listed (got: ${tools.join(", ")})`,
+      );
 
-      // --- add two self sections -----------------------------------------
-      const a = await call("aithos_ethos_add_section", {
+      // --- add two self sections (canonical names) -------------------------
+      const a = await call("ethos_add_section", {
         handle: "alice", zone: "self", title: "Routine", body: "Up at six.", tags: ["am"],
       });
-      const b = await call("aithos_ethos_add_section", {
+      const b = await call("ethos_add_section", {
         handle: "alice", zone: "self", title: "Goals", body: "Ship v0.3.",
       });
       const idA = a.section.id;
@@ -76,9 +82,9 @@ test("MCP v0.3 section lifecycle over stdio (add/read-many/modify/delete)", asyn
       assert.ok(idA.startsWith("sec_") && idB.startsWith("sec_"));
       assert.equal(a.section.title, "Routine");
 
-      // --- read BOTH at once by id ---------------------------------------
-      const read = await call("aithos_ethos_read_sections", {
-        handle: "alice", sectionIds: [idA, idB],
+      // --- read BOTH at once by id (snake_case args) -----------------------
+      const read = await call("ethos_read_sections", {
+        handle: "alice", section_ids: [idA, idB],
       });
       assert.equal(read.sections.length, 2);
       assert.ok(read.sections.every((s) => s.accessible));
@@ -86,29 +92,38 @@ test("MCP v0.3 section lifecycle over stdio (add/read-many/modify/delete)", asyn
       assert.equal(bodies[idA], "Up at six.");
       assert.equal(bodies[idB], "Ship v0.3.");
 
-      // --- modify one, confirm via re-read --------------------------------
+      // --- modify via the LEGACY alias + legacy camelCase args -------------
+      // (pre-0.9 clients keep working for one minor; the bridge renames
+      // aithos_ethos_modify_section → ethos_update_section, sectionId →
+      // section_id. Removal scheduled for 1.0.)
       await call("aithos_ethos_modify_section", {
         handle: "alice", zone: "self", sectionId: idA, body: "Up at five.",
       });
-      const reread = await call("aithos_ethos_read_sections", { handle: "alice", sectionIds: [idA] });
+      const reread = await call("ethos_read_sections", { handle: "alice", section_ids: [idA] });
       assert.equal(reread.sections[0].body, "Up at five.");
 
+      // --- single-section canonical read ------------------------------------
+      const single = await call("ethos_read_section", {
+        handle: "alice", zone: "self", section_id: idB,
+      });
+      assert.equal(single.body, "Ship v0.3.");
+
       // --- list shows both via the index ---------------------------------
-      let list = await call("aithos_ethos_list_sections", { handle: "alice", zone: "self" });
+      let list = await call("ethos_list_sections", { handle: "alice", zone: "self" });
       assert.deepEqual(list.sections.map((s) => s.title).sort(), ["Goals", "Routine"]);
 
       // --- delete one, confirm it's gone ---------------------------------
-      const del = await call("aithos_ethos_delete_section", {
-        handle: "alice", zone: "self", sectionId: idA,
+      const del = await call("ethos_delete_section", {
+        handle: "alice", zone: "self", section_id: idA,
       });
       assert.equal(del.deleted_section_id, idA);
-      list = await call("aithos_ethos_list_sections", { handle: "alice", zone: "self" });
+      list = await call("ethos_list_sections", { handle: "alice", zone: "self" });
       assert.deepEqual(list.sections.map((s) => s.title), ["Goals"]);
-      const goneRead = await call("aithos_ethos_read_sections", { handle: "alice", sectionIds: [idA] });
+      const goneRead = await call("ethos_read_sections", { handle: "alice", section_ids: [idA] });
       assert.equal(goneRead.sections[0].accessible, false);
 
       // --- the ethos still verifies after the write round-trip -----------
-      const verify = await call("aithos_ethos_verify", { handle: "alice" });
+      const verify = await call("ethos_verify", { handle: "alice" });
       assert.equal(verify.ok, true, JSON.stringify(verify.errors ?? []));
     });
   } finally {

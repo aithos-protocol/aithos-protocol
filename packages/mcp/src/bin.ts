@@ -3,7 +3,12 @@
 // Copyright 2026 Mathieu Colla
 
 /**
- * `aithos-mcp` — MCP server entry point.
+ * `aithos-mcp` — MCP server entry point (the NODE host).
+ *
+ * This file owns every node-only capability and injects it into the
+ * isomorphic core (`createServer` in server.ts): the `FilesystemStorage`
+ * backend reading `$AITHOS_HOME`, host file access for path-form mandates /
+ * agent keyfiles, and the on-disk manifest-path diagnostic resource.
  *
  * Two transports are supported:
  *
@@ -27,8 +32,33 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
-import { createServer } from "./server.js";
+import {
+  AITHOS_HOME,
+  FilesystemStorage,
+  ethosManifestPath,
+  renderZoneMarkdown,
+} from "@aithos/protocol-core";
+
+import { createServer, type CreateServerOptions, type HostIo } from "./server.js";
+
+const nodeIo: HostIo = {
+  readTextFile: (p) => readFile(p, "utf8"),
+  resolvePath: (p) => path.resolve(p),
+};
+
+/** The node host's createServer options: filesystem storage + host io. */
+function nodeServerOptions(): CreateServerOptions {
+  return {
+    storage: new FilesystemStorage(),
+    home: AITHOS_HOME,
+    manifestPath: ethosManifestPath,
+    io: nodeIo,
+    renderZone: renderZoneMarkdown,
+  };
+}
 
 interface CliOpts {
   transport: "stdio" | "http";
@@ -64,7 +94,7 @@ program
   });
 
 async function runStdio(): Promise<void> {
-  const server = createServer();
+  const server = createServer(nodeServerOptions());
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // The stdio transport keeps stdin open for us; no further work needed.
@@ -135,7 +165,7 @@ async function runHttp(opts: CliOpts): Promise<void> {
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined, // stateless
           });
-          const server = createServer();
+          const server = createServer(nodeServerOptions());
           await server.connect(transport);
           session = { transport, server };
           // No entry stored; each request is independent.
@@ -143,7 +173,7 @@ async function runHttp(opts: CliOpts): Promise<void> {
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
           });
-          const server = createServer();
+          const server = createServer(nodeServerOptions());
           transport.onclose = () => {
             const sid = transport.sessionId;
             if (sid) sessions.delete(sid);

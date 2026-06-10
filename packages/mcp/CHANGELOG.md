@@ -5,6 +5,51 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-06-10
+
+Phase P0 of PLAN-MCP-UNIFICATION-2026-06 (canonical catalogue + isomorphic
+core + mandate-scoped exposure).
+
+### Changed (breaking)
+
+- **Canonical D1 tool names.** Tools renamed to the shared
+  `@aithos/agent-tools` catalogue: `identity_list`, `identity_describe`,
+  `ethos_list_sections`, `ethos_read_section` (was
+  `aithos_ethos_show_section`), `ethos_read_sections`, `ethos_verify`,
+  `ethos_add_section`, `ethos_update_section` (was
+  `aithos_ethos_modify_section`), `ethos_delete_section`, `mandate_verify`.
+  Arguments are snake_case (`section_id`, `section_ids`, `clear_tags`,
+  `agent_key`). **Deprecation bridge:** the pre-0.9 `aithos_*` names (and
+  camelCase args) keep resolving at `tools/call` — never listed — and are
+  scheduled for removal in 1.0. Disable with `legacyAliases: false`.
+- **`createServer` requires `storage`.** The isomorphic core ships no
+  `FilesystemStorage` default any more; the `aithos-mcp` CLI (bin.ts) wires
+  it, plus `home`, `manifestPath`, host `io`, and `renderZone`
+  (protocol-core's `renderZoneMarkdown`). Library consumers that relied on
+  the implicit filesystem default must pass it explicitly.
+
+### Added
+
+- **`@aithos/agent-tools` integration** — names, schemas, and normative
+  descriptions come from the canonical catalogue; the h1 parity test (T10)
+  fails on any drift.
+- **Mandate-scoped exposure (P0.3).** `createServer({ mandate })` filters
+  `tools/list` by the mandate's scopes (`toolsForScopes`); per-call zone
+  enforcement in handlers is unchanged (defense in depth, tested by T5).
+- **H1 in-memory harness** (`test/h1-inmemory.test.mjs`): InMemoryTransport
+  linked pair + pure in-memory storage fake — locks T10 parity, T4
+  exposure, T5 defense in depth, and the alias bridge, with no filesystem
+  and no child process.
+- **Isomorphism gate** — `npm run check:browser` bundles the server core
+  with esbuild `--platform=browser`; node builtins in the core graph fail
+  the build. protocol-core is consumed through its node-free granular
+  entries (`/did`, `/mandate`) + type-only imports.
+
+### Fixed
+
+- README tool table updated (the stale `aithos_ethos_add_revision` entry is
+  gone; it had been replaced by `modify_section` in 0.8.0).
+
 ## [0.8.0] — 2026-06-06
 
 ### Changed

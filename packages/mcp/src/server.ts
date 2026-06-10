@@ -2,24 +2,39 @@
 // Copyright 2026 Mathieu Colla
 
 /**
- * Aithos MCP server.
+ * Aithos MCP server — isomorphic core.
  *
  * Wraps the protocol-core primitives (identity / ethos / mandate) as MCP tools
  * and resources so LLM agents speaking the Model Context Protocol can:
  *
  *   - introspect an identity (read sphere public keys, DID)
  *   - list sections across zones
- *   - read the current body of a section (decrypting circle/self locally)
+ *   - read the current body of one or several sections (decrypting locally)
  *   - verify the full ethos (gamma anchor, signatures, manifest link)
- *   - add sections and modify them (under a write mandate + agent key), each
- *     mutation emitting a signed gamma entry (spec §10)
+ *   - add / update / delete sections (under a write mandate + agent key),
+ *     each mutation emitting a signed gamma entry (spec §10)
  *
- * Every I/O call flows through an injected {@link AithosStorage}. The default
- * is {@link FilesystemStorage} which reads/writes the local `$AITHOS_HOME`.
- * Hosts that want to back the MCP with a remote API (e.g. the Aithos platform)
- * can pass their own `AithosStorage` implementation — typically one that
- * packages every write in a signed envelope (spec §11.2) and forwards it to
- * the remote.
+ * Tool names, schemas, and normative descriptions come from the canonical
+ * catalogue in `@aithos/agent-tools` (decision D1). Legacy pre-0.9 `aithos_*`
+ * names are accepted at `tools/call` (never listed) for one minor version.
+ *
+ * ISOMORPHISM. This module imports no node builtins and no filesystem
+ * backend; every host capability is injected:
+ *
+ *   - `storage`      — an {@link AithosStorage} (REQUIRED). The node CLI
+ *                      passes `FilesystemStorage` (see bin.ts); the SDK
+ *                      passes its in-process EthosClient adapter; a platform
+ *                      passes a §11-envelope remote storage.
+ *   - `io`           — optional host file access, used only by the
+ *                      path-form `mandate` / `agent_key` arguments.
+ *   - `home`         — optional label for the backing store (diagnostics).
+ *   - `manifestPath` — optional resolver enabling the filesystem-only
+ *                      `manifest-path` diagnostic resource.
+ *
+ * MANDATE EXPOSURE (P0.3). When `mandate` is provided, `tools/list` exposes
+ * only the tools allowed by its scopes (`toolsForScopes`); per-call zone
+ * enforcement in the handlers is unchanged (defense in depth — a forged call
+ * to a hidden or out-of-scope tool never writes).
  *
  * The server is intentionally stateless: each tool call re-reads from the
  * backend. That's slightly slower than caching, but it matches the on-disk
@@ -32,25 +47,30 @@ import {
 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import {
-  AITHOS_HOME,
-  ethosManifestPath,
-  FilesystemStorage,
-  SPHERE_FRAGMENTS,
-  rootDid,
-  verifyMandate,
-  type AithosStorage,
-  type DidDocument,
-  type Identity,
-  type Mandate,
-  type Manifest,
-  type Section,
-  type Sphere,
+// Granular, node-free protocol-core entry points only — the root barrel
+// pulls FilesystemStorage (node:fs/os/crypto) and would break browser hosts.
+import { SPHERE_FRAGMENTS, rootDid } from "@aithos/protocol-core/did";
+import { verifyMandate } from "@aithos/protocol-core/mandate";
+import type {
+  AithosStorage,
+  DidDocument,
+  Identity,
+  Mandate,
+  Manifest,
+  Section,
+  Sphere,
+  ZoneDoc,
 } from "@aithos/protocol-core";
-import fs from "node:fs";
-import path from "node:path";
+import {
+  getToolSpec,
+  resolveLegacyToolCall,
+  toolsForScopes,
+  type AgentToolSpec,
+} from "@aithos/agent-tools";
 
-import { resolveWriteAuth, type ResolvedWriteAuth } from "./auth.js";
+import { resolveWriteAuth, type HostIo, type ResolvedWriteAuth } from "./auth.js";
+
+export type { HostIo } from "./auth.js";
 
 // ---------- helpers --------------------------------------------------------
 
@@ -97,6 +117,22 @@ function sectionSummary(
     gamma_ref: s.gamma_ref,
     tags: s.tags ?? [],
   };
+}
+
+/** Isomorphic bytes → base64 (Buffer on node, btoa elsewhere). */
+function bytesToBase64(bytes: Uint8Array): string {
+  const B = (
+    globalThis as {
+      Buffer?: { from(b: Uint8Array): { toString(enc: "base64"): string } };
+    }
+  ).Buffer;
+  if (B) return B.from(bytes).toString("base64");
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return (globalThis as unknown as { btoa(s: string): string }).btoa(bin);
 }
 
 /**
@@ -146,16 +182,74 @@ export interface CreateServerOptions {
   version?: string;
   /**
    * Storage backend for every identity / ethos / mandate read and write.
-   * Defaults to {@link FilesystemStorage} which reads `$AITHOS_HOME`.
+   * REQUIRED — the isomorphic core ships no default. The node CLI passes
+   * `new FilesystemStorage()` (bin.ts); browsers pass their own adapter.
    */
   storage?: AithosStorage;
+  /**
+   * Optional label of the backing store, surfaced by `identity_list`
+   * (the node CLI passes `AITHOS_HOME`).
+   */
+  home?: string;
+  /**
+   * Optional host file access. Enables the path-form `mandate` /
+   * `agent_key` tool arguments (reading mandate JSONs and agent keyfiles
+   * from the host filesystem). Without it, mandates resolve by id through
+   * the storage backend only.
+   */
+  io?: HostIo;
+  /**
+   * Optional resolver from handle to the on-disk manifest path. When
+   * provided, the `aithos://ethos/{handle}/manifest-path` diagnostic
+   * resource is registered (filesystem hosts only).
+   */
+  manifestPath?: (handle: string) => string;
+  /**
+   * Mandate-scoped exposure (P0.3). When set, `tools/list` only registers
+   * the tools its scopes allow (see `toolsForScopes` in @aithos/agent-tools).
+   * Per-call zone enforcement in handlers is unchanged (defense in depth).
+   */
+  mandate?: { readonly scopes: readonly string[] };
+  /** Optional extra restriction: only expose these canonical tool names. */
+  exposeTools?: readonly string[];
+  /**
+   * Accept legacy pre-0.9 `aithos_*` tool names at `tools/call` (never
+   * listed), logging a deprecation warning. Default true. Removal in 1.0.
+   */
+  legacyAliases?: boolean;
+  /**
+   * Optional zone-markdown renderer for the `aithos://ethos/{handle}/{zone}`
+   * resource (node hosts pass protocol-core's `renderZoneMarkdown`, which
+   * lives in a node-bound module). Without it, decrypted zone re-rendering
+   * degrades to the raw-bytes / explanatory fallbacks.
+   */
+  renderZone?: (
+    zone: Sphere,
+    doc: ZoneDoc,
+    meta: {
+      subjectDid: string;
+      subjectHandle: string;
+      editionVersion: string;
+      createdAt: string;
+    },
+  ) => string;
 }
 
 export function createServer(opts: CreateServerOptions = {}): McpServer {
+  const storage = opts.storage;
+  if (!storage) {
+    throw new Error(
+      "createServer: opts.storage is required — pass `new FilesystemStorage()` " +
+        "(node) or another AithosStorage implementation. The `aithos-mcp` CLI " +
+        "does this for you.",
+    );
+  }
+  const io = opts.io;
+
   const server = new McpServer(
     {
       name: opts.name ?? "aithos-mcp",
-      version: opts.version ?? "0.8.0",
+      version: opts.version ?? "0.9.0",
     },
     {
       // We expose tools + resources, not prompts.
@@ -163,56 +257,69 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  const storage: AithosStorage = opts.storage ?? new FilesystemStorage();
+  // ---- exposure set (P0.3) -------------------------------------------------
+  const exposed = new Set(
+    toolsForScopes(opts.mandate?.scopes, {
+      ...(opts.exposeTools ? { tools: opts.exposeTools } : {}),
+    }).map((t) => t.name),
+  );
+
+  /** Catalogue spec lookup that throws on drift (T10 guards this too). */
+  const spec = (name: string): AgentToolSpec => {
+    const s = getToolSpec(name);
+    if (!s) {
+      throw new Error(`tool '${name}' is not in the @aithos/agent-tools catalogue`);
+    }
+    return s;
+  };
+
+  /**
+   * Register a catalogue tool when exposed. Title + normative description
+   * come from the catalogue (single source of truth); the zod shape is the
+   * runtime validation twin of the catalogue JSON Schema (T10 asserts the
+   * structural match on the wire).
+   */
+  const register = (
+    name: string,
+    shape: z.ZodRawShape,
+    handler: (args: Record<string, unknown>) => Promise<{ content: { type: "text"; text: string }[] }>,
+  ): void => {
+    if (!exposed.has(name)) return;
+    const s = spec(name);
+    server.registerTool(
+      name,
+      { title: s.title, description: s.description, inputSchema: shape },
+      handler as never,
+    );
+  };
 
   // ------------------------------------------------------------------ identity
 
-  server.registerTool(
-    "aithos_list_identities",
-    {
-      title: "List local Aithos identities",
-      description:
-        "Lists every identity in the local store (under $AITHOS_HOME), " +
-        "returning handle, DID, and the sphere DID URLs.",
-      inputSchema: {},
-    },
-    async () => {
-      const handles = await storage.listHandles();
-      const out = await Promise.all(
-        handles.map(async (h) => {
-          try {
-            const meta = await storage.loadIdentityMetadata(h);
-            return {
-              handle: meta.handle,
-              did: meta.did,
-              tracked: meta.tracked,
-              spheres: meta.sphereDids,
-            };
-          } catch (e) {
-            return { handle: h, error: (e as Error).message };
-          }
-        }),
-      );
-      return ok({ aithos_home: AITHOS_HOME, identities: out });
-    },
-  );
+  register("identity_list", {}, async () => {
+    const handles = await storage.listHandles();
+    const out = await Promise.all(
+      handles.map(async (h) => {
+        try {
+          const meta = await storage.loadIdentityMetadata(h);
+          return {
+            handle: meta.handle,
+            did: meta.did,
+            tracked: meta.tracked,
+            spheres: meta.sphereDids,
+          };
+        } catch (e) {
+          return { handle: h, error: (e as Error).message };
+        }
+      }),
+    );
+    return ok({ aithos_home: opts.home ?? null, identities: out });
+  });
 
-  server.registerTool(
-    "aithos_show_identity",
-    {
-      title: "Show identity metadata",
-      description:
-        "Returns the DID, display name, sphere DID URLs, and key fingerprints " +
-        "for the named (or default) identity.",
-      inputSchema: {
-        handle: z
-          .string()
-          .optional()
-          .describe("Identity handle; defaults to the configured default."),
-      },
-    },
+  register(
+    "identity_describe",
+    { handle: z.string().optional() },
     async ({ handle }) => {
-      const h = await resolveHandle(storage, handle);
+      const h = await resolveHandle(storage, handle as string | undefined);
       const meta = await storage.loadIdentityMetadata(h);
       return ok({
         handle: meta.handle,
@@ -227,19 +334,14 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
 
   // ------------------------------------------------------------------ ethos
 
-  server.registerTool(
-    "aithos_ethos_list_sections",
+  register(
+    "ethos_list_sections",
     {
-      title: "List ethos sections",
-      description:
-        "Lists every section in the ethos across public/circle/self (or a single " +
-        "zone via `zone`). Circle and self require a local identity to decrypt.",
-      inputSchema: {
-        handle: z.string().optional(),
-        zone: z.enum(SPHERE_FRAGMENTS).optional(),
-      },
+      handle: z.string().optional(),
+      zone: z.enum(SPHERE_FRAGMENTS).optional(),
     },
-    async ({ handle, zone }) => {
+    async (args) => {
+      const { handle, zone } = args as { handle?: string; zone?: Sphere };
       const h = await resolveHandle(storage, handle);
       const tracked = await storage.isTrackedIdentity(h);
       // The section INDEX is cheap: id + title + gamma_ref, no body decryption.
@@ -255,16 +357,16 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         tags: string[];
       }> = [];
       const skipped: Array<{ zone: Sphere; reason: string }> = [];
-      for (const z of zones) {
+      for (const zn of zones) {
         try {
           const idx = await storage.readSectionIndex(
             h,
-            z,
+            zn,
             identity ? { identity } : undefined,
           );
           for (const r of idx) {
             sections.push({
-              zone: z,
+              zone: zn,
               id: r.section_id,
               title: r.title ?? null,
               title_hidden: r.title_hidden,
@@ -273,40 +375,38 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
             });
           }
         } catch (e) {
-          skipped.push({ zone: z, reason: (e as Error).message });
+          skipped.push({ zone: zn, reason: (e as Error).message });
         }
       }
       return ok({ handle: h, tracked, sections, skipped });
     },
   );
 
-  server.registerTool(
-    "aithos_ethos_show_section",
+  register(
+    "ethos_read_section",
     {
-      title: "Show a section's current content",
-      description:
-        "Returns the current body of a section, plus metadata and the " +
-        "gamma_ref anchor. Mutation history lives in the gamma log — call " +
-        "`aithos_ethos_gamma` (or `aithos gamma show --section`) to walk it.",
-      inputSchema: {
-        handle: z.string().optional(),
-        zone: z.enum(SPHERE_FRAGMENTS),
-        sectionId: z.string().describe("Section id (sec_<hex>)"),
-      },
+      handle: z.string().optional(),
+      zone: z.enum(SPHERE_FRAGMENTS),
+      section_id: z.string(),
     },
-    async ({ handle, zone, sectionId }) => {
+    async (args) => {
+      const { handle, zone, section_id } = args as {
+        handle?: string;
+        zone: Sphere;
+        section_id: string;
+      };
       const h = await resolveHandle(storage, handle);
       const tracked = await storage.isTrackedIdentity(h);
       const identity = await loadReadIdentity(storage, h, tracked);
       // v0.3: fetch ONLY this section's blob (no whole-zone decryption).
-      const [res] = await storage.readSections(h, [sectionId], {
+      const [res] = await storage.readSections(h, [section_id], {
         zone,
         ...(identity ? { identity } : {}),
       });
       if (!res || !res.accessible || !res.section) {
         throw new Error(
           res?.reason ??
-            `section ${sectionId} not found in zone ${zone}` +
+            `section ${section_id} not found in zone ${zone}` +
               (tracked && zone !== "public"
                 ? ` (identity is tracked-only — no sphere key for ${zone})`
                 : ""),
@@ -323,32 +423,23 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  server.registerTool(
-    "aithos_ethos_read_sections",
+  register(
+    "ethos_read_sections",
     {
-      title: "Read several sections by id",
-      description:
-        "Fetches one or more sections by id in a single call, decrypting ONLY " +
-        "those sections (not the whole zone). Ids are located across all zones " +
-        "unless `zone` restricts the search. Each result reports whether it was " +
-        "accessible; inaccessible ids (unknown, or no key) carry a `reason`.",
-      inputSchema: {
-        handle: z.string().optional(),
-        sectionIds: z
-          .array(z.string())
-          .min(1)
-          .describe("Section ids to fetch (sec_<hex>)."),
-        zone: z
-          .enum(SPHERE_FRAGMENTS)
-          .optional()
-          .describe("Restrict the lookup to a single zone (default: all zones)."),
-      },
+      handle: z.string().optional(),
+      section_ids: z.array(z.string()).min(1),
+      zone: z.enum(SPHERE_FRAGMENTS).optional(),
     },
-    async ({ handle, sectionIds, zone }) => {
+    async (args) => {
+      const { handle, section_ids, zone } = args as {
+        handle?: string;
+        section_ids: string[];
+        zone?: Sphere;
+      };
       const h = await resolveHandle(storage, handle);
       const tracked = await storage.isTrackedIdentity(h);
       const identity = await loadReadIdentity(storage, h, tracked);
-      const results = await storage.readSections(h, sectionIds, {
+      const results = await storage.readSections(h, section_ids, {
         ...(zone ? { zone } : {}),
         ...(identity ? { identity } : {}),
       });
@@ -377,27 +468,14 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  server.registerTool(
-    "aithos_ethos_verify",
+  register(
+    "ethos_verify",
     {
-      title: "Verify ethos integrity",
-      description:
-        "Full integrity check: zone signatures, manifest signature, edition " +
-        "history link, and the gamma anchor (manifest.gamma.head must match " +
-        "the live log tail, and every section's gamma_ref must exist in the " +
-        "log). The signed mutation history itself is walked by the companion " +
-        "`aithos gamma verify` tool.",
-      inputSchema: {
-        handle: z.string().optional(),
-        decrypt: z
-          .boolean()
-          .optional()
-          .describe(
-            "If false, skip decrypting circle/self and only verify public + manifest.",
-          ),
-      },
+      handle: z.string().optional(),
+      decrypt: z.boolean().optional(),
     },
-    async ({ handle, decrypt }) => {
+    async (args) => {
+      const { handle, decrypt } = args as { handle?: string; decrypt?: boolean };
       const h = await resolveHandle(storage, handle);
       const didDoc = await storage.loadDidDocument(h);
       // Tracked identities have no sealed seeds: we transparently downgrade to
@@ -411,54 +489,55 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  server.registerTool(
-    "aithos_ethos_add_section",
-    {
-      title: "Add a new section",
-      description:
-        "Creates a new section with an initial revision. Requires either a " +
-        "local subject identity (writes under the sphere key) OR a write " +
-        "mandate + agent keyfile (writes under the delegate key).",
-      inputSchema: {
-        handle: z.string().optional(),
-        zone: z.enum(SPHERE_FRAGMENTS),
-        title: z.string().min(1),
-        body: z.string().min(1).describe("Initial revision body (markdown)"),
-        tags: z.array(z.string()).optional(),
-        mandate: z
-          .string()
-          .optional()
-          .describe(
-            "Mandate id (mandate_<ULID>) or absolute path to the JSON file.",
-          ),
-        agentKey: z
-          .string()
-          .optional()
-          .describe(
-            "Path to the delegate keyfile produced by `aithos delegate-key`.",
-          ),
-      },
-    },
-    async ({ handle, zone, title, body, tags, mandate, agentKey }) => {
-      const h = await resolveHandle(storage, handle);
-      const auth = await resolveWriteAuth(storage, { mandate, agentKey });
-      if (auth) {
-        const writeScope = `ethos.write.${zone}`;
-        if (!auth.mandate.scopes.includes(writeScope)) {
-          throw new Error(
-            `Mandate ${auth.mandate.id} does not include scope ${writeScope}`,
-          );
-        }
+  /**
+   * Shared guard for the three write tools: resolve the (optional) delegate
+   * auth and enforce the per-zone write scope (defense in depth — exposure
+   * filtering above is the coarse gate; this is the per-call gate).
+   */
+  const resolveWriteFor = async (
+    zone: Sphere,
+    args: { mandate?: string; agent_key?: string },
+  ): Promise<ResolvedWriteAuth | null> => {
+    const auth = await resolveWriteAuth(
+      storage,
+      { mandate: args.mandate, agentKey: args.agent_key },
+      io,
+    );
+    if (auth) {
+      const writeScope = `ethos.write.${zone}`;
+      if (!auth.mandate.scopes.includes(writeScope)) {
+        throw new Error(
+          `Mandate ${auth.mandate.id} does not include scope ${writeScope}`,
+        );
       }
+    }
+    return auth;
+  };
+
+  register(
+    "ethos_add_section",
+    {
+      handle: z.string().optional(),
+      zone: z.enum(SPHERE_FRAGMENTS),
+      title: z.string().min(1),
+      body: z.string().min(1),
+      tags: z.array(z.string()).optional(),
+      mandate: z.string().optional(),
+      agent_key: z.string().optional(),
+    },
+    async (args) => {
+      const { handle, zone, title, body, tags } = args as {
+        handle?: string;
+        zone: Sphere;
+        title: string;
+        body: string;
+        tags?: string[];
+      };
+      const h = await resolveHandle(storage, handle);
+      const auth = await resolveWriteFor(zone, args as never);
       const identity = await loadWriteIdentity(storage, h, auth);
       const { section, manifest, gammaEntry } = await storage.addSection(
-        {
-          handle: h,
-          zone,
-          title,
-          body,
-          tags,
-        },
+        { handle: h, zone, title, body, tags },
         { identity, delegate: auth?.delegate },
       );
       return ok({
@@ -474,62 +553,49 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  server.registerTool(
-    "aithos_ethos_modify_section",
+  register(
+    "ethos_update_section",
     {
-      title: "Modify an existing section in-place",
-      description:
-        "Applies a change to one or more of {title, body, tags} on an " +
-        "existing section. Emits one signed `section.modify` entry in the " +
-        "gamma log carrying the full new value of each changed field (spec " +
-        "§10.6.1); the previous state remains in the log as the audit trail. " +
-        "Auth semantics identical to `aithos_ethos_add_section`. Pass at " +
-        "least one of { title, body, tags, clearTags }.",
-      inputSchema: {
-        handle: z.string().optional(),
-        zone: z.enum(SPHERE_FRAGMENTS),
-        sectionId: z.string(),
-        title: z.string().optional(),
-        body: z.string().optional(),
-        tags: z.array(z.string()).optional(),
-        clearTags: z.boolean().optional(),
-        mandate: z.string().optional(),
-        agentKey: z.string().optional(),
-      },
+      handle: z.string().optional(),
+      zone: z.enum(SPHERE_FRAGMENTS),
+      section_id: z.string(),
+      title: z.string().optional(),
+      body: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      clear_tags: z.boolean().optional(),
+      mandate: z.string().optional(),
+      agent_key: z.string().optional(),
     },
-    async ({
-      handle,
-      zone,
-      sectionId,
-      title,
-      body,
-      tags,
-      clearTags,
-      mandate,
-      agentKey,
-    }) => {
-      if (title === undefined && body === undefined && tags === undefined && !clearTags) {
+    async (args) => {
+      const { handle, zone, section_id, title, body, tags, clear_tags } =
+        args as {
+          handle?: string;
+          zone: Sphere;
+          section_id: string;
+          title?: string;
+          body?: string;
+          tags?: string[];
+          clear_tags?: boolean;
+        };
+      if (
+        title === undefined &&
+        body === undefined &&
+        tags === undefined &&
+        !clear_tags
+      ) {
         throw new Error(
-          "aithos_ethos_modify_section: pass at least one of title, body, tags, clearTags",
+          "ethos_update_section: pass at least one of title, body, tags, clear_tags",
         );
       }
       const h = await resolveHandle(storage, handle);
-      const auth = await resolveWriteAuth(storage, { mandate, agentKey });
-      if (auth) {
-        const writeScope = `ethos.write.${zone}`;
-        if (!auth.mandate.scopes.includes(writeScope)) {
-          throw new Error(
-            `Mandate ${auth.mandate.id} does not include scope ${writeScope}`,
-          );
-        }
-      }
+      const auth = await resolveWriteFor(zone, args as never);
       const identity = await loadWriteIdentity(storage, h, auth);
-      const effectiveTags = clearTags ? [] : tags;
+      const effectiveTags = clear_tags ? [] : tags;
       const { section, manifest, gammaEntry } = await storage.modifySection(
         {
           handle: h,
           zone,
-          sectionId,
+          sectionId: section_id,
           title,
           body,
           tags: effectiveTags,
@@ -547,41 +613,33 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  server.registerTool(
-    "aithos_ethos_delete_section",
+  register(
+    "ethos_delete_section",
     {
-      title: "Delete a section",
-      description:
-        "Removes a section from its zone. v0.2 emits a signed `section.delete` " +
-        "gamma entry (audit trail); v0.3 drops the section blob and writes a new " +
-        "per-section edition. Auth semantics identical to " +
-        "`aithos_ethos_add_section` (owner key, or a write mandate + agent key).",
-      inputSchema: {
-        handle: z.string().optional(),
-        zone: z.enum(SPHERE_FRAGMENTS),
-        sectionId: z.string().describe("Section id (sec_<hex>)"),
-        reason: z
-          .string()
-          .optional()
-          .describe("Free-text reason, recorded in the gamma entry (v0.2)."),
-        mandate: z.string().optional(),
-        agentKey: z.string().optional(),
-      },
+      handle: z.string().optional(),
+      zone: z.enum(SPHERE_FRAGMENTS),
+      section_id: z.string(),
+      reason: z.string().optional(),
+      mandate: z.string().optional(),
+      agent_key: z.string().optional(),
     },
-    async ({ handle, zone, sectionId, reason, mandate, agentKey }) => {
+    async (args) => {
+      const { handle, zone, section_id, reason } = args as {
+        handle?: string;
+        zone: Sphere;
+        section_id: string;
+        reason?: string;
+      };
       const h = await resolveHandle(storage, handle);
-      const auth = await resolveWriteAuth(storage, { mandate, agentKey });
-      if (auth) {
-        const writeScope = `ethos.write.${zone}`;
-        if (!auth.mandate.scopes.includes(writeScope)) {
-          throw new Error(
-            `Mandate ${auth.mandate.id} does not include scope ${writeScope}`,
-          );
-        }
-      }
+      const auth = await resolveWriteFor(zone, args as never);
       const identity = await loadWriteIdentity(storage, h, auth);
       const result = await storage.deleteSection(
-        { handle: h, zone, sectionId, ...(reason !== undefined ? { reason } : {}) },
+        {
+          handle: h,
+          zone,
+          sectionId: section_id,
+          ...(reason !== undefined ? { reason } : {}),
+        },
         { identity, delegate: auth?.delegate },
       );
       return ok({
@@ -599,27 +657,24 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
 
   // ------------------------------------------------------------------ mandates
 
-  server.registerTool(
-    "aithos_mandate_verify",
+  register(
+    "mandate_verify",
     {
-      title: "Verify a mandate",
-      description:
-        "Checks a mandate's signature, expiry, revocation state, and subject " +
-        "binding against the subject's DID document. Pass either a mandate id " +
-        "(looked up in the local store) or a path to a mandate JSON.",
-      inputSchema: {
-        mandate: z.string(),
-        at: z
-          .string()
-          .optional()
-          .describe("RFC 3339 timestamp to evaluate validity at (default: now)"),
-      },
+      mandate: z.string(),
+      at: z.string().optional(),
     },
-    async ({ mandate, at }) => {
+    async (args) => {
+      const { mandate, at } = args as { mandate: string; at?: string };
       let m: Mandate;
       if (mandate.includes("/") || mandate.endsWith(".json")) {
-        const p = path.resolve(mandate);
-        m = JSON.parse(fs.readFileSync(p, "utf8")) as Mandate;
+        if (!io) {
+          throw new Error(
+            "path-form mandates need host file access; this host resolves " +
+              "mandates by id only (mandate_<ULID>)",
+          );
+        }
+        const p = io.resolvePath ? io.resolvePath(mandate) : mandate;
+        m = JSON.parse(await io.readTextFile(p)) as Mandate;
       } else {
         m = await storage.loadMandate(mandate);
       }
@@ -659,7 +714,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       title: "Local Aithos identities",
       mimeType: "application/json",
       description:
-        "JSON index of every identity in $AITHOS_HOME (handle, DID, spheres).",
+        "JSON index of every identity this host serves (handle, DID, tracked).",
     },
     async (uri) => {
       const handles = await storage.listHandles();
@@ -695,10 +750,10 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         name: `ethos-manifest:${h}`,
         mimeType: "application/json",
       });
-      for (const z of SPHERE_FRAGMENTS) {
+      for (const zn of SPHERE_FRAGMENTS) {
         out.push({
-          uri: `aithos://ethos/${h}/${z}`,
-          name: `ethos-zone:${h}/${z}`,
+          uri: `aithos://ethos/${h}/${zn}`,
+          name: `ethos-zone:${h}/${zn}`,
           mimeType: "text/markdown",
         });
       }
@@ -775,10 +830,16 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
             ],
           };
         } catch {
+          if (!opts.renderZone) {
+            throw new Error(
+              `zone "${zone}" of "${handle}" is per-section (v0.3); read ` +
+                `sections by id (ethos_read_sections) — this host has no ` +
+                `zone renderer`,
+            );
+          }
           const manifest = await storage.readManifest(handle);
           const doc = await storage.readZoneDoc(handle, zone, { manifest });
-          const { renderZoneMarkdown } = await import("@aithos/protocol-core");
-          const md = renderZoneMarkdown(zone, doc, {
+          const md = opts.renderZone(zone, doc, {
             subjectDid: manifest.subject_did,
             subjectHandle: handle,
             editionVersion: manifest.edition.version,
@@ -791,15 +852,15 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       // a key, fall back to the raw ciphertext (v0.2 sync agents); a v0.3
       // per-section ethos has no single zone blob, so report that instead.
       try {
+        if (!opts.renderZone) throw new Error("no zone renderer on this host");
         const identity = await storage.loadIdentity(handle);
         const manifest = await storage.readManifest(handle);
         const doc = await storage.readZoneDoc(handle, zone, {
           identity,
           manifest,
         });
-        // Re-render markdown using the ethos module's canonical renderer.
-        const { renderZoneMarkdown } = await import("@aithos/protocol-core");
-        const md = renderZoneMarkdown(zone, doc, {
+        // Re-render markdown using the host-injected canonical renderer.
+        const md = opts.renderZone(zone, doc, {
           subjectDid: rootDid(identity),
           subjectHandle: handle,
           editionVersion: manifest.edition.version,
@@ -822,7 +883,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
               {
                 uri: uri.href,
                 mimeType: "application/octet-stream",
-                blob: Buffer.from(bytes).toString("base64"),
+                blob: bytesToBase64(bytes),
               },
             ],
           };
@@ -835,7 +896,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
                 text:
                   `Zone "${zone}" of "${handle}" is encrypted and no sphere key is available. ` +
                   `For a v0.3 per-section ethos, read individual sections by id ` +
-                  `(aithos_ethos_read_sections); there is no single zone blob.`,
+                  `(ethos_read_sections); there is no single zone blob.`,
               },
             ],
           };
@@ -844,10 +905,11 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  // `aithos://ethos/{handle}/manifest/path` — absolute on-disk path, useful
+  // `aithos://ethos/{handle}/manifest-path` — absolute on-disk path, useful
   // for UIs that want to open the file directly. Filesystem-only diagnostic;
-  // only registered when the backend is a {@link FilesystemStorage}.
-  if (storage instanceof FilesystemStorage) {
+  // registered when the host provides a `manifestPath` resolver (bin.ts does).
+  const manifestPath = opts.manifestPath;
+  if (manifestPath) {
     server.registerResource(
       "aithos_ethos_manifest_path",
       new ResourceTemplate("aithos://ethos/{handle}/manifest-path", {
@@ -865,12 +927,67 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
             {
               uri: uri.href,
               mimeType: "text/plain",
-              text: ethosManifestPath(h),
+              text: manifestPath(h),
             },
           ],
         };
       },
     );
+  }
+
+  // ------------------------------------------------------------ legacy aliases
+  //
+  // tools/list exposes ONLY canonical names; legacy `aithos_*` names keep
+  // resolving at tools/call for one minor version (removal in 1.0). The MCP
+  // SDK has no public "hidden tool" facility, so we wrap its tools/call
+  // request handler. The private-map access below is pinned by the alias
+  // regression test in test/h1-inmemory.test.mjs — an SDK upgrade that moves
+  // these internals fails loudly there, never silently.
+  if (opts.legacyAliases !== false) {
+    const inner = (
+      server as unknown as {
+        server: {
+          _requestHandlers?: Map<
+            string,
+            (req: unknown, extra: unknown) => Promise<unknown>
+          >;
+        };
+      }
+    ).server;
+    const handlers = inner._requestHandlers;
+    const original = handlers?.get("tools/call");
+    if (!handlers || !original) {
+      // SDK internals moved — canonical names keep working; aliases don't.
+      console.error(
+        "aithos-mcp: legacy alias bridge unavailable (MCP SDK internals " +
+          "changed); pre-0.9 aithos_* tool names will not resolve",
+      );
+    } else {
+      handlers.set("tools/call", async (req: unknown, extra: unknown) => {
+        const r = req as {
+          params?: { name?: string; arguments?: Record<string, unknown> };
+        };
+        const name = r.params?.name;
+        if (typeof name === "string") {
+          const resolved = resolveLegacyToolCall(name, r.params?.arguments);
+          if (resolved.wasAlias) {
+            console.error(
+              `aithos-mcp: tool '${name}' is a deprecated alias of ` +
+                `'${resolved.name}' — update your client (removal in 1.0)`,
+            );
+            req = {
+              ...r,
+              params: {
+                ...r.params,
+                name: resolved.name,
+                arguments: resolved.args,
+              },
+            };
+          }
+        }
+        return original(req, extra);
+      });
+    }
   }
 
   return server;

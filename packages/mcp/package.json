@@ -1,6 +1,6 @@
 {
   "name": "@aithos/mcp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Aithos MCP server — exposes an Aithos identity's ethos and mandates to MCP-speaking agents over stdio or HTTP.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
@@ -39,17 +39,20 @@
     "check-types": "tsc --noEmit",
     "start:stdio": "node dist/bin.js --transport stdio",
     "start:http": "node dist/bin.js --transport http --port 8787",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "check:browser": "esbuild scripts/iso-entry.mjs --bundle --platform=browser --format=esm --outfile=/dev/null --log-level=error"
   },
   "dependencies": {
-    "@aithos/protocol-core": "^0.8.0",
+    "@aithos/protocol-core": "^0.10.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
-    "zod": "^3.23.0"
+    "zod": "^3.23.0",
+    "@aithos/agent-tools": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "esbuild": "^0.25.0"
   },
   "engines": {
     "node": ">=20"
