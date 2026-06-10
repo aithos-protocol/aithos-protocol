@@ -369,6 +369,8 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         title_hidden: boolean;
         gamma_ref: string;
         tags: string[];
+        approx_size_bytes: number | null;
+        est_tokens: number | null;
       }> = [];
       const skipped: Array<{ zone: Sphere; reason: string }> = [];
       for (const zn of zones) {
@@ -386,6 +388,12 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
               title_hidden: r.title_hidden,
               gamma_ref: r.gamma_ref,
               tags: [...(r.tags ?? [])],
+              // V1 read-planning hints (absent when the backend can't stat).
+              approx_size_bytes: r.approx_size_bytes ?? null,
+              est_tokens:
+                r.approx_size_bytes !== undefined
+                  ? Math.ceil(r.approx_size_bytes / 4)
+                  : null,
             });
           }
         } catch (e) {
@@ -481,6 +489,353 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       });
     },
   );
+
+  // ------------------------------------------------ contextualization (P3)
+  //
+  // V1/V2/V4/V5 — the primitives that make reading an ethos CHEAP for an
+  // agent: plan with the size-hinted index, find with keyword search, ground
+  // with a budgeted context pack, and re-sync with a content-address diff.
+  // All scope-bounded: a mandate session only ever touches the zones its
+  // read scopes grant (T12/T14).
+
+  /** Zones this SESSION may read: all three, or the mandate's read scopes. */
+  const readableZones = (): Sphere[] => {
+    const scopes = opts.mandate?.scopes;
+    if (!scopes) return [...SPHERE_FRAGMENTS];
+    return SPHERE_FRAGMENTS.filter((z) => scopes.includes(`ethos.read.${z}`));
+  };
+
+  /** Intersect a caller-supplied zone list with the session's readable set. */
+  const boundZones = (requested?: Sphere[]): Sphere[] => {
+    const readable = readableZones();
+    if (!requested || requested.length === 0) return readable;
+    return requested.filter((z) => readable.includes(z));
+  };
+
+  const estTokens = (chars: number): number => Math.ceil(chars / 4);
+
+  /** Plain keyword tokenizer — lowercase, unicode letters/digits, len ≥ 2. */
+  const tokenize = (q: string): string[] => {
+    const out: string[] = [];
+    for (const w of q.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+      if (w.length >= 2 && !out.includes(w)) out.push(w);
+    }
+    return out;
+  };
+
+  /** Cap on how many section BODIES one search/pack call may decrypt. */
+  const MAX_CONTEXT_READS = 50;
+
+  interface ScoredSection {
+    zone: Sphere;
+    id: string;
+    title: string;
+    tags: readonly string[];
+    body: string;
+    score: number;
+  }
+
+  /**
+   * Search v1 (D2 — "no NLP"): index first (titles/tags), then the bodies of
+   * readable sections in the bounded zones, capped at MAX_CONTEXT_READS.
+   * Scoring per query term: title hit ×3, tag hit ×2, body occurrences ×1
+   * (each term's body contribution capped at 5).
+   */
+  const searchSections = async (
+    handle: string,
+    query: string,
+    zones: Sphere[],
+  ): Promise<ScoredSection[]> => {
+    const terms = tokenize(query);
+    if (terms.length === 0) return [];
+    const tracked = await storage.isTrackedIdentity(handle);
+    const identity = await loadReadIdentity(storage, handle, tracked);
+
+    // Collect candidate ids per zone from the cheap index.
+    const candidates: Array<{ zone: Sphere; id: string }> = [];
+    for (const zone of zones) {
+      try {
+        const idx = await storage.readSectionIndex(
+          handle,
+          zone,
+          identity ? { identity } : undefined,
+        );
+        for (const r of idx) candidates.push({ zone, id: r.section_id });
+      } catch {
+        /* unreadable zone for this session — skip silently (bounded view) */
+      }
+    }
+
+    const out: ScoredSection[] = [];
+    let reads = 0;
+    for (const { zone, id } of candidates) {
+      if (reads >= MAX_CONTEXT_READS) break;
+      reads++;
+      const [res] = await storage.readSections(handle, [id], {
+        zone,
+        ...(identity ? { identity } : {}),
+      });
+      if (!res || !res.accessible || !res.section) continue;
+      const sec = res.section;
+      const title = sec.title.toLowerCase();
+      const tags = (sec.tags ?? []).map((t) => t.toLowerCase());
+      const body = sec.body.toLowerCase();
+      let score = 0;
+      for (const term of terms) {
+        if (title.includes(term)) score += 3;
+        if (tags.some((t) => t.includes(term))) score += 2;
+        let hits = 0;
+        let i = body.indexOf(term);
+        while (i !== -1 && hits < 5) {
+          hits++;
+          i = body.indexOf(term, i + term.length);
+        }
+        score += hits;
+      }
+      if (score > 0) {
+        out.push({
+          zone,
+          id,
+          title: sec.title,
+          tags: sec.tags ?? [],
+          body: sec.body,
+          score,
+        });
+      }
+    }
+    out.sort((a, b) => b.score - a.score);
+    return out;
+  };
+
+  /** ~160-char snippet centred on the first term occurrence. */
+  const snippetOf = (body: string, query: string): string => {
+    const terms = tokenize(query);
+    const lower = body.toLowerCase();
+    let at = -1;
+    for (const t of terms) {
+      const i = lower.indexOf(t);
+      if (i !== -1 && (at === -1 || i < at)) at = i;
+    }
+    const start = Math.max(0, (at === -1 ? 0 : at) - 60);
+    const cut = body.slice(start, start + 160).replace(/\s+/g, " ").trim();
+    return (start > 0 ? "…" : "") + cut + (start + 160 < body.length ? "…" : "");
+  };
+
+  register(
+    "ethos_search",
+    {
+      handle: z.string().optional(),
+      query: z.string().min(1),
+      zones: z.array(z.enum(SPHERE_FRAGMENTS)).optional(),
+      limit: z.number().int().min(1).max(25).optional(),
+    },
+    async (args) => {
+      const { handle, query, zones, limit } = args as {
+        handle?: string;
+        query: string;
+        zones?: Sphere[];
+        limit?: number;
+      };
+      const h = await resolveHandle(storage, handle);
+      const bounded = boundZones(zones);
+      const scored = await searchSections(h, query, bounded);
+      const top = scored.slice(0, limit ?? 8);
+      return ok({
+        handle: h,
+        query,
+        zones_searched: bounded,
+        matches: top.map((m) => ({
+          zone: m.zone,
+          id: m.id,
+          title: m.title,
+          tags: [...m.tags],
+          score: m.score,
+          est_tokens: estTokens(m.body.length),
+          snippet: snippetOf(m.body, query),
+        })),
+      });
+    },
+  );
+
+  register(
+    "ethos_context_pack",
+    {
+      handle: z.string().optional(),
+      task: z.string().min(1),
+      budget_tokens: z.number().int().min(100).max(20000).optional(),
+      zones: z.array(z.enum(SPHERE_FRAGMENTS)).optional(),
+    },
+    async (args) => {
+      const { handle, task, budget_tokens, zones } = args as {
+        handle?: string;
+        task: string;
+        budget_tokens?: number;
+        zones?: Sphere[];
+      };
+      const h = await resolveHandle(storage, handle);
+      const bounded = boundZones(zones);
+      const budget = budget_tokens ?? 1500;
+      const tracked = await storage.isTrackedIdentity(h);
+      const identity = await loadReadIdentity(storage, h, tracked);
+
+      // 1) pinned/guidance sections from the index (cheap), bodies on demand.
+      const anchors: Array<{ zone: Sphere; id: string; reason: "guidance" | "pinned" }> = [];
+      for (const zone of bounded) {
+        try {
+          const idx = await storage.readSectionIndex(
+            h,
+            zone,
+            identity ? { identity } : undefined,
+          );
+          for (const r of idx) {
+            const tags = (r.tags ?? []).map((t) => t.toLowerCase());
+            if (tags.includes("guidance")) anchors.push({ zone, id: r.section_id, reason: "guidance" });
+            else if (tags.includes("pinned")) anchors.push({ zone, id: r.section_id, reason: "pinned" });
+          }
+        } catch {
+          /* unreadable zone — bounded view */
+        }
+      }
+      anchors.sort((a, b) => (a.reason === b.reason ? 0 : a.reason === "guidance" ? -1 : 1));
+
+      // 2) task matches (reuses the search scorer; generous pre-limit).
+      const matches = (await searchSections(h, task, bounded)).slice(0, 12);
+
+      // 3) assemble under the budget: guidance → pinned → matches, dedup.
+      const seen = new Set<string>();
+      const sections: Array<{
+        zone: Sphere;
+        id: string;
+        title: string;
+        reason: string;
+        truncated: boolean;
+        est_tokens: number;
+        body: string;
+      }> = [];
+      let used = 0;
+
+      const push = async (
+        zone: Sphere,
+        id: string,
+        reason: string,
+        preloaded?: { title: string; body: string },
+      ): Promise<boolean> => {
+        const key = `${zone}/${id}`;
+        if (seen.has(key)) return true;
+        let sec = preloaded;
+        if (!sec) {
+          const [res] = await storage.readSections(h, [id], {
+            zone,
+            ...(identity ? { identity } : {}),
+          });
+          if (!res || !res.accessible || !res.section) return true; // skip silently
+          sec = { title: res.section.title, body: res.section.body };
+        }
+        const remaining = budget - used;
+        if (remaining <= 0) return false;
+        const cost = estTokens(sec.body.length);
+        let body = sec.body;
+        let truncated = false;
+        let charge = cost;
+        if (cost > remaining) {
+          body = sec.body.slice(0, remaining * 4);
+          truncated = true;
+          charge = remaining;
+        }
+        seen.add(key);
+        sections.push({
+          zone,
+          id,
+          title: sec.title,
+          reason,
+          truncated,
+          est_tokens: charge,
+          body,
+        });
+        used += charge;
+        return !truncated;
+      };
+
+      let room = true;
+      for (const a of anchors) {
+        if (!room) break;
+        room = await push(a.zone, a.id, a.reason);
+      }
+      for (const m of matches) {
+        if (!room) break;
+        room = await push(m.zone, m.id, "match", { title: m.title, body: m.body });
+      }
+
+      return ok({
+        handle: h,
+        task,
+        zones_considered: bounded,
+        budget_tokens: budget,
+        used_tokens_est: used,
+        sections,
+      });
+    },
+  );
+
+  // diff_since needs edition history — served only when the backend keeps it
+  // (filesystem `history/`; the platform PDS lands with P5). Same conditional
+  // pattern as the transactional trio: capability present ⇒ tool served.
+  if (typeof storage.readManifestAt === "function") {
+    register(
+      "ethos_diff_since",
+      {
+        handle: z.string().optional(),
+        height: z.number().int().min(1),
+      },
+      async (args) => {
+        const { handle, height } = args as { handle?: string; height: number };
+        const h = await resolveHandle(storage, handle);
+        const prev = await storage.readManifestAt!(h, height);
+        if (!prev) {
+          throw new Error(
+            `ethos_diff_since: no edition at height ${height} (unknown or ` +
+              `pruned from history)`,
+          );
+        }
+        const cur = await storage.readManifest(h);
+        type DescLite = { section_id: string; blob_sha?: string; gamma_ref: string; title?: string };
+        type ZonesLite = Partial<Record<Sphere, { sections?: DescLite[] }>>;
+        const zonesOf = (m: unknown): ZonesLite =>
+          ((m as { zones?: ZonesLite }).zones ?? {}) as ZonesLite;
+        const addr = (d: DescLite): string => d.blob_sha ?? d.gamma_ref;
+
+        const out: Record<string, { added: object[]; modified: object[]; deleted: string[] }> = {};
+        for (const zone of readableZones()) {
+          const prevRows = zonesOf(prev)[zone]?.sections ?? [];
+          const curRows = zonesOf(cur)[zone]?.sections ?? [];
+          const prevMap = new Map(prevRows.map((d) => [d.section_id, d]));
+          const curMap = new Map(curRows.map((d) => [d.section_id, d]));
+          const added: object[] = [];
+          const modified: object[] = [];
+          const deleted: string[] = [];
+          for (const [id, d] of curMap) {
+            const was = prevMap.get(id);
+            if (!was) added.push({ id, ...(d.title ? { title: d.title } : {}) });
+            else if (addr(was) !== addr(d)) modified.push({ id, ...(d.title ? { title: d.title } : {}) });
+          }
+          for (const id of prevMap.keys()) {
+            if (!curMap.has(id)) deleted.push(id);
+          }
+          if (added.length || modified.length || deleted.length) {
+            out[zone] = { added, modified, deleted };
+          }
+        }
+        const curH = (cur as unknown as { edition: { height: number } }).edition.height;
+        return ok({
+          handle: h,
+          from_height: height,
+          to_height: curH,
+          changed: out,
+          unchanged: Object.keys(out).length === 0,
+        });
+      },
+    );
+  }
 
   register(
     "ethos_verify",
