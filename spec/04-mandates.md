@@ -160,6 +160,17 @@ A mandate's `scopes` MUST be consistent with its `actor_sphere`:
 - `circle` sphere mandates MAY carry `ethos.read.public`, `ethos.read.circle`, `ethos.write.public`, `ethos.write.circle`, and any non-sphere action scope.
 - `self` sphere mandates MAY carry all read scopes, all write scopes, and any action scope, but are strongly RECOMMENDED to be issued only to agents running on hardware the subject controls.
 
+> **Self policy (normative, 2026-06-10).** `ethos.read.self` / `ethos.write.self`
+> are mandatable — the intended grantee is the SUBJECT'S OWN agent (a personal
+> assistant acting for the subject, on the subject's behalf). Tool hosts MUST
+> honor these scopes wherever scopes gate behaviour (exposure, search, packs,
+> writes). Independently of any scope, surfaces that NARRATE the subject to a
+> THIRD PARTY (`ethos_introduce`, anonymous briefings, the §12 converse shape)
+> MUST NOT serve `self` content under any circumstance: the `self` zone stays
+> inward-facing by construction, not by configuration. The two rules compose:
+> a self-scoped mandate empowers the subject's agent privately; it never
+> widens what outsiders can be told.
+
 A write scope `ethos.write.<zone>` MUST be carried only by a mandate whose `actor_sphere == <zone>` — i.e. a write mandate for the `circle` zone MUST itself be signed by the `#circle` sphere key. The reason is accountability: the sphere key that "speaks for" a zone is also the one that delegates authoring within it.
 
 ## 4.4 Issuing key
