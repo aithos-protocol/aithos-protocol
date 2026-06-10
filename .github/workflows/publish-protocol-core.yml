@@ -1,0 +1,52 @@
+# Publish @aithos/protocol-core to npm on a `core-v*` tag.
+#
+# Mirrors protocol-client/aithos-sdk's tag→publish flow (test gate, npm
+# registry auth via the NPM_TOKEN secret, provenance deferred until repo
+# visibility is stable on npm — same note as the sibling repos).
+#
+# Workspaces note: this is an npm-workspaces monorepo (root package-lock
+# only), so `npm ci` runs at the ROOT and package scripts run via
+# `--workspace packages/protocol-core`.
+#
+# Release flow:
+#   bump packages/protocol-core/package.json version
+#   npm install --package-lock-only   (sync the root lock)
+#   git commit + git tag core-v<x.y.z> && git push origin main --tags
+
+name: publish-protocol-core
+
+on:
+  push:
+    tags: ["core-v*"]
+
+jobs:
+  test:
+    name: Test protocol-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run check-types --workspace packages/protocol-core
+      - run: npm test --workspace packages/protocol-core
+
+  publish:
+    name: Publish to npm
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/core-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm run build --workspace packages/protocol-core
+      - run: npm publish --workspace packages/protocol-core
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
