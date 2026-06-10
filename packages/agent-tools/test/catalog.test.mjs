@@ -27,7 +27,10 @@ const RATIFIED_NAMES = [
   "ethos_verify",
   "ethos_add_section",
   "ethos_update_section",
+  "ethos_append_section",
   "ethos_delete_section",
+  "ethos_commit",
+  "ethos_discard",
   "mandate_verify",
   "data_query",
 ];
@@ -91,6 +94,9 @@ test("toolsForScopes — read-only mandate hides every write tool (T4 rule)", ()
   assert.ok(!names.includes("ethos_add_section"));
   assert.ok(!names.includes("ethos_update_section"));
   assert.ok(!names.includes("ethos_delete_section"));
+  assert.ok(!names.includes("ethos_append_section"));
+  assert.ok(!names.includes("ethos_commit"));
+  assert.ok(!names.includes("ethos_discard"));
   // gamma-gated tool hidden without gamma.read
   assert.ok(!names.includes("data_query"));
   // ungated introspection stays
@@ -149,4 +155,38 @@ test("resolveLegacyToolCall maps names and renames args shallowly", () => {
   const noop = resolveLegacyToolCall("ethos_read_section", { section_id: "s" });
   assert.equal(noop.wasAlias, false);
   assert.equal(noop.name, "ethos_read_section");
+});
+
+test("P2 transactional trio: write-flagged, write-scope-gated, well-formed", () => {
+  for (const name of ["ethos_append_section", "ethos_commit", "ethos_discard"]) {
+    const spec = getToolSpec(name);
+    assert.ok(spec, `${name} missing`);
+    assert.equal(spec.write, true, `${name} must be a write tool`);
+    assert.ok(isWriteTool(name));
+    assert.deepEqual(spec.requires?.anyOf, [
+      "ethos.write.public",
+      "ethos.write.circle",
+      "ethos.write.self",
+    ]);
+  }
+  // append: journal-pattern schema
+  const append = getToolSpec("ethos_append_section");
+  assert.deepEqual([...append.input_schema.required].sort(), [
+    "content",
+    "section_id",
+    "zone",
+  ]);
+  // commit/discard: no required args; commit takes an optional message
+  assert.equal(getToolSpec("ethos_commit").input_schema.required, undefined);
+  assert.ok(getToolSpec("ethos_commit").input_schema.properties.message);
+  assert.equal(getToolSpec("ethos_discard").input_schema.required, undefined);
+  // a write-scoped mandate sees the trio; readOnly drops it
+  const w = toolsForScopes(["ethos.write.circle"]).map((t) => t.name);
+  for (const n of ["ethos_append_section", "ethos_commit", "ethos_discard"]) {
+    assert.ok(w.includes(n), `${n} exposed to a write mandate`);
+  }
+  const ro = toolsForScopes(undefined, { readOnly: true }).map((t) => t.name);
+  for (const n of ["ethos_append_section", "ethos_commit", "ethos_discard"]) {
+    assert.ok(!ro.includes(n), `${n} hidden in readOnly`);
+  }
 });

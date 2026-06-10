@@ -50,13 +50,14 @@ const nodeIo: HostIo = {
 };
 
 /** The node host's createServer options: filesystem storage + host io. */
-function nodeServerOptions(): CreateServerOptions {
+function nodeServerOptions(autoCommit?: boolean): CreateServerOptions {
   return {
     storage: new FilesystemStorage(),
     home: AITHOS_HOME,
     manifestPath: ethosManifestPath,
     io: nodeIo,
     renderZone: renderZoneMarkdown,
+    ...(autoCommit ? { autoCommit: true } : {}),
   };
 }
 
@@ -65,6 +66,7 @@ interface CliOpts {
   port?: string;
   host?: string;
   stateless?: boolean;
+  autoCommit?: boolean;
 }
 
 const program = new Command();
@@ -85,16 +87,22 @@ program
   .option("--port <n>", "HTTP port (http transport only)", "8787")
   .option("--host <h>", "HTTP host (http transport only)", "127.0.0.1")
   .option("--stateless", "HTTP stateless mode (no session id)", false)
+  .option(
+    "--auto-commit",
+    "Persist every write immediately (pre-0.10 behaviour). Default is " +
+      "TRANSACTIONAL: writes stage in the session until ethos_commit.",
+    false,
+  )
   .action(async (opts: CliOpts) => {
     if (opts.transport === "stdio") {
-      await runStdio();
+      await runStdio(opts.autoCommit === true);
     } else {
       await runHttp(opts);
     }
   });
 
-async function runStdio(): Promise<void> {
-  const server = createServer(nodeServerOptions());
+async function runStdio(autoCommit: boolean): Promise<void> {
+  const server = createServer(nodeServerOptions(autoCommit));
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // The stdio transport keeps stdin open for us; no further work needed.
@@ -165,7 +173,9 @@ async function runHttp(opts: CliOpts): Promise<void> {
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined, // stateless
           });
-          const server = createServer(nodeServerOptions());
+          // A per-request server cannot stage a transaction — force the
+          // per-write auto-commit behaviour in stateless mode.
+          const server = createServer(nodeServerOptions(true));
           await server.connect(transport);
           session = { transport, server };
           // No entry stored; each request is independent.
@@ -173,7 +183,7 @@ async function runHttp(opts: CliOpts): Promise<void> {
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
           });
-          const server = createServer(nodeServerOptions());
+          const server = createServer(nodeServerOptions(opts.autoCommit === true));
           transport.onclose = () => {
             const sid = transport.sessionId;
             if (sid) sessions.delete(sid);

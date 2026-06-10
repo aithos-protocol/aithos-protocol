@@ -18,3 +18,25 @@ Initial release. Canonical catalogue ratified per decision D1
 - Shared types: `AgentToolSpec`, `DispatchOutcome`, `ScopeRule`,
   `LegacyAlias`.
 - Zero runtime dependencies; `sideEffects: false`; isomorphic.
+
+## [0.2.0] — 2026-06-10
+
+Phase P2 of PLAN-MCP-UNIFICATION-2026-06 — the transactional trio (D3).
+
+### Added
+
+- **`ethos_commit { message? }`** — seals every staged write of the session
+  as ONE signed edition; normative guidance: call once after the LAST write
+  of a coherent change. **`ethos_discard`** — drops the staged batch (zero
+  editions); sessions ending without commit are discarded implicitly.
+- **`ethos_append_section { zone, section_id, content }`** — the journal
+  pattern: append at the end of a section body without rewriting it;
+  appends compose in order within a batch.
+- All three: `write: true`, exposed under any `ethos.write.*` scope.
+
+### Changed
+
+- `ethos_add_section` / `ethos_update_section` / `ethos_delete_section`
+  descriptions now state the staged-until-commit semantics of
+  transactional hosts (auto-commit hosts persist immediately, unchanged).
+

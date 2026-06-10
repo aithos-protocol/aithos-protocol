@@ -53,7 +53,9 @@ import { SPHERE_FRAGMENTS, rootDid } from "@aithos/protocol-core/did";
 import { verifyMandate } from "@aithos/protocol-core/mandate";
 import type {
   AithosStorage,
+  ApplyEditsResult,
   DidDocument,
+  EthosEdit,
   Identity,
   Mandate,
   Manifest,
@@ -217,6 +219,18 @@ export interface CreateServerOptions {
    * listed), logging a deprecation warning. Default true. Removal in 1.0.
    */
   legacyAliases?: boolean;
+  /**
+   * Per-write auto-commit (pre-0.10 behaviour): every write persists its own
+   * edition immediately and `ethos_commit` / `ethos_discard` are not served.
+   *
+   * DEFAULT IS TRANSACTIONAL (D3): writes STAGE in the session and persist
+   * as ONE edition at `ethos_commit`; a session that ends without commit is
+   * discarded. Transactional mode requires the storage backend to implement
+   * the optional `applyEdits` capability — when it does not, the server
+   * falls back to auto-commit with a stderr notice. Stateless HTTP hosts
+   * should pass `autoCommit: true` (a per-request server cannot stage).
+   */
+  autoCommit?: boolean;
   /**
    * Optional zone-markdown renderer for the `aithos://ethos/{handle}/{zone}`
    * resource (node hosts pass protocol-core's `renderZoneMarkdown`, which
@@ -490,9 +504,11 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   );
 
   /**
-   * Shared guard for the three write tools: resolve the (optional) delegate
-   * auth and enforce the per-zone write scope (defense in depth — exposure
-   * filtering above is the coarse gate; this is the per-call gate).
+   * Shared guard for every write tool: resolve the (optional) delegate auth
+   * and enforce the per-zone write scope (defense in depth — exposure
+   * filtering above is the coarse gate; this is the per-call gate, applied
+   * at STAGE time in transactional mode and re-checked structurally by the
+   * storage layer at commit).
    */
   const resolveWriteFor = async (
     zone: Sphere,
@@ -513,6 +529,152 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     }
     return auth;
   };
+
+  // ---------------------------------------------------------- transactions
+  //
+  // D3 — transactional editing. Writes STAGE in this server instance (one
+  // instance == one MCP session on every transport this package ships) and
+  // `ethos_commit` flushes the batch through the storage backend's
+  // `applyEdits` capability: ONE edition, one manifest re-sign, one gamma
+  // anchor advance. `ethos_discard` (or simply ending the session) drops the
+  // batch — zero writes. Hosts opt back into the pre-0.10 behaviour with
+  // `autoCommit: true`; storages without `applyEdits` force that fallback.
+
+  const transactional =
+    opts.autoCommit !== true && typeof storage.applyEdits === "function";
+  if (opts.autoCommit !== true && !transactional) {
+    console.error(
+      "aithos-mcp: storage backend has no applyEdits capability — " +
+        "falling back to per-write auto-commit",
+    );
+  }
+
+  interface StagedWrite {
+    edit: EthosEdit;
+    /** Pre-composed summary for the commit acknowledgement. */
+    summary: { op: string; zone: Sphere; section_id: string };
+  }
+  interface TxState {
+    handle: string;
+    /** `owner`, or `mandate:<id>` — one authority per transaction. */
+    authKey: string;
+    auth: ResolvedWriteAuth | null;
+    writes: StagedWrite[];
+  }
+  let tx: TxState | null = null;
+
+  /** Isomorphic 24-hex section id (matches the storage layer's shape). */
+  const mintSectionId = (): string => {
+    const bytes = new Uint8Array(12);
+    (globalThis as unknown as { crypto: { getRandomValues(b: Uint8Array): Uint8Array } }).crypto.getRandomValues(bytes);
+    let hex = "";
+    for (const b of bytes) hex += b.toString(16).padStart(2, "0");
+    return `sec_${hex}`;
+  };
+
+  /** Enroll a write into the open transaction (single handle + authority). */
+  const enroll = (
+    handle: string,
+    auth: ResolvedWriteAuth | null,
+  ): TxState => {
+    const authKey = auth ? `mandate:${auth.mandate.id}` : "owner";
+    if (!tx) {
+      tx = { handle, authKey, auth, writes: [] };
+      return tx;
+    }
+    if (tx.handle !== handle) {
+      throw new Error(
+        `transaction already targets handle "${tx.handle}" — commit or ` +
+          `discard before writing as "${handle}"`,
+      );
+    }
+    if (tx.authKey !== authKey) {
+      throw new Error(
+        `transaction already carries authority ${tx.authKey} — a single ` +
+          `commit cannot mix write authorities (got ${authKey})`,
+      );
+    }
+    return tx;
+  };
+
+  /**
+   * The section as THIS SESSION sees it: the latest staged upsert when the
+   * batch touched it (unless deleted later), else the persisted section.
+   * Returns null when unknown/deleted. Used for fail-fast existence checks,
+   * append composition, and delete echoes.
+   */
+  const effectiveSection = async (
+    handle: string,
+    zone: Sphere,
+    sectionId: string,
+  ): Promise<{ title: string; body: string; tags?: readonly string[] } | null> => {
+    if (tx && tx.handle === handle) {
+      for (let i = tx.writes.length - 1; i >= 0; i--) {
+        const e = tx.writes[i]!.edit;
+        if (e.zone !== zone) continue;
+        const id = e.op === "add" ? e.sectionId : e.sectionId;
+        if (id !== sectionId) continue;
+        if (e.op === "delete") return null;
+        if (e.op === "add") {
+          return { title: e.title, body: e.body, ...(e.tags ? { tags: e.tags } : {}) };
+        }
+        // modify — compose over what was below it.
+        const baseIdx = tx.writes.slice(0, i);
+        let base: { title: string; body: string; tags?: readonly string[] } | null = null;
+        for (let j = baseIdx.length - 1; j >= 0; j--) {
+          const b = baseIdx[j]!.edit;
+          if (b.zone === zone && b.sectionId === sectionId) {
+            if (b.op === "delete") { base = null; break; }
+            if (b.op === "add") { base = { title: b.title, body: b.body, ...(b.tags ? { tags: b.tags } : {}) }; break; }
+          }
+        }
+        if (!base) base = await persistedSection(handle, zone, sectionId);
+        return {
+          title: e.title !== undefined ? e.title : (base?.title ?? ""),
+          body: e.body !== undefined ? e.body : (base?.body ?? ""),
+          ...(e.clearTags
+            ? {}
+            : e.tags !== undefined
+              ? { tags: e.tags }
+              : base?.tags
+                ? { tags: base.tags }
+                : {}),
+        };
+      }
+    }
+    return persistedSection(handle, zone, sectionId);
+  };
+
+  const persistedSection = async (
+    handle: string,
+    zone: Sphere,
+    sectionId: string,
+  ): Promise<{ title: string; body: string; tags?: readonly string[] } | null> => {
+    const tracked = await storage.isTrackedIdentity(handle);
+    const identity = await loadReadIdentity(storage, handle, tracked);
+    const [res] = await storage.readSections(handle, [sectionId], {
+      zone,
+      ...(identity ? { identity } : {}),
+    });
+    if (!res || !res.accessible || !res.section) return null;
+    return {
+      title: res.section.title,
+      body: res.section.body,
+      ...(res.section.tags ? { tags: res.section.tags } : {}),
+    };
+  };
+
+  const stageAck = (t: TxState, w: StagedWrite) =>
+    ok({
+      staged: true,
+      ...w.summary,
+      pending: t.writes.length,
+      note:
+        "Nothing is persisted yet — `ethos_commit` seals the whole batch " +
+        "as one edition; `ethos_discard` abandons it.",
+    });
+
+  // ------------------------------------------------------------------ writes
 
   register(
     "ethos_add_section",
@@ -535,6 +697,16 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       };
       const h = await resolveHandle(storage, handle);
       const auth = await resolveWriteFor(zone, args as never);
+      if (transactional) {
+        const t = enroll(h, auth);
+        const sectionId = mintSectionId();
+        const w: StagedWrite = {
+          edit: { op: "add", zone, sectionId, title, body, ...(tags ? { tags } : {}) },
+          summary: { op: "add", zone, section_id: sectionId },
+        };
+        t.writes.push(w);
+        return stageAck(t, w);
+      }
       const identity = await loadWriteIdentity(storage, h, auth);
       const { section, manifest, gammaEntry } = await storage.addSection(
         { handle: h, zone, title, body, tags },
@@ -544,8 +716,6 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         section: sectionSummary(zone, section as Section),
         manifest_version: manifest.edition.version,
         manifest_height: manifest.edition.height,
-        // v0.3 writes have no signed gamma entry yet — fall back to the
-        // section's gamma_ref as the provenance anchor.
         gamma_entry_id: gammaEntry?.id ?? section.gamma_ref,
         gamma_head: manifest.gamma?.head ?? null,
         gamma_count: manifest.gamma?.count ?? 0,
@@ -589,6 +759,29 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       }
       const h = await resolveHandle(storage, handle);
       const auth = await resolveWriteFor(zone, args as never);
+      if (transactional) {
+        const t = enroll(h, auth);
+        const cur = await effectiveSection(h, zone, section_id);
+        if (!cur) {
+          throw new Error(
+            `ethos_update_section: no section ${section_id} in zone ${zone} ` +
+              `(persisted or staged)`,
+          );
+        }
+        const w: StagedWrite = {
+          edit: {
+            op: "modify",
+            zone,
+            sectionId: section_id,
+            ...(title !== undefined ? { title } : {}),
+            ...(body !== undefined ? { body } : {}),
+            ...(clear_tags ? { clearTags: true } : tags !== undefined ? { tags } : {}),
+          },
+          summary: { op: "modify", zone, section_id },
+        };
+        t.writes.push(w);
+        return stageAck(t, w);
+      }
       const identity = await loadWriteIdentity(storage, h, auth);
       const effectiveTags = clear_tags ? [] : tags;
       const { section, manifest, gammaEntry } = await storage.modifySection(
@@ -614,6 +807,57 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   );
 
   register(
+    "ethos_append_section",
+    {
+      handle: z.string().optional(),
+      zone: z.enum(SPHERE_FRAGMENTS),
+      section_id: z.string(),
+      content: z.string().min(1),
+      mandate: z.string().optional(),
+      agent_key: z.string().optional(),
+    },
+    async (args) => {
+      const { handle, zone, section_id, content } = args as {
+        handle?: string;
+        zone: Sphere;
+        section_id: string;
+        content: string;
+      };
+      const h = await resolveHandle(storage, handle);
+      const auth = await resolveWriteFor(zone, args as never);
+      const cur = await effectiveSection(h, zone, section_id);
+      if (!cur) {
+        throw new Error(
+          `ethos_append_section: no section ${section_id} in zone ${zone} ` +
+            `(persisted${transactional ? " or staged" : ""})`,
+        );
+      }
+      const nextBody = cur.body.length > 0 ? `${cur.body}\n${content}` : content;
+      if (transactional) {
+        const t = enroll(h, auth);
+        const w: StagedWrite = {
+          edit: { op: "modify", zone, sectionId: section_id, body: nextBody },
+          summary: { op: "append", zone, section_id },
+        };
+        t.writes.push(w);
+        return stageAck(t, w);
+      }
+      const identity = await loadWriteIdentity(storage, h, auth);
+      const { section, manifest, gammaEntry } = await storage.modifySection(
+        { handle: h, zone, sectionId: section_id, body: nextBody },
+        { identity, delegate: auth?.delegate },
+      );
+      return ok({
+        section: sectionSummary(zone, section as Section),
+        appended_chars: content.length,
+        manifest_version: manifest.edition.version,
+        manifest_height: manifest.edition.height,
+        gamma_entry_id: gammaEntry?.id ?? section.gamma_ref,
+      });
+    },
+  );
+
+  register(
     "ethos_delete_section",
     {
       handle: z.string().optional(),
@@ -632,6 +876,27 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       };
       const h = await resolveHandle(storage, handle);
       const auth = await resolveWriteFor(zone, args as never);
+      if (transactional) {
+        const t = enroll(h, auth);
+        const cur = await effectiveSection(h, zone, section_id);
+        if (!cur) {
+          throw new Error(
+            `ethos_delete_section: no section ${section_id} in zone ${zone} ` +
+              `(persisted or staged)`,
+          );
+        }
+        const w: StagedWrite = {
+          edit: {
+            op: "delete",
+            zone,
+            sectionId: section_id,
+            ...(reason !== undefined ? { reason } : {}),
+          },
+          summary: { op: "delete", zone, section_id },
+        };
+        t.writes.push(w);
+        return stageAck(t, w);
+      }
       const identity = await loadWriteIdentity(storage, h, auth);
       const result = await storage.deleteSection(
         {
@@ -654,6 +919,63 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       });
     },
   );
+
+  // ------------------------------------------------------------ commit/discard
+  //
+  // Registered ONLY on transactional hosts: an auto-commit host has nothing
+  // to commit and must not advertise the tools (T10 checks subset parity).
+
+  if (transactional) {
+    register(
+      "ethos_commit",
+      { message: z.string().optional() },
+      async (args) => {
+        const { message } = args as { message?: string };
+        if (!tx || tx.writes.length === 0) {
+          throw new Error(
+            "ethos_commit: nothing is staged — stage writes first",
+          );
+        }
+        const t = tx;
+        const identity = await loadWriteIdentity(storage, t.handle, t.auth);
+        const result: ApplyEditsResult = await storage.applyEdits!(
+          t.handle,
+          t.writes.map((w) => w.edit),
+          { identity, delegate: t.auth?.delegate },
+        );
+        // Success: the batch is sealed — clear the transaction.
+        tx = null;
+        return ok({
+          committed: true,
+          edits: result.results.length,
+          ...(message !== undefined ? { message } : {}),
+          manifest_version: result.manifest.edition.version,
+          manifest_height: result.manifest.edition.height,
+          gamma_head: result.manifest.gamma?.head ?? null,
+          results: result.results.map((r) =>
+            r.op === "delete"
+              ? { op: r.op, zone: r.zone, section_id: r.sectionId }
+              : {
+                  op: r.op,
+                  zone: r.zone,
+                  section_id: r.section.id,
+                  title: r.section.title,
+                  gamma_ref: r.section.gamma_ref,
+                },
+          ),
+        });
+      },
+    );
+
+    register("ethos_discard", {}, async () => {
+      const n = tx?.writes.length ?? 0;
+      tx = null;
+      return ok({
+        discarded: n,
+        note: n === 0 ? "nothing was staged" : "no edition was written",
+      });
+    });
+  }
 
   // ------------------------------------------------------------------ mandates
 

@@ -135,3 +135,150 @@ function mutate(args: EditSectionV03Args, del: boolean): ManifestV03 {
     now: args.now,
   });
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Batched edits — N section changes, ONE edition (P2, D3 transactional)      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One resolved entry of a batch: upsert (add/modify) or delete. `sectionId`
+ * is always explicit here — callers mint ids for adds (the storage layer
+ * uses `newSectionId()`), so a batch is fully addressable before it runs.
+ */
+export type BatchSectionEdit =
+  | {
+      readonly op: "upsert";
+      readonly zone: Sphere;
+      readonly sectionId: string;
+      readonly change: SectionChange;
+      readonly gammaRef?: string;
+    }
+  | { readonly op: "delete"; readonly zone: Sphere; readonly sectionId: string };
+
+export interface EditSectionsV03Args {
+  /** Owner identity or an Author (owner/delegate). */
+  author: Identity | Author;
+  /** Current bundle directory (the predecessor edition). */
+  bundleDir: string;
+  /** Directory to write the new edition into. */
+  outDir: string;
+  /** Edits, applied IN ORDER (later edits see earlier ones in the batch). */
+  edits: readonly BatchSectionEdit[];
+  now?: Date;
+}
+
+/**
+ * Apply N section edits and write ONE new edition (the transactional
+ * counterpart of {@link editSectionV03} / {@link deleteSectionV03}).
+ *
+ * Semantics:
+ *   - Edits resolve sequentially against (persisted state + earlier edits in
+ *     the SAME batch): modify-after-add composes, delete-after-add cancels
+ *     out (and is dropped from the patch), the second upsert of a section
+ *     wins over the first.
+ *   - Only touched sections are (re)encrypted; untouched siblings carry
+ *     forward byte-identical via {@link patchEditionV03} — exactly one
+ *     manifest re-sign for the whole batch.
+ *   - A batch that nets out to zero changes throws (`empty batch`): callers
+ *     (the MCP `ethos_commit` handler, SdkStorage) treat that as a refusal,
+ *     not a no-op edition.
+ *   - Authorization mirrors the single-edit path: every edit's zone must be
+ *     authored by `author` (owner: all zones; delegate: its actor sphere).
+ */
+export function editSectionsV03(args: EditSectionsV03Args): ManifestV03 {
+  if (args.edits.length === 0) {
+    throw new Error("editSectionsV03: empty batch");
+  }
+  const author = toAuthor(args.author);
+  const manifest = JSON.parse(
+    readFileSync(join(args.bundleDir, "manifest.json"), "utf8"),
+  ) as ManifestV03;
+
+  const authoredZones: Sphere[] =
+    author.kind === "owner" ? [...SPHERE_FRAGMENTS] : [author.mandate.actor_sphere];
+
+  // Per-zone working state: the net effect of the batch so far.
+  const pendingUpserts = new Map<Sphere, Map<string, Section>>();
+  const pendingDeletes = new Map<Sphere, Set<string>>();
+  const upsertsOf = (z: Sphere): Map<string, Section> => {
+    let m = pendingUpserts.get(z);
+    if (!m) pendingUpserts.set(z, (m = new Map()));
+    return m;
+  };
+  const deletesOf = (z: Sphere): Set<string> => {
+    let s = pendingDeletes.get(z);
+    if (!s) pendingDeletes.set(z, (s = new Set()));
+    return s;
+  };
+
+  /** Read the PERSISTED section (predecessor edition), or undefined. */
+  const readPersisted = (zone: Sphere, sectionId: string): Section | undefined => {
+    const zm = manifest.zones[zone];
+    const desc = zm?.sections.find((s) => s.section_id === sectionId);
+    if (!desc) return undefined;
+    let reader: SectionReader | undefined;
+    if (zone !== "public") {
+      const r = authorZoneDecryptRecipient(author, zone as "circle" | "self");
+      reader = { didUrl: r.did, x25519Secret: r.x25519Secret };
+    }
+    const res = readSection(args.bundleDir, zm, desc, manifest.subject_did, reader);
+    if (!res.accessible || !res.section) {
+      throw new Error(
+        `editSectionsV03: cannot read target section ${sectionId}: ${res.reason ?? "inaccessible"}`,
+      );
+    }
+    return res.section;
+  };
+
+  for (const e of args.edits) {
+    if (!authoredZones.includes(e.zone)) {
+      throw new Error(
+        `editSectionsV03: author may not write zone ${e.zone} (authored: ${authoredZones.join(", ")})`,
+      );
+    }
+    if (e.op === "delete") {
+      const had = upsertsOf(e.zone).delete(e.sectionId);
+      const persisted = manifest.zones[e.zone]?.sections.some(
+        (s) => s.section_id === e.sectionId,
+      );
+      if (persisted) {
+        deletesOf(e.zone).add(e.sectionId);
+      } else if (!had) {
+        throw new Error(
+          `editSectionsV03: section ${e.sectionId} not found in zone ${e.zone}`,
+        );
+      }
+      continue;
+    }
+    // upsert — base = earlier batch state, else the persisted section (unless
+    // deleted earlier in the batch, which makes this a fresh add under the id).
+    const deletedEarlier = deletesOf(e.zone).has(e.sectionId);
+    const cur =
+      upsertsOf(e.zone).get(e.sectionId) ??
+      (deletedEarlier ? undefined : readPersisted(e.zone, e.sectionId));
+    const next = applyChange(cur, e.sectionId, e.change, e.gammaRef ?? newGammaId());
+    upsertsOf(e.zone).set(e.sectionId, next);
+    deletesOf(e.zone).delete(e.sectionId);
+  }
+
+  const patch: Partial<Record<Sphere, ZonePatch>> = {};
+  for (const zone of SPHERE_FRAGMENTS) {
+    const ups = pendingUpserts.get(zone);
+    const dels = pendingDeletes.get(zone);
+    const zp: ZonePatch = {};
+    if (ups && ups.size > 0) zp.upserts = [...ups.values()];
+    if (dels && dels.size > 0) zp.deletes = [...dels];
+    if (zp.upserts || zp.deletes) patch[zone] = zp;
+  }
+  if (Object.keys(patch).length === 0) {
+    throw new Error("editSectionsV03: batch nets out to no changes");
+  }
+
+  return patchEditionV03({
+    author,
+    outDir: args.outDir,
+    prev: { manifest, dir: args.bundleDir },
+    patch,
+    now: args.now,
+  });
+}
