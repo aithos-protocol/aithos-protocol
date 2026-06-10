@@ -195,7 +195,10 @@ const ethosAddSection: AgentToolSpec = {
     "Creates a new section with an initial body. Requires either a local " +
     "subject identity (owner write, sphere key) OR a write mandate + agent " +
     "keyfile (delegated write under the mandate's `ethos.write.<zone>` " +
-    "scope). Write only what the subject asked for or clearly authorized.",
+    "scope). Write only what the subject asked for or clearly authorized. " +
+    "On a transactional host (the default) this write is STAGED: nothing " +
+    "persists until `ethos_commit` seals the batch as ONE edition; " +
+    "`ethos_discard` abandons it.",
   input_schema: {
     type: "object",
     properties: {
@@ -225,7 +228,8 @@ const ethosUpdateSection: AgentToolSpec = {
     "section, emitting a signed `section.modify` gamma entry (the previous " +
     "state remains in the log as the audit trail). Pass at least one of " +
     "{title, body, tags, clear_tags}. Auth semantics identical to " +
-    "`ethos_add_section`. Preserve the subject's voice when rewriting.",
+    "`ethos_add_section`. Preserve the subject's voice when rewriting. " +
+    "On a transactional host this change is STAGED until `ethos_commit`.",
   input_schema: {
     type: "object",
     properties: {
@@ -252,7 +256,8 @@ const ethosDeleteSection: AgentToolSpec = {
     "Removes a section from its zone (v0.3 drops the blob and writes a new " +
     "per-section edition; the gamma log keeps the audit trail). Auth " +
     "semantics identical to `ethos_add_section`. Deleting is destructive: " +
-    "only do it on an explicit, unambiguous instruction.",
+    "only do it on an explicit, unambiguous instruction. On a " +
+    "transactional host the deletion is STAGED until `ethos_commit`.",
   input_schema: {
     type: "object",
     properties: {
@@ -268,6 +273,73 @@ const ethosDeleteSection: AgentToolSpec = {
     },
     required: ["zone", "section_id"],
   },
+  requires: { anyOf: ETHOS_WRITE_SCOPES },
+  write: true,
+};
+
+const ethosAppendSection: AgentToolSpec = {
+  name: "ethos_append_section",
+  title: "Append to a section",
+  description:
+    "Appends `content` at the END of an existing section's body without " +
+    "rewriting it — the journal pattern (one section per stream, one append " +
+    "per entry). The result is `body + \n + content`; title and tags are " +
+    "untouched. Auth semantics identical to `ethos_add_section`. On a " +
+    "transactional host the append is STAGED until `ethos_commit`; appends " +
+    "compose in order within a batch.",
+  input_schema: {
+    type: "object",
+    properties: {
+      handle: handleSchema,
+      zone: zoneSchema,
+      section_id: { type: "string", description: "Section id (sec_<hex>)." },
+      content: {
+        type: "string",
+        minLength: 1,
+        description: "Text appended after the existing body (markdown).",
+      },
+      mandate: mandateArgSchema,
+      agent_key: agentKeyArgSchema,
+    },
+    required: ["zone", "section_id", "content"],
+  },
+  requires: { anyOf: ETHOS_WRITE_SCOPES },
+  write: true,
+};
+
+const ethosCommit: AgentToolSpec = {
+  name: "ethos_commit",
+  title: "Commit staged writes",
+  description:
+    "Seals every write staged in this session as ONE signed edition (one " +
+    "manifest, one gamma anchor advance) and reports what was committed. " +
+    "Call it once after the LAST write of a coherent change — never after " +
+    "every single write. Fails when nothing is staged. Hosts running with " +
+    "auto-commit persist each write immediately and do not expose this tool.",
+  input_schema: {
+    type: "object",
+    properties: {
+      message: {
+        type: "string",
+        description:
+          "Optional free-text note describing the batch (recorded in the " +
+          "commit acknowledgement; informational only).",
+      },
+    },
+  },
+  requires: { anyOf: ETHOS_WRITE_SCOPES },
+  write: true,
+};
+
+const ethosDiscard: AgentToolSpec = {
+  name: "ethos_discard",
+  title: "Discard staged writes",
+  description:
+    "Drops every write staged in this session WITHOUT persisting anything " +
+    "(zero editions, zero gamma entries). Use it when the subject retracts " +
+    "the change or the staged state is wrong. A session that ends without " +
+    "`ethos_commit` is discarded implicitly.",
+  input_schema: { type: "object", properties: {} },
   requires: { anyOf: ETHOS_WRITE_SCOPES },
   write: true,
 };
@@ -353,7 +425,10 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
   ethosVerify,
   ethosAddSection,
   ethosUpdateSection,
+  ethosAppendSection,
   ethosDeleteSection,
+  ethosCommit,
+  ethosDiscard,
   mandateVerify,
   dataQuery,
 ];
