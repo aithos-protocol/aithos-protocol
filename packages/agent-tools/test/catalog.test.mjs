@@ -24,6 +24,9 @@ const RATIFIED_NAMES = [
   "ethos_list_sections",
   "ethos_read_section",
   "ethos_read_sections",
+  "ethos_search",
+  "ethos_context_pack",
+  "ethos_diff_since",
   "ethos_verify",
   "ethos_add_section",
   "ethos_update_section",
@@ -188,5 +191,31 @@ test("P2 transactional trio: write-flagged, write-scope-gated, well-formed", () 
   const ro = toolsForScopes(undefined, { readOnly: true }).map((t) => t.name);
   for (const n of ["ethos_append_section", "ethos_commit", "ethos_discard"]) {
     assert.ok(!ro.includes(n), `${n} hidden in readOnly`);
+  }
+});
+
+test("P3 contextualization tools: read-flagged, read-scope-gated, well-formed", () => {
+  for (const name of ["ethos_search", "ethos_context_pack", "ethos_diff_since"]) {
+    const spec = getToolSpec(name);
+    assert.ok(spec, `${name} missing`);
+    assert.equal(spec.write, false, `${name} is a read tool`);
+    assert.ok(!isWriteTool(name));
+    assert.deepEqual(spec.requires?.anyOf, [
+      "ethos.read.public",
+      "ethos.read.circle",
+      "ethos.read.self",
+    ]);
+  }
+  assert.deepEqual(getToolSpec("ethos_search").input_schema.required, ["query"]);
+  assert.deepEqual(getToolSpec("ethos_context_pack").input_schema.required, ["task"]);
+  assert.deepEqual(getToolSpec("ethos_diff_since").input_schema.required, ["height"]);
+  // read-scoped mandates see them; readOnly keeps them (non-mutating).
+  const r = toolsForScopes(["ethos.read.public"]).map((t) => t.name);
+  for (const n of ["ethos_search", "ethos_context_pack", "ethos_diff_since"]) {
+    assert.ok(r.includes(n), `${n} exposed to a read mandate`);
+  }
+  const ro = toolsForScopes(undefined, { readOnly: true }).map((t) => t.name);
+  for (const n of ["ethos_search", "ethos_context_pack", "ethos_diff_since"]) {
+    assert.ok(ro.includes(n), `${n} kept in readOnly`);
   }
 });

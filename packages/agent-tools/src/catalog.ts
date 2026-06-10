@@ -96,9 +96,11 @@ const ethosListSections: AgentToolSpec = {
   title: "List ethos sections",
   description:
     "Lists the section index across public/circle/self (or one zone via " +
-    "`zone`): id, title, tags, gamma_ref — no bodies. This is the cheap " +
-    "discovery surface: call it first, then read only the section bodies " +
-    "you actually need with `ethos_read_section` / `ethos_read_sections`.",
+    "`zone`): id, title, tags, gamma_ref, and — when the host can stat the " +
+    "blob — `approx_size_bytes` + `est_tokens`. No bodies. This is the cheap " +
+    "discovery surface: call it first, budget with `est_tokens`, then read " +
+    "only the bodies you actually need with `ethos_read_section` / " +
+    "`ethos_read_sections` (or let `ethos_context_pack` assemble them).",
   input_schema: {
     type: "object",
     properties: { handle: handleSchema, zone: zoneSchema },
@@ -179,6 +181,111 @@ const ethosVerify: AgentToolSpec = {
           "If false, skip decrypting circle/self and verify only public + manifest.",
       },
     },
+  },
+  requires: { anyOf: ETHOS_READ_SCOPES },
+  write: false,
+};
+
+const ethosSearch: AgentToolSpec = {
+  name: "ethos_search",
+  title: "Search the ethos",
+  description:
+    "Keyword search over the sections this session can read: titles, tags, " +
+    "and accessible bodies (no embeddings, no fuzzy matching — plain terms, " +
+    "case-insensitive). Returns scored matches (title hits weigh most) with " +
+    "a snippet; read the full bodies of the ids you keep via " +
+    "`ethos_read_sections`. Sections outside the session's read scopes are " +
+    "NEVER searched or returned. Prefer this over listing + reading " +
+    "everything when the ethos is large.",
+  input_schema: {
+    type: "object",
+    properties: {
+      handle: handleSchema,
+      query: {
+        type: "string",
+        minLength: 1,
+        description: "Search terms (plain keywords; no operators).",
+      },
+      zones: {
+        type: "array",
+        items: { ...zoneSchema },
+        description: "Restrict the search to these zones (default: all readable).",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: 25,
+        default: 8,
+        description: "Maximum number of matches.",
+      },
+    },
+    required: ["query"],
+  },
+  requires: { anyOf: ETHOS_READ_SCOPES },
+  write: false,
+};
+
+const ethosContextPack: AgentToolSpec = {
+  name: "ethos_context_pack",
+  title: "Assemble a context pack",
+  description:
+    "Assembles the most relevant readable sections for a TASK under a token " +
+    "budget, in one call: sections tagged `pinned` or `guidance` first, then " +
+    "keyword matches on the task, deduplicated, bodies truncated to fit " +
+    "`budget_tokens` (estimated, ~4 chars/token). Zero inference — plain " +
+    "heuristics. Each entry carries its `reason` (pinned | guidance | " +
+    "match). Use it to ground yourself before answering or writing on the " +
+    "subject's behalf; quote the returned bodies faithfully and never " +
+    "invent beyond them.",
+  input_schema: {
+    type: "object",
+    properties: {
+      handle: handleSchema,
+      task: {
+        type: "string",
+        minLength: 1,
+        description: "What you are about to do (drives the keyword matching).",
+      },
+      budget_tokens: {
+        type: "integer",
+        minimum: 100,
+        maximum: 20000,
+        default: 1500,
+        description: "Token budget for the pack (estimated at ~4 chars/token).",
+      },
+      zones: {
+        type: "array",
+        items: { ...zoneSchema },
+        description: "Restrict the pack to these zones (default: all readable).",
+      },
+    },
+    required: ["task"],
+  },
+  requires: { anyOf: ETHOS_READ_SCOPES },
+  write: false,
+};
+
+const ethosDiffSince: AgentToolSpec = {
+  name: "ethos_diff_since",
+  title: "Diff the ethos since an edition",
+  description:
+    "Lists which sections were added, modified, or deleted since edition " +
+    "`height` — by comparing content addresses between the archived and the " +
+    "current manifest, zero body reads. A recurring agent stores the height " +
+    "it last saw (from any write ack or `ethos_list_sections`) and re-reads " +
+    "ONLY what changed. Zones outside the session's read scopes are not " +
+    "reported. Served only by hosts that keep edition history.",
+  input_schema: {
+    type: "object",
+    properties: {
+      handle: handleSchema,
+      height: {
+        type: "integer",
+        minimum: 1,
+        description: "Edition height to diff from (exclusive).",
+      },
+    },
+    required: ["height"],
   },
   requires: { anyOf: ETHOS_READ_SCOPES },
   write: false,
@@ -422,6 +529,9 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
   ethosListSections,
   ethosReadSection,
   ethosReadSections,
+  ethosSearch,
+  ethosContextPack,
+  ethosDiffSince,
   ethosVerify,
   ethosAddSection,
   ethosUpdateSection,
