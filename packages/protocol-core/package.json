@@ -1,12 +1,12 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "sideEffects": [
     "./dist/envelope.js",
     "./dist/mandate.js",
     "./dist/did.js"
   ],
-  "description": "Aithos protocol — reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
+  "description": "Aithos protocol \u2014 reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
   "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",
@@ -104,7 +104,8 @@
     "build": "tsc -p tsconfig.json",
     "check-types": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\""
+    "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "prepublishOnly": "npm run clean && npm run build && npm run check-types"
   },
   "dependencies": {
     "@noble/curves": "^2.2.0",
