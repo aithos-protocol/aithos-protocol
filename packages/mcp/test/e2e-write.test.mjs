@@ -200,6 +200,92 @@ test("H2 — --auto-commit fallback: per-write editions, no commit/discard tools
       assert.equal(read.body, "I build Aithos.\nBrussels.");
     }, ["--auto-commit"]);
   } finally {
+    /* HOME cleanup happens after the LAST test (the pack e2e reuses it —
+       protocol-core freezes $AITHOS_HOME at import time). */
+  }
+});
+
+test("P4 e2e — mandate pack boots a delegate session: scoped tools, delegate-signed commit, self refused", async () => {
+  try {
+    // Fresh subject + v0.3 keystore, seeded with one circle section.
+    const bob = core.createIdentity("bob", "Bob");
+    core.writeIdentityToDisk(bob);
+    core.initKeystoreV03({ handle: "bob", identity: bob });
+    const fsStorage = new core.FilesystemStorage();
+    await fsStorage.applyEdits(
+      "bob",
+      [{ op: "add", zone: "circle", title: "Rates", body: "1200" }],
+      { identity: bob },
+    );
+
+    // Mint a circle write mandate + the delegate keypair + the PACK file.
+    const kp = core.generateKeyPair();
+    const mb = core.ed25519PublicKeyToMultibase(kp.publicKey);
+    const mandate = core.createMandate({
+      issuer: bob,
+      actorSphere: "circle",
+      grantee: { id: "agent:packtest", pubkey: mb },
+      scopes: ["ethos.read.public", "ethos.read.circle", "ethos.write.circle"],
+      ttlSeconds: 3600,
+    });
+    core.writeMandate(mandate);
+    const seedHex = [...kp.seed].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const packPath = join(HOME, "agent-pack.json");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(packPath, JSON.stringify({
+      "aithos-mandate-pack": "1",
+      mandate,
+      agent_key: { seed_hex: seedHex, pubkey_multibase: mb },
+    }));
+
+    const transport = new StdioClientTransport({
+      command: "node",
+      args: ["dist/bin.js", "--transport", "stdio", "--mandate-pack", packPath],
+      env: { ...process.env },
+    });
+    const client = new Client({ name: "pack-e2e", version: "0.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+    try {
+      const call = (name, args) => client.callTool({ name, arguments: args }).then(payload);
+
+      // Exposure is mandate-scoped: write tools present (circle scope), but
+      // mandate_describe announces EXACTLY the served set (T15 on the wire).
+      const tools = (await client.listTools()).tools.map((t) => t.name).sort();
+      const d = await call("mandate_describe", {});
+      assert.equal(d.session, "delegate");
+      assert.equal(d.id, mandate.id);
+      assert.deepEqual(d.tools, tools);
+      assert.equal(d.status.valid, true);
+
+      // Preflight matrix (T7 on the wire).
+      assert.equal((await call("ethos_preflight_write", { handle: "bob", zone: "circle" })).authorized, true);
+      const pfSelf = await call("ethos_preflight_write", { handle: "bob", zone: "self" });
+      assert.equal(pfSelf.authorized, false);
+
+      // Stage + commit WITHOUT per-call mandate args — the pack signs.
+      const a = await call("ethos_add_section", {
+        handle: "bob", zone: "circle", title: "Dispo", body: "Septembre.",
+      });
+      assert.equal(a.staged, true);
+      const commit = await call("ethos_commit", { message: "via pack" });
+      assert.equal(commit.committed, true);
+
+      // The committed edition is DELEGATE-authored (authorized_by = mandate).
+      const m = JSON.parse(
+        (await import("node:fs")).readFileSync(join(core.ethosDir("bob"), "manifest.json"), "utf8"),
+      );
+      assert.equal(m.integrity.manifest_signature.authorized_by, mandate.id);
+
+      // Self write refused at stage (zero writes).
+      const bad = await client.callTool({
+        name: "ethos_add_section",
+        arguments: { handle: "bob", zone: "self", title: "X", body: "y" },
+      });
+      assert.equal(bad.isError, true);
+    } finally {
+      await client.close();
+    }
+  } finally {
     rmSync(HOME, { recursive: true, force: true });
   }
 });

@@ -5,6 +5,40 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-06-10
+
+Phase P4 of PLAN-MCP-UNIFICATION-2026-06: **the living mandate** (V12/V13)
+and the **mandate pack** (spec §6.2.1 — "agent chez le client").
+
+### Added
+
+- **`--mandate-pack <path>`** — ONE file boots a delegated server: the
+  signed mandate (scope-filtered `tools/list`), the delegate keypair (signs
+  writes by default — no per-call `mandate`/`agent_key` args), host options
+  (`auto_commit`, `expose_tools`). `createServer` accepts the same via
+  `mandate.document` + `delegate`. Pack parsing is isomorphic
+  (`parseMandatePack`, exported) and refuses tampered packs (key/grantee
+  mismatch, bad hex, wrong version).
+- **`mandate_describe`** — the session's authority as data: id, issuer,
+  grantee, sphere, scopes, window, LIVE revocation status, and the EXACT
+  served tool set (T15 holds by construction: the same registry that
+  registers tools feeds the answer). Owner sessions report
+  `session: "owner"`; `mandate` arg describes another mandate by id.
+- **`ethos_preflight_write { zone }`** — `authorized` + reason without
+  executing: scope + window + revocation. Ungated.
+- **Liveness re-checks (T6)** — a mandated write checks validity window +
+  revocation at STAGE time and AGAIN at commit; expired/revoked authority
+  never writes (h1 + e2e locked). Self is mandatable for the subject's own
+  agent (T7: preflight matrix == dispatch behaviour; delegate-authored
+  self editions commit fine; out-of-sphere zones refuse).
+- e2e: full pack lifecycle over the real binary — scoped exposure,
+  pack-signed transactional commit with `authorized_by` on the manifest
+  signature, self refusal.
+
+### Dependencies
+
+- `@aithos/agent-tools` ^0.4.0 (describe/preflight specs).
+
 ## [0.11.0] — 2026-06-10
 
 Phase P3 of PLAN-MCP-UNIFICATION-2026-06: **contextualization primitives**

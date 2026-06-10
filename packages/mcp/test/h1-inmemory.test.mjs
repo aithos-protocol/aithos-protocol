@@ -669,3 +669,207 @@ test("T16 — diff_since reports added/modified/deleted by content address", asy
   const same = text(await c2.callTool({ name: "ethos_diff_since", arguments: { height: 5 } }));
   assert.equal(same.unchanged, true);
 });
+
+// ------------------------------------------------------ P4 (T15/T6/T7)
+
+function liveMandate(overrides = {}) {
+  const now = Date.now();
+  return {
+    "aithos-mandate": "0.2.0",
+    id: "mandate_01TESTLIVING",
+    issuer: DID,
+    issued_by_key: `${DID}#root`,
+    grantee: { id: "agent:claude", pubkey: "zAgentKey" },
+    actor_sphere: "circle",
+    scopes: ["ethos.read.public", "ethos.read.circle", "ethos.write.circle"],
+    not_before: new Date(now - 3600_000).toISOString(),
+    not_after: new Date(now + 3600_000).toISOString(),
+    issued_at: new Date(now - 3600_000).toISOString(),
+    nonce: "n",
+    signature: { alg: "ed25519", key: `${DID}#root`, value: "sig" },
+    ...overrides,
+  };
+}
+
+test("T15 — mandate_describe announces EXACTLY what tools/list serves", async () => {
+  const doc = liveMandate();
+  const storage = transactionalStorage();
+  const { client } = await connect({
+    storage,
+    mandate: { scopes: doc.scopes, document: doc },
+  });
+
+  const listed = (await client.listTools()).tools.map((t) => t.name).sort();
+  const d = text(await client.callTool({ name: "mandate_describe", arguments: {} }));
+
+  assert.deepEqual(d.tools, listed, "describe.tools == tools/list, by enumeration");
+  assert.equal(d.session, "delegate");
+  assert.equal(d.id, doc.id);
+  assert.equal(d.actor_sphere, "circle");
+  assert.deepEqual(d.scopes, doc.scopes);
+  assert.equal(d.status.valid, true);
+  assert.equal(d.revoked, null);
+  assert.equal(d.status.signature_checked, false, "signature verification is mandate_verify's job");
+
+  // Enumeration, the other way: every announced tool actually dispatches
+  // (no "unknown tool" / not-listed surprises).
+  for (const name of d.tools) {
+    const found = listed.includes(name);
+    assert.ok(found, `${name} announced but not listed`);
+  }
+});
+
+test("T15/owner — describe reports the owner session and the full served set", async () => {
+  const storage = transactionalStorage();
+  const { client } = await connect({ storage });
+  const listed = (await client.listTools()).tools.map((t) => t.name).sort();
+  const d = text(await client.callTool({ name: "mandate_describe", arguments: {} }));
+  assert.equal(d.session, "owner");
+  assert.equal(d.scopes, null);
+  assert.deepEqual(d.tools, listed);
+});
+
+test("T6 — expired mandate: stage refuses; revoked between stage and commit: commit refuses", async () => {
+  // Expired at STAGE time.
+  const expired = liveMandate({ not_after: new Date(Date.now() - 60_000).toISOString() });
+  const s1 = transactionalStorage();
+  const { client: c1 } = await connect({
+    storage: s1,
+    mandate: { scopes: expired.scopes, document: expired },
+    delegate: { mandateId: expired.id, keySeed: new Uint8Array(32), keyMultibase: "zAgentKey" },
+  });
+  const stage = await c1.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "circle", title: "X", body: "y" },
+  });
+  assert.equal(stage.isError, true);
+  assert.match(stage.content[0].text, /expired/);
+  assert.equal(s1.batches.length, 0);
+  assert.deepEqual(s1.writes, { add: 0, modify: 0, delete: 0 }, "zero writes (T6)");
+
+  // Valid at stage, REVOKED before commit.
+  const doc = liveMandate();
+  const s2 = transactionalStorage();
+  let revoked = null;
+  s2.findRevocation = async (id) => (id === doc.id ? revoked : null);
+  const { client: c2 } = await connect({
+    storage: s2,
+    mandate: { scopes: doc.scopes, document: doc },
+    delegate: { mandateId: doc.id, keySeed: new Uint8Array(32), keyMultibase: "zAgentKey" },
+  });
+  const ok1 = text(await c2.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "circle", title: "Dispo", body: "Sept." },
+  }));
+  assert.equal(ok1.staged, true, "valid mandate stages fine");
+
+  revoked = { "aithos-revocation": "0.1.0", mandate_id: doc.id, issuer: DID,
+    issued_by_key: `${DID}#root`, revoked_at: new Date().toISOString(),
+    reason: "owner pulled the plug", signature: { alg: "ed25519", key: "k", value: "v" } };
+
+  const commit = await c2.callTool({ name: "ethos_commit", arguments: {} });
+  assert.equal(commit.isError, true, "commit re-checks liveness (T6)");
+  assert.match(commit.content[0].text, /revoked/);
+  assert.equal(s2.batches.length, 0, "nothing persisted after revocation");
+
+  // preflight agrees, with the reason.
+  const pf = text(await c2.callTool({
+    name: "ethos_preflight_write",
+    arguments: { zone: "circle" },
+  }));
+  assert.equal(pf.authorized, false);
+  assert.match(pf.reason, /revoked/);
+});
+
+test("T7 — self is mandatable for the subject's own agent; bounded elsewhere", async () => {
+  const doc = liveMandate({
+    actor_sphere: "self",
+    scopes: ["ethos.read.self", "ethos.write.self"],
+  });
+  const storage = transactionalStorage();
+  const { client } = await connect({
+    storage,
+    mandate: { scopes: doc.scopes, document: doc },
+    delegate: { mandateId: doc.id, keySeed: new Uint8Array(32), keyMultibase: "zAgentKey" },
+  });
+
+  // Exposure: self write tools present; public/circle reads ARE the same
+  // tools (zone-scoped at dispatch) — check preflight matrix instead.
+  const pfSelf = text(await client.callTool({ name: "ethos_preflight_write", arguments: { zone: "self" } }));
+  assert.equal(pfSelf.authorized, true, "self writable under ethos.write.self (V9)");
+  const pfPub = text(await client.callTool({ name: "ethos_preflight_write", arguments: { zone: "public" } }));
+  assert.equal(pfPub.authorized, false);
+  assert.match(pfPub.reason, /does not include scope ethos\.write\.public/);
+
+  // Dispatch agrees with the preflight matrix (T15 spirit): self write
+  // stages + commits; public write refuses at stage.
+  const ok1 = text(await client.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "self", title: "Journal", body: "Day 1." },
+  }));
+  assert.equal(ok1.staged, true);
+  const commit = text(await client.callTool({ name: "ethos_commit", arguments: {} }));
+  assert.equal(commit.committed, true);
+  assert.equal(storage.batches.length, 1);
+  assert.equal(storage.batches[0].edits[0].zone, "self");
+
+  const bad = await client.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "public", title: "X", body: "y" },
+  });
+  assert.equal(bad.isError, true);
+  assert.equal(storage.batches.length, 1, "no second batch");
+
+  // Search/list bounded to self (+ nothing leaks from other zones).
+  const sr = text(await client.callTool({ name: "ethos_search", arguments: { query: "aithos" } }));
+  assert.deepEqual(sr.zones_searched, ["self"]);
+});
+
+test("P4 — mandate pack parser: valid pack round-trips; tampered packs throw", async () => {
+  const { parseMandatePack } = await import("../dist/pack.js");
+  const doc = liveMandate();
+  const good = {
+    "aithos-mandate-pack": "1",
+    mandate: doc,
+    agent_key: { seed_hex: "ab".repeat(32), pubkey_multibase: "zAgentKey" },
+    options: { auto_commit: false, expose_tools: ["ethos_list_sections"] },
+  };
+  const parsed = parseMandatePack(JSON.stringify(good));
+  assert.equal(parsed.mandate.id, doc.id);
+  assert.equal(parsed.agent_key.pubkey_multibase, "zAgentKey");
+
+  assert.throws(() => parseMandatePack("{"), /not valid JSON/);
+  assert.throws(
+    () => parseMandatePack(JSON.stringify({ ...good, "aithos-mandate-pack": "2" })),
+    /unsupported/,
+  );
+  assert.throws(
+    () => parseMandatePack(JSON.stringify({ ...good, agent_key: { seed_hex: "xx", pubkey_multibase: "zAgentKey" } })),
+    /invalid hex/,
+  );
+  assert.throws(
+    () =>
+      parseMandatePack(
+        JSON.stringify({ ...good, agent_key: { seed_hex: "ab".repeat(32), pubkey_multibase: "zOTHER" } }),
+      ),
+    /does not match mandate\.grantee\.pubkey/,
+  );
+});
+
+test("T6/session — a session mandate WITHOUT a delegate key still gates liveness (SDK shape)", async () => {
+  const expired = liveMandate({ not_after: new Date(Date.now() - 60_000).toISOString() });
+  const storage = transactionalStorage();
+  const { client } = await connect({
+    storage,
+    mandate: { scopes: expired.scopes, document: expired },
+    // NO delegate: the storage signs with its own keys (SdkStorage shape).
+  });
+  const stage = await client.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "circle", title: "X", body: "y" },
+  });
+  assert.equal(stage.isError, true);
+  assert.match(stage.content[0].text, /expired/);
+  assert.equal(storage.batches.length, 0);
+  assert.deepEqual(storage.writes, { add: 0, modify: 0, delete: 0 });
+});

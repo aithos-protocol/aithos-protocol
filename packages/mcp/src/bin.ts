@@ -43,6 +43,7 @@ import {
 } from "@aithos/protocol-core";
 
 import { createServer, type CreateServerOptions, type HostIo } from "./server.js";
+import { parseMandatePack, hexToBytes, type MandatePack } from "./pack.js";
 
 const nodeIo: HostIo = {
   readTextFile: (p) => readFile(p, "utf8"),
@@ -50,15 +51,36 @@ const nodeIo: HostIo = {
 };
 
 /** The node host's createServer options: filesystem storage + host io. */
-function nodeServerOptions(autoCommit?: boolean): CreateServerOptions {
+function nodeServerOptions(autoCommit?: boolean, pack?: MandatePack): CreateServerOptions {
   return {
     storage: new FilesystemStorage(),
     home: AITHOS_HOME,
     manifestPath: ethosManifestPath,
     io: nodeIo,
     renderZone: renderZoneMarkdown,
-    ...(autoCommit ? { autoCommit: true } : {}),
+    ...(autoCommit || pack?.options?.auto_commit ? { autoCommit: true } : {}),
+    // P4.4 — mandate pack (§6.2.1): scope-filtered exposure + the pack's
+    // delegate key as the default write authority.
+    ...(pack
+      ? {
+          mandate: { scopes: pack.mandate.scopes, document: pack.mandate },
+          delegate: {
+            mandateId: pack.mandate.id,
+            keySeed: hexToBytes(pack.agent_key.seed_hex),
+            keyMultibase: pack.agent_key.pubkey_multibase,
+          },
+          ...(pack.options?.expose_tools
+            ? { exposeTools: pack.options.expose_tools }
+            : {}),
+        }
+      : {}),
   };
+}
+
+async function loadPack(p?: string): Promise<MandatePack | undefined> {
+  if (!p) return undefined;
+  const text = await readFile(path.resolve(p), "utf8");
+  return parseMandatePack(text);
 }
 
 interface CliOpts {
@@ -67,6 +89,7 @@ interface CliOpts {
   host?: string;
   stateless?: boolean;
   autoCommit?: boolean;
+  mandatePack?: string;
 }
 
 const program = new Command();
@@ -93,22 +116,29 @@ program
       "TRANSACTIONAL: writes stage in the session until ethos_commit.",
     false,
   )
+  .option(
+    "--mandate-pack <path>",
+    "Boot under a mandate pack (spec §6.2.1): scope-filtered tools, the " +
+      "pack's delegate key signs writes, validity/revocation re-checked " +
+      "before anything persists.",
+  )
   .action(async (opts: CliOpts) => {
+    const pack = await loadPack(opts.mandatePack);
     if (opts.transport === "stdio") {
-      await runStdio(opts.autoCommit === true);
+      await runStdio(opts.autoCommit === true, pack);
     } else {
-      await runHttp(opts);
+      await runHttp(opts, pack);
     }
   });
 
-async function runStdio(autoCommit: boolean): Promise<void> {
-  const server = createServer(nodeServerOptions(autoCommit));
+async function runStdio(autoCommit: boolean, pack?: MandatePack): Promise<void> {
+  const server = createServer(nodeServerOptions(autoCommit, pack));
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // The stdio transport keeps stdin open for us; no further work needed.
 }
 
-async function runHttp(opts: CliOpts): Promise<void> {
+async function runHttp(opts: CliOpts, pack?: MandatePack): Promise<void> {
   const port = Number(opts.port ?? "8787");
   const host = opts.host ?? "127.0.0.1";
   const token = process.env.AITHOS_MCP_TOKEN;
@@ -175,7 +205,7 @@ async function runHttp(opts: CliOpts): Promise<void> {
           });
           // A per-request server cannot stage a transaction — force the
           // per-write auto-commit behaviour in stateless mode.
-          const server = createServer(nodeServerOptions(true));
+          const server = createServer(nodeServerOptions(true, pack));
           await server.connect(transport);
           session = { transport, server };
           // No entry stored; each request is independent.
@@ -183,7 +213,7 @@ async function runHttp(opts: CliOpts): Promise<void> {
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
           });
-          const server = createServer(nodeServerOptions(opts.autoCommit === true));
+          const server = createServer(nodeServerOptions(opts.autoCommit === true, pack));
           transport.onclose = () => {
             const sid = transport.sessionId;
             if (sid) sessions.delete(sid);
