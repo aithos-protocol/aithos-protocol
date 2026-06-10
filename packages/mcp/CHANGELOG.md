@@ -5,6 +5,14 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] — 2026-06-10
+
+### Fixed
+
+- `./pack` subpath export — `parseMandatePack` / `hexToBytes` /
+  `MandatePack` are now importable (`@aithos/mcp/pack`). First consumer:
+  the `@aithos/mcp-remote` bin (P5, agent-at-the-client over the platform).
+
 ## [0.12.0] — 2026-06-10
 
 Phase P4 of PLAN-MCP-UNIFICATION-2026-06: **the living mandate** (V12/V13)
