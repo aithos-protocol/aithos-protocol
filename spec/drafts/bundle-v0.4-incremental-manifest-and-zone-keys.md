@@ -172,3 +172,209 @@ aithos-app-example.
    même posture append-only + GC offline (extension du runbook existant).
 4. **Deux formats à maintenir** le temps de la transition (dual-read). Borné :
    les e2e couvrent la croisée, et la migration est automatique côté owner.
+
+---
+
+# Partie II — Spécification normative (v0.4)
+
+Tout ce qui n'est pas redéfini ici hérite de v0.3 (drafts per-section-encryption,
+section-level-mandates, section-verb-scopes) : enveloppes §11, chaîne d'éditions,
+blobs, construction de wrap §3.6 (X25519-HKDF-SHA256-AEAD), grammaire des scopes,
+did.json/époque.
+
+## N1. Objets content-addressed
+
+Un **objet** est un document JSON canonicalisé **JCS (RFC 8785)** ; son
+identifiant est `sha256(bytes_canoniques)` en hex minuscule. Stockage :
+`ethos/{did}/objects/{sha}` (espace distinct des blobs — ACL et GC propres).
+Les objets sont immuables ; toute « modification » est un nouvel objet référencé
+par le manifest suivant. Chaque objet porte `{"object": "<type>", "v": 1, ...}`
+comme discriminant.
+
+## N2. ZoneShard
+
+```jsonc
+{ "object": "zone_shard", "v": 1,
+  "zone": "circle",
+  "entries": [ {
+      "section_id": "…",
+      "title": "…",            // public/circle : clair (spec v0.3 inchangée)
+      "tags": ["…"],           // optionnel, clair là où title est clair
+      "title_cipher": { "n": "...", "ct": "..." },  // self : AEAD(DEK) — voir N3
+      "blob_sha": "…", "sha256_of_plaintext": "…", "gamma_ref": "…",
+      "enc_dek": { "kid": "zk…", "n": "…", "c": "…" }   // absent ⇢ voir N9.3
+  } ] }
+```
+
+- Tri des `entries` par `section_id` (bytewise) — déterminisme du sha.
+- **Sharding** : `shard_count = next_pow2(ceil(n/128))` borné à `[1, 64]`,
+  recalculé à chaque édition à partir du nombre TOTAL de sections de la zone ;
+  `shard_index = u32be(sha256(section_id)[0..4]) mod shard_count`. Un
+  changement de `shard_count` (franchissement de seuil) réécrit tous les
+  shards de la zone (corps intouchés).
+- `public` : `entries` sans `enc_dek` ni `title_cipher` (blobs en clair).
+- `self` : `title`/`tags` ABSENTS, `title_cipher` REQUIS :
+  `XChaCha20-Poly1305(DEK, n, jcs({title, tags?}))`,
+  AAD = `"aithos-title-v2\0" ‖ subject_did ‖ "\0" ‖ section_id`.
+  (v2 : scellé sous la DEK de section — qui ouvre le corps lit le titre ;
+  mêmes destinataires par construction, contrat v0.3 conservé.)
+
+## N3. Clé de zone & `enc_dek`
+
+- **Clé de zone** : 32 octets aléatoires, identifiée par
+  `kid = "zk" ‖ 16 hex aléatoires`. Une par zone chiffrée (`circle`, `self`).
+- **`enc_dek`** : `XChaCha20-Poly1305(zone_key, n, DEK)`,
+  AAD = `"aithos-dek-v1\0" ‖ subject_did ‖ "\0" ‖ zone ‖ "\0" ‖ section_id ‖ "\0" ‖ kid`.
+  La DEK de section reste celle qui chiffre le blob (et `title_cipher` en self) —
+  les blobs v0.3 sont donc portables tels quels.
+- Une zone a UN `kid` courant ; après rotation, toutes les entrées portent le
+  nouveau `kid` (la réécriture des shards fait partie de l'édition de rotation —
+  un manifest ne référence jamais deux `kid` pour une même zone).
+
+## N4. KeyRing & ExtraWraps (canal authentifié uniquement)
+
+```jsonc
+{ "object": "keyring", "v": 1, "zone": "circle", "kid": "zk…",
+  "wraps": [ { "recipient": "<label v0.3 inchangé>",
+               "wrap": { /* §3.6 sur jcs({kid, zone_key}) */ } } ] }
+
+{ "object": "extra_wraps", "v": 1, "zone": "circle",
+  "entries": [ { "section_id": "…",
+                 "wraps": [ { "recipient": "…", "wrap": { /* §3.6 sur DEK — IDENTIQUE v0.3 */ } } ] } ] }
+```
+
+- `recipient` : format v0.3 (`granteeId#pubkeyMultibase` | `did#<zone>-kex`).
+- L'owner (`did#<zone>-kex`) figure TOUJOURS dans le keyring.
+- Les wraps d'ExtraWraps sont bit-à-bit le format v0.3 (migration = copie).
+- `entries` et `wraps` triés (section_id, puis recipient) — déterminisme.
+
+## N5. Manifest v0.4
+
+```jsonc
+{ "spec_version": "0.4", "subject_did": "…", "edition_height": 107,
+  "prev_hash": "…", "created_at": "…", "sha256_of_did_json": "…",
+  "zones": {
+    "public": { "n": 3,   "shard_count": 1, "shard_shas": ["…"] },
+    "circle": { "n": 209, "shard_count": 2, "shard_shas": ["…","…"],
+                 "keyring_sha": "…", "extrawraps_sha": "…" },
+    "self":   { "n": 12,  "shard_count": 1, "shard_shas": ["…"],
+                 "keyring_sha": "…" } },
+  "proof": { /* signature root, JCS avec proofValue:"" — inchangé v0.3 */ } }
+```
+
+`extrawraps_sha` optionnel (absent ⇔ aucune entrée). `prev_hash` : inchangé
+(sha du manifest précédent canonique). La signature ne couvre QUE ce document ;
+l'intégrité des objets/blobs découle des sha qu'il référence (et récursivement).
+
+## N6. Publish (extension de l'enveloppe §11)
+
+`aithos.publish_ethos_edition` accepte en v0.4 :
+`params = { manifest, objects: { "<sha>": b64, … }, blobs: { "<sha>": b64, … } }`.
+
+Validation serveur (ordre normatif) :
+
+1. Enveloppe §11, signature manifest, `height/prev_hash` (chaîne linéaire,
+   `-32030` sur conflit), `sha256_of_did_json` — inchangés.
+2. **Intégrité** : chaque clé d'`objects`/`blobs` = sha256 réel du contenu ;
+   chaque sha référencé par le manifest (shards, keyring, extrawraps) ∈
+   `objects` uploadés ∪ objets référencés par l'édition précédente (carry par
+   induction — l'analogue exact de `carriedShaSet`).
+3. **Carry des corps** : pour chaque shard ABSENT de l'édition précédente
+   (nouveau sha), chaque `entries[].blob_sha` ∈ `blobs` uploadés ∪
+   `carriedShaSet(prev)`. Les shards repris à l'identique ne sont pas relus.
+4. **Autorisation déléguée** (si l'enveloppe porte un mandat) : vérif du mandat
+   (did.json FRAIS, époque, révocation ConsistentRead — inchangé), puis diff
+   limité aux shards changés : par zone, `entries(prev_shards_changés)` vs
+   `entries(new_shards_changés)` → ops `create/edit/delete` par `section_id`
+   (création = id nouveau ; edit = blob_sha/plain_sha/title*/enc_dek changé ;
+   delete = id disparu), mapping verbes §4.8.2′ + sélecteurs inchangés.
+   Règles structurelles : `keyring_sha` ne change QUE dans un publish owner ;
+   une entrée d'ExtraWraps ne change que si l'op correspondante sur ce
+   `section_id` est autorisée ; `shard_count` stable hors publish owner sauf
+   si le re-shard est rendu nécessaire par un `create` autorisé.
+5. Persistance : objets+blobs en parallèle, row DDB en DERNIER (inchangé).
+
+Dual-write : le serveur continue d'accepter les publishes v0.3 (un sujet migré
+en v0.4 REFUSE un publish v0.3 ultérieur : `spec_version` ne régresse jamais —
+erreur dédiée `-32045 ethos_spec_version_regression`).
+
+## N7. Lectures
+
+- `aithos.get_ethos_manifest` : renvoie le manifest tel que stocké (0.3 ou 0.4).
+- **Nouveau** `aithos.get_ethos_objects` : `{ did, shas: [≤64] }` →
+  `{ objects: [{sha, b64}], missing: [sha] }` (absent ≡ interdit, pas d'oracle).
+  ACL par type d'objet : `zone_shard` suit l'ACL du manifest (lecteur anonyme
+  admis — un shard n'expose plus aucun label de destinataire) ; `keyring` et
+  `extra_wraps` exigent la read-auth (owner ou délégué actif du sujet, comme
+  les blobs circle/self aujourd'hui).
+- Blobs : `aithos.get_ethos_section`/`get_ethos_sections` inchangés.
+
+## N8. Algorithme de lecture (informatif mais attendu des clients)
+
+Owner/délégué : manifest → shards de la zone (1 batch `get_ethos_objects`) →
+keyring (authentifié) → déballer la clé de zone (cache de session par kid) →
+`enc_dek` → DEK → blob. Si pas de clé de zone (grant par-section) : ExtraWraps.
+`readable(entry)` = (clé de zone détenue ∧ `enc_dek` présent) ∨ (entrée
+ExtraWraps à mon label) — calculable sans toucher aux corps, comme en v0.3.
+Anonyme : `public` intégral ; `circle` titres/ids ; `self` ids seuls. Délégué
+sans accès : mêmes surfaces que l'anonyme (parité v0.3 conservée).
+
+## N9. Algorithmes d'écriture
+
+1. **Edit/add/delete owner** : réécrire le(s) shard(s) touché(s) (+ blob),
+   manifest, publish. En éditant une section, l'owner refresh son `enc_dek`
+   sous le `kid` courant et purge de l'entrée ExtraWraps les labels de mandats
+   morts (auto-nettoyage v0.3 conservé, désormais par section ET par objet).
+2. **Edit délégué (zone)** : il détient la clé de zone → nouvelle DEK, blob,
+   `enc_dek` sous le kid courant, shard, manifest. AUCUNE résolution de grants.
+3. **Create délégué SANS clé de zone** (fence `#prefix=`/append) : DEK générée,
+   entrée SANS `enc_dek`, ExtraWraps = {auteur, owner} (contrat v0.3 « sealed
+   to both » conservé). Le prochain edit owner de la section (ou `sealGrant`)
+   la dote d'un `enc_dek` — règle « resync à l'édition » inchangée.
+4. **sealGrant** (owner) : scope de zone → wrap ajouté au keyring (O(1)) ;
+   scope par-section → wraps DEK dans ExtraWraps pour les sections couvertes
+   (l'owner déballe les DEK via ses `enc_dek` — aucune lecture de corps).
+5. **pruneWraps** (owner) : retire des keyring/ExtraWraps les labels de mandats
+   révoqués/expirés. Métadonnée pure, sémantique v0.3 inchangée.
+6. **reseal({mode:"rotate"})** (owner) : nouvelle clé de zone (nouveau kid),
+   keyring re-scellé aux grants actifs + owner, `enc_dek` de TOUTES les entrées
+   re-scellés (symétrique), shards réécrits, corps intouchés.
+7. **reseal({mode:"rotate-deep"})** (owner) : rotate + nouvelles DEK + blobs
+   re-chiffrés et re-uploadés (+ `title_cipher` self) — l'effacement fort.
+
+## N10. Migration v0.3 → v0.4 (publish owner, une édition)
+
+1. Lire le manifest v0.3 ; pour chaque section chiffrée, déballer SON wrap
+   owner → DEK (local, aucune lecture de corps).
+2. Générer les clés de zone ; construire shards (champs portés tels quels,
+   `blob_sha` carried, `enc_dek` scellé), keyring (owner + mandats ACTIFS à
+   scope de zone — pubkey extraite du label v0.3), ExtraWraps (wraps v0.3
+   copiés bit-à-bit pour les mandats actifs par-section ; morts élagués).
+3. Publier `spec_version: "0.4"`, `height+1` : uploads = objets + manifest,
+   zéro blob. Le serveur valide le carry intégral via `carriedShaSet(prev)`.
+4. Un délégué n'initie JAMAIS la migration : sur un sujet v0.3 il écrit du
+   v0.3. Les bundles de mandat sont inchangés et valides des deux côtés.
+
+## N11. GC
+
+Les objets rejoignent les blobs dans le périmètre du GC offline : vivant =
+référencé par une édition retenue. Extension du runbook existant
+(RUNBOOK-MANDATE-GC) — aucune nouvelle primitive.
+
+## N12. Erreurs nouvelles
+
+| Code | Nom | Quand |
+|---|---|---|
+| -32043 | `ethos_object_missing` | sha référencé ni uploadé ni porté |
+| -32044 | `ethos_object_hash_mismatch` | contenu ≠ sha annoncé |
+| -32045 | `ethos_spec_version_regression` | publish v0.3 sur sujet v0.4 |
+| -32046 | `ethos_keyring_forbidden` | keyring/shard_count modifié hors publish owner |
+
+## N13. Conformité
+
+Les 34 e2e v0.3 passent inchangés sur un sujet migré (mêmes surfaces SDK).
+Nouveaux cas : M1 migration porte l'accès des délégués actifs ; M2 croisé
+(délégué v0.3 → sujet migré) ; M3 sealGrant zone O(1) observable ; M4 rotate
+coupe un délégué de zone sans re-upload de corps ; M5 rotate-deep re-chiffre ;
+M6 anonyme ne peut pas lire keyring/extrawraps (`missing`) ; M7 fence-create
+sans clé de zone puis resync owner ; M8 régression de version refusée.
