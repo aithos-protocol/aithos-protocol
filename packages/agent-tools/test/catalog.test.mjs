@@ -34,7 +34,9 @@ const RATIFIED_NAMES = [
   "ethos_delete_section",
   "ethos_commit",
   "ethos_discard",
+  "ethos_preflight_write",
   "mandate_verify",
+  "mandate_describe",
   "data_query",
 ];
 
@@ -217,5 +219,23 @@ test("P3 contextualization tools: read-flagged, read-scope-gated, well-formed", 
   const ro = toolsForScopes(undefined, { readOnly: true }).map((t) => t.name);
   for (const n of ["ethos_search", "ethos_context_pack", "ethos_diff_since"]) {
     assert.ok(ro.includes(n), `${n} kept in readOnly`);
+  }
+});
+
+test("P4 living-mandate tools: ungated introspection, read-flagged", () => {
+  for (const name of ["mandate_describe", "ethos_preflight_write"]) {
+    const spec = getToolSpec(name);
+    assert.ok(spec, `${name} missing`);
+    assert.equal(spec.write, false);
+    assert.equal(spec.requires, undefined, `${name} is exposed to every session`);
+    assert.ok(!isWriteTool(name));
+  }
+  assert.deepEqual(getToolSpec("ethos_preflight_write").input_schema.required, ["zone"]);
+  assert.equal(getToolSpec("mandate_describe").input_schema.required, undefined);
+  // exposed even to a minimal read mandate AND in readOnly mode.
+  const r = toolsForScopes(["ethos.read.public"]).map((t) => t.name);
+  const ro = toolsForScopes(undefined, { readOnly: true }).map((t) => t.name);
+  for (const n of ["mandate_describe", "ethos_preflight_write"]) {
+    assert.ok(r.includes(n) && ro.includes(n), `${n} always exposed`);
   }
 });
