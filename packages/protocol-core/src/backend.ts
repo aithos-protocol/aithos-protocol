@@ -141,6 +141,15 @@ export interface SectionIndexEntry {
   readonly tags?: readonly string[];
   readonly title_hidden: boolean;
   readonly gamma_ref: string;
+  /**
+   * Best-effort size of the section's STORED blob in bytes (P3, V1 — lets an
+   * agent plan its reads). For public sections this is the plaintext size;
+   * for encrypted zones it overshoots the plaintext by the constant cipher
+   * overhead (~40 bytes) — fine for token estimation. OPTIONAL: backends
+   * fill it only when knowable at zero read cost (filesystem: stat; remote
+   * backends may omit it).
+   */
+  readonly approx_size_bytes?: number;
 }
 
 /**
@@ -365,6 +374,18 @@ export interface AithosStorage {
    * `verifyMandate` callers that want to honor the local revocation store.
    */
   findRevocation(mandateId: string): Promise<Revocation | null>;
+
+  /* -------- edition history (P3, optional capability) -------------------- */
+
+  /**
+   * The signed manifest of a PRIOR edition at exactly `height`, or `null`
+   * when this backend cannot resolve it (height unknown, history pruned).
+   * Powers `ethos_diff_since`: sections changed since H are those whose
+   * content address (`blob_sha`, falling back to `gamma_ref`) differs.
+   * OPTIONAL capability — hosts probe it; the filesystem backend reads its
+   * `history/` archive, remote backends land with the platform PDS (P5).
+   */
+  readManifestAt?(handle: string, height: number): Promise<Manifest | null>;
 
   /* -------- transactional edits (P2, optional capability) --------------- */
 

@@ -1,6 +1,6 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "sideEffects": [
     "./dist/envelope.js",
     "./dist/mandate.js",

@@ -161,14 +161,33 @@ export class FilesystemStorage implements AithosStorage {
       const zm = m.zones[zone];
       if (!zm) return [];
       const rows = readZoneIndex(zone, zm, m.subject_did, zoneReader(opts?.identity, zone));
+      const dir = ethosDir(handle);
       return rows.map((r) => {
         const desc = zm.sections.find((s) => s.section_id === r.section_id);
+        // Best-effort blob size (V1): stat the stored blob — content-addressed
+        // path first (dedup store), then the per-edition file. Zero reads.
+        let approx: number | undefined;
+        if (desc) {
+          for (const p of [
+            desc.blob_sha ? path.join(dir, "blobs", desc.blob_sha) : undefined,
+            path.join(dir, desc.file),
+          ]) {
+            if (!p) continue;
+            try {
+              approx = fs.statSync(p).size;
+              break;
+            } catch {
+              /* keep probing */
+            }
+          }
+        }
         return {
           section_id: r.section_id,
           ...(r.title !== undefined ? { title: r.title } : {}),
           ...(r.tags ? { tags: r.tags } : {}),
           title_hidden: r.title_hidden,
           gamma_ref: desc?.gamma_ref ?? "",
+          ...(approx !== undefined ? { approx_size_bytes: approx } : {}),
         };
       });
     }
@@ -327,6 +346,36 @@ export class FilesystemStorage implements AithosStorage {
       ...(args.reason !== undefined ? { reason: args.reason } : {}),
     });
     return { sectionId: args.sectionId, deletedTitle, manifest, gammaEntry };
+  }
+
+  /* -------- edition history (P3) ----------------------------------------- */
+
+  /**
+   * Resolve the archived manifest at exactly `height` from the keystore's
+   * `history/` directory (the current manifest answers its own height too).
+   * v0.3 keystores archive one manifest per superseded edition; `null` when
+   * the height is unknown or predates the archive.
+   */
+  async readManifestAt(handle: string, height: number): Promise<Manifest | null> {
+    if (!isV03Keystore(handle)) return null;
+    const cur = v03Manifest(handle);
+    if (cur.edition.height === height) return cur as unknown as Manifest;
+    const hist = ethosHistoryDir(handle);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(hist).filter((f) => f.endsWith(".manifest.json"));
+    } catch {
+      return null;
+    }
+    for (const name of entries) {
+      try {
+        const m = readJson<ManifestV03>(path.join(hist, name));
+        if (m.edition?.height === height) return m as unknown as Manifest;
+      } catch {
+        /* skip corrupt archives */
+      }
+    }
+    return null;
   }
 
   /* -------- transactional edits (P2) ------------------------------------ */
