@@ -1,0 +1,152 @@
+// SPDX-License-Identifier: Apache-2.0
+// T10 (self-consistency half): the canonical catalogue is well-formed and
+// matches the ratified D1 decision. The cross-host parity halves live with
+// each host (packages/mcp h1 test for the MCP server; aithos-sdk and the
+// platform registry add theirs in P1/P6).
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  AGENT_TOOL_CATALOG,
+  ETHOS_READ_SCOPES,
+  ETHOS_WRITE_SCOPES,
+  LEGACY_TOOL_ALIASES,
+  getToolSpec,
+  isWriteTool,
+  resolveLegacyToolCall,
+  toolsForScopes,
+} from "../dist/index.js";
+
+// The ratified D1 table (2026-06-10). Renaming = breaking change.
+const RATIFIED_NAMES = [
+  "identity_list",
+  "identity_describe",
+  "ethos_list_sections",
+  "ethos_read_section",
+  "ethos_read_sections",
+  "ethos_verify",
+  "ethos_add_section",
+  "ethos_update_section",
+  "ethos_delete_section",
+  "mandate_verify",
+  "data_query",
+];
+
+test("catalogue exposes exactly the ratified D1 names, in order", () => {
+  assert.deepEqual(
+    AGENT_TOOL_CATALOG.map((t) => t.name),
+    RATIFIED_NAMES,
+  );
+});
+
+test("every spec is well-formed", () => {
+  for (const t of AGENT_TOOL_CATALOG) {
+    assert.match(t.name, /^[a-z]+(_[a-z]+)+$/, `${t.name}: snake_case`);
+    assert.ok(t.title.length > 0, `${t.name}: title`);
+    assert.ok(t.description.length >= 40, `${t.name}: normative description`);
+    assert.equal(t.input_schema.type, "object", `${t.name}: object schema`);
+    assert.ok("properties" in t.input_schema, `${t.name}: properties`);
+    // snake_case argument keys only
+    for (const key of Object.keys(t.input_schema.properties ?? {})) {
+      assert.match(key, /^[a-z]+(_[a-z]+)*$/, `${t.name}.${key}: snake_case`);
+    }
+    // required ⊆ properties
+    for (const r of t.input_schema.required ?? []) {
+      assert.ok(
+        r in (t.input_schema.properties ?? {}),
+        `${t.name}: required '${r}' missing from properties`,
+      );
+    }
+  }
+});
+
+test("write tools carry a write-scope rule; read tools never do", () => {
+  for (const t of AGENT_TOOL_CATALOG) {
+    if (t.write) {
+      assert.ok(t.requires, `${t.name}: write tool must be scope-gated`);
+      assert.ok(
+        t.requires.anyOf.every((s) => ETHOS_WRITE_SCOPES.includes(s)),
+        `${t.name}: write tool gated by write scopes`,
+      );
+    } else if (t.requires) {
+      assert.ok(
+        t.requires.anyOf.every((s) => !ETHOS_WRITE_SCOPES.includes(s)),
+        `${t.name}: read tool must not require write scopes`,
+      );
+    }
+  }
+  assert.equal(isWriteTool("ethos_add_section"), true);
+  assert.equal(isWriteTool("ethos_read_section"), false);
+});
+
+test("toolsForScopes — owner sees everything", () => {
+  assert.equal(toolsForScopes(undefined).length, AGENT_TOOL_CATALOG.length);
+});
+
+test("toolsForScopes — read-only mandate hides every write tool (T4 rule)", () => {
+  const out = toolsForScopes(["ethos.read.public"]);
+  const names = out.map((t) => t.name);
+  assert.ok(names.includes("ethos_list_sections"));
+  assert.ok(names.includes("ethos_read_section"));
+  assert.ok(!names.includes("ethos_add_section"));
+  assert.ok(!names.includes("ethos_update_section"));
+  assert.ok(!names.includes("ethos_delete_section"));
+  // gamma-gated tool hidden without gamma.read
+  assert.ok(!names.includes("data_query"));
+  // ungated introspection stays
+  assert.ok(names.includes("identity_list"));
+  assert.ok(names.includes("mandate_verify"));
+});
+
+test("toolsForScopes — write mandate exposes write tools; readOnly drops them", () => {
+  const scopes = ["ethos.read.public", "ethos.write.public"];
+  const names = toolsForScopes(scopes).map((t) => t.name);
+  assert.ok(names.includes("ethos_add_section"));
+  const ro = toolsForScopes(scopes, { readOnly: true }).map((t) => t.name);
+  assert.ok(!ro.includes("ethos_add_section"));
+  assert.ok(ro.includes("ethos_read_section"));
+});
+
+test("toolsForScopes — explicit tool restriction intersects", () => {
+  const out = toolsForScopes(undefined, {
+    tools: ["ethos_read_section", "nope_unknown"],
+  });
+  assert.deepEqual(out.map((t) => t.name), ["ethos_read_section"]);
+});
+
+test("every legacy alias resolves to a canonical spec", () => {
+  for (const [legacy, alias] of Object.entries(LEGACY_TOOL_ALIASES)) {
+    assert.ok(
+      getToolSpec(alias.canonical),
+      `${legacy} → ${alias.canonical} must exist in the catalogue`,
+    );
+    // Renamed args must land on canonical schema properties.
+    const spec = getToolSpec(alias.canonical);
+    for (const target of Object.values(alias.renameArgs ?? {})) {
+      assert.ok(
+        target in (spec.input_schema.properties ?? {}),
+        `${legacy}: rename target '${target}' not in ${alias.canonical} schema`,
+      );
+    }
+  }
+});
+
+test("resolveLegacyToolCall maps names and renames args shallowly", () => {
+  const r = resolveLegacyToolCall("aithos_ethos_modify_section", {
+    zone: "public",
+    sectionId: "sec_ab",
+    clearTags: true,
+    body: "x",
+  });
+  assert.equal(r.wasAlias, true);
+  assert.equal(r.name, "ethos_update_section");
+  assert.deepEqual(r.args, {
+    zone: "public",
+    section_id: "sec_ab",
+    clear_tags: true,
+    body: "x",
+  });
+  const noop = resolveLegacyToolCall("ethos_read_section", { section_id: "s" });
+  assert.equal(noop.wasAlias, false);
+  assert.equal(noop.name, "ethos_read_section");
+});
