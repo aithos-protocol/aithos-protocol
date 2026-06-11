@@ -22,7 +22,7 @@ import { ed25519PublicKeyToMultibase } from "@aithos/protocol-core/did";
 import type { DidDocument } from "@aithos/protocol-core/identity";
 
 import { RpcError } from "../jsonrpc.js";
-import { resolveIssuerDoc } from "./did-resolver.js";
+import { resolveIssuerDoc, invalidateDidCache } from "./did-resolver.js";
 import { replayCache } from "./nonce-store.js";
 import { findRevocation } from "./revocations.js";
 
@@ -96,6 +96,35 @@ function normalizeAud(u: string): string {
  * The router calls this BEFORE dispatching to a handler. Handlers
  * never see the raw envelope and never make their own auth checks.
  */
+/**
+ * Sphere lock for OWNER-mode data ops. The hole this closes: an Ethos sphere
+ * key (#public/#circle/#self) writing data records. We therefore REJECT those
+ * three spheres and allow everything else a verified envelope can carry:
+ *   - #data  — the protocol-intended owner data key (the normal path);
+ *   - #root  — the cold master (used by the legacy CMK migration / rotate_cmk);
+ *   - a did:key canonical VM (#<multibase>) — throwaway demo identities.
+ * The signature itself is already verified by verifyEnvelope; this is the
+ * policy gate on WHICH sphere may sign data ops (spec/data/02-key-hierarchy.md).
+ * Throws RpcError(-32012) on an Ethos-sphere signature.
+ */
+const ETHOS_SPHERES = new Set(["public", "circle", "self"]);
+export function assertOwnerDataSphere(envelope: SignedEnvelope): void {
+  const vm =
+    (envelope as { proof?: { verificationMethod?: unknown } }).proof
+      ?.verificationMethod;
+  const vmStr = typeof vm === "string" ? vm : "";
+  const hash = vmStr.lastIndexOf("#");
+  const fragment = hash >= 0 ? vmStr.slice(hash + 1) : "";
+  if (ETHOS_SPHERES.has(fragment)) {
+    throw new RpcError(
+      -32012,
+      `AITHOS_WRONG_SPHERE: owner data operations cannot be signed under the ` +
+        `Ethos sphere #${fragment}; use the #data sphere ` +
+        `(auth.ownerDataClient() signs #data).`,
+    );
+  }
+}
+
 export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   const envelope = input.rawParams._envelope;
   if (envelope === undefined || envelope === null) {
@@ -154,6 +183,14 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
     replay: replayCache,
   };
 
+  // B5 — kill-switch freshness: a delegate (mandate-bearing) call must see the
+  // subject's CURRENT revocation epoch, so drop any cached did.json for the
+  // issuer before verification re-fetches it. Owner calls keep the warm cache.
+  if ((envelope as { mandate?: unknown }).mandate) {
+    const iss = (envelope as { iss?: unknown }).iss;
+    if (typeof iss === "string" && iss.length > 0) invalidateDidCache(iss);
+  }
+
   const result = await verifyEnvelope(envelope as SignedEnvelope, ctx);
   if (!result.ok) {
     throw new RpcError(result.error.code, result.error.message, result.error.data);
@@ -162,6 +199,14 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   const mandateId = result.mandateId;
   const mandate = (envelope as SignedEnvelope).mandate;
   const mode: "owner" | "delegate" = mandateId ? "delegate" : "owner";
+
+  // M1 — sphere lock: owner data ops may NOT be signed under an Ethos sphere
+  // (#public/#circle/#self); #data is the intended key (#root and did:key
+  // canonical VMs are allowed). Delegate calls use a bare-multibase VM and are
+  // governed by mandate scopes instead, so the check is owner-only.
+  if (mode === "owner") {
+    assertOwnerDataSphere(envelope as SignedEnvelope);
+  }
 
   // Drop the legacy `_subject_sphere_pubkeys` field if a stale client still
   // sends it — it is no longer honoured (the resolver trusts only the

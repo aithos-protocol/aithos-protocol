@@ -116,6 +116,31 @@ function normalizeAud(u: string): string {
  * Verify the envelope, atomically record the nonce to defend against
  * replays, and return a Caller. Throws RpcError on any failure.
  */
+/**
+ * Sphere lock for owner asset ops — rejects the three Ethos spheres
+ * (#public/#circle/#self) so an Ethos key can't write assets; allows #data
+ * (intended), #root (master), and did:key canonical VMs. Byte-identical to the
+ * data-backend twin in lambda/auth/authenticate.ts — keep both in sync until
+ * the auth helpers are factored into a shared module (audit M3). Throws
+ * RpcError(-32012) on an Ethos-sphere signature.
+ */
+const ETHOS_SPHERES = new Set(["public", "circle", "self"]);
+function assertOwnerDataSphere(envelope: SignedEnvelope): void {
+  const vm =
+    (envelope as { proof?: { verificationMethod?: unknown } }).proof
+      ?.verificationMethod;
+  const vmStr = typeof vm === "string" ? vm : "";
+  const hash = vmStr.lastIndexOf("#");
+  const fragment = hash >= 0 ? vmStr.slice(hash + 1) : "";
+  if (ETHOS_SPHERES.has(fragment)) {
+    throw new RpcError(
+      -32012,
+      `AITHOS_WRONG_SPHERE: owner asset operations cannot be signed under the ` +
+        `Ethos sphere #${fragment}; use the #data sphere.`,
+    );
+  }
+}
+
 export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   const envelope = input.rawParams._envelope;
   if (envelope === undefined || envelope === null) {
@@ -187,6 +212,10 @@ export async function authenticate(input: AuthenticateInput): Promise<Caller> {
       "mandate-based delegate auth is not implemented in v0.1 of the assets PDS",
     );
   }
+
+  // M1 — sphere lock: reject the three Ethos spheres (#public/#circle/#self);
+  // #data (intended), #root and did:key canonical VMs are allowed.
+  assertOwnerDataSphere(envelope as SignedEnvelope);
 
   // Re-extract the envelope's nonce field for the audit trace.
   const env = envelope as SignedEnvelope;

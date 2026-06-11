@@ -44,6 +44,19 @@ interface CacheEntry {
 const didDocCache = new Map<string, CacheEntry>();
 
 /**
+ * Drop the cached DID document for `did`, forcing the next resolution to
+ * re-fetch the published did.json. The router calls this before verifying a
+ * MANDATE-bearing envelope so the subject's revocation epoch
+ * (`aithos.mandates_void_before`) is seen immediately — the positive cache
+ * (5 min) would otherwise delay a `revokeAll()` kill-switch on the PDS by up to
+ * the TTL (audit B5; mirrors the platform read path that never caches the
+ * mandate-verification did.json, aithos-provider commit 5c7ef1e).
+ */
+export function invalidateDidCache(did: string): void {
+  didDocCache.delete(did);
+}
+
+/**
  * Fetch the published, root-signed did.json for a did:aithos subject from the
  * Ethos registry. Returns the inner DidDocument, or null on not-found / any
  * transport error (caller falls back to the root-only synthesis). The caller
