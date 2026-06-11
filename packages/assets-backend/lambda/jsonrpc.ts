@@ -40,12 +40,6 @@ export function jsonRpcError(
 }
 
 /** Thrown by handlers to signal a JSON-RPC error to the router. */
-export class RpcError extends Error {
-  readonly code: number;
-  readonly data?: unknown;
-  constructor(code: number, message: string, data?: unknown) {
-    super(message);
-    this.code = code;
-    this.data = data;
-  }
-}
+// RpcError lives in @aithos/pds-auth (shared with data-backend) so a single
+// class identity flows through the resolver, sphere-lock and router.
+export { RpcError } from "@aithos/pds-auth";

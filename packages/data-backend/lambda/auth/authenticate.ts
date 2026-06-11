@@ -23,6 +23,10 @@ import type { DidDocument } from "@aithos/protocol-core/identity";
 
 import { RpcError } from "../jsonrpc.js";
 import { resolveIssuerDoc, invalidateDidCache } from "./did-resolver.js";
+import { assertOwnerDataSphere } from "@aithos/pds-auth";
+
+// Re-exported so the sphere-lock unit test can import it from here.
+export { assertOwnerDataSphere };
 import { replayCache } from "./nonce-store.js";
 import { findRevocation } from "./revocations.js";
 
@@ -96,35 +100,6 @@ function normalizeAud(u: string): string {
  * The router calls this BEFORE dispatching to a handler. Handlers
  * never see the raw envelope and never make their own auth checks.
  */
-/**
- * Sphere lock for OWNER-mode data ops. The hole this closes: an Ethos sphere
- * key (#public/#circle/#self) writing data records. We therefore REJECT those
- * three spheres and allow everything else a verified envelope can carry:
- *   - #data  — the protocol-intended owner data key (the normal path);
- *   - #root  — the cold master (used by the legacy CMK migration / rotate_cmk);
- *   - a did:key canonical VM (#<multibase>) — throwaway demo identities.
- * The signature itself is already verified by verifyEnvelope; this is the
- * policy gate on WHICH sphere may sign data ops (spec/data/02-key-hierarchy.md).
- * Throws RpcError(-32012) on an Ethos-sphere signature.
- */
-const ETHOS_SPHERES = new Set(["public", "circle", "self"]);
-export function assertOwnerDataSphere(envelope: SignedEnvelope): void {
-  const vm =
-    (envelope as { proof?: { verificationMethod?: unknown } }).proof
-      ?.verificationMethod;
-  const vmStr = typeof vm === "string" ? vm : "";
-  const hash = vmStr.lastIndexOf("#");
-  const fragment = hash >= 0 ? vmStr.slice(hash + 1) : "";
-  if (ETHOS_SPHERES.has(fragment)) {
-    throw new RpcError(
-      -32012,
-      `AITHOS_WRONG_SPHERE: owner data operations cannot be signed under the ` +
-        `Ethos sphere #${fragment}; use the #data sphere ` +
-        `(auth.ownerDataClient() signs #data).`,
-    );
-  }
-}
-
 export async function authenticate(input: AuthenticateInput): Promise<Caller> {
   const envelope = input.rawParams._envelope;
   if (envelope === undefined || envelope === null) {

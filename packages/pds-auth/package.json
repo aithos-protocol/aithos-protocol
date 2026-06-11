@@ -1,0 +1,18 @@
+{
+  "name": "@aithos/pds-auth",
+  "version": "0.1.0",
+  "description": "Shared PDS auth primitives — did:aithos/did:key resolver (HTTP registry + cache), revocation-epoch cache invalidation, owner sphere lock, and the RpcError type. Consumed (and bundled from source) by data-backend and assets-backend.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aithos/protocol-core": ">=0.11.0 <0.12.0"
+  }
+}
