@@ -17,8 +17,7 @@ import {
   toolsForScopes,
 } from "../dist/index.js";
 
-// The ratified D1 table (2026-06-10; +introduce/briefing P6 2026-06-11).
-// Renaming = breaking change.
+// The ratified D1 table (2026-06-10). Renaming = breaking change.
 const RATIFIED_NAMES = [
   "identity_list",
   "identity_describe",
@@ -38,8 +37,6 @@ const RATIFIED_NAMES = [
   "ethos_preflight_write",
   "mandate_verify",
   "mandate_describe",
-  "ethos_introduce",
-  "agent_briefing",
   "data_query",
 ];
 

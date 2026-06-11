@@ -5,26 +5,6 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.13.0 — 2026-06-11
-
-P6 incarnation (plan §6.2/§6.3) — agent-tools ^0.5.0:
-
-- NEW resource `aithos://ethos/{handle}/voice` (V10): the subject's
-  presentation guidance — an authored PUBLIC section tagged `voice` (or
-  `guidance`) served verbatim (JSON §12.3.2 or prose), else the spec
-  §12.3.4 default with `{handle}` substituted.
-- NEW tool `ethos_introduce` (V16): third-party introduction — public-only
-  STRUCTURALLY (circle/self never read, whatever the mandate; forced calls
-  refuse), anonymous, refusal template surfaced for out-of-ethos questions.
-- NEW tool `agent_briefing` (V11): mandate description + voice profile +
-  budgeted context pack in ONE call, composed from the same internal
-  helpers (`describeSession` / `voiceProfile` / `buildContextPack`).
-- `selfSigningWrites` storage capability marker formalized (P1 note): a
-  storage signing with its own session keys declares it; an undefined
-  subject identity on a non-delegated write now REFUSES honestly instead
-  of proceeding silently. `SelfSigningStorage` type exported.
-- H1: +6 tests (T9, T9b, T17, T7/narration, V11, 0.13 marker) → 30.
-
 ## [0.12.1] — 2026-06-10
 
 ### Fixed
