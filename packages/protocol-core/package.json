@@ -1,6 +1,6 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "sideEffects": [
     "./dist/envelope.js",
     "./dist/mandate.js",
@@ -105,7 +105,8 @@
     "check-types": "tsc --noEmit",
     "clean": "rm -rf dist",
     "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\"",
-    "prepublishOnly": "npm run clean && npm run build && npm run check-types"
+    "prepublishOnly": "npm run clean && npm run build && npm run check-types",
+    "check:browser": "node --experimental-vm-modules scripts/check-browser.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.2.0",
@@ -122,7 +123,8 @@
   "devDependencies": {
     "@types/node": "^20.19.41",
     "tsx": "^4.22.4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "esbuild": "^0.21.5"
   },
   "engines": {
     "node": ">=20"
