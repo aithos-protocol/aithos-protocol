@@ -1,6 +1,6 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "sideEffects": [
     "./dist/envelope.js",
     "./dist/mandate.js",
@@ -92,6 +92,10 @@
     "./storage": {
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
+    },
+    "./bundle-v04": {
+      "types": "./dist/bundle-v04.d.ts",
+      "import": "./dist/bundle-v04.js"
     }
   },
   "files": [
