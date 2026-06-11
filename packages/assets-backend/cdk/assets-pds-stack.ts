@@ -78,6 +78,7 @@ import {
   OutputFormat,
 } from "aws-cdk-lib/aws-lambda-nodejs";
 import { RetentionDays } from "aws-cdk-lib/aws-logs";
+import { StringParameter } from "aws-cdk-lib/aws-ssm";
 import {
   Bucket,
   BucketEncryption,
@@ -102,7 +103,14 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+export type AithosEnv = "dev" | "staging" | "prod";
+
 export interface AithosAssetsPdsStackProps extends StackProps {
+  /** Deployment environment. Drives resource names, the public host and the
+   * resolver URL. (Distinct from StackProps.env = the AWS account/region.) */
+  readonly envName: AithosEnv;
+  /** Public domain for this env: prod → aithos.be, else <env>.aithos.be. */
+  readonly domain: string;
   /**
    * Per-subject quota in bytes. Default 5 GB. Configurable per
    * deployment.
@@ -126,9 +134,19 @@ export class AithosAssetsPdsStack extends Stack {
   constructor(
     scope: Construct,
     id: string,
-    props?: AithosAssetsPdsStackProps,
+    props: AithosAssetsPdsStackProps,
   ) {
     super(scope, id, props);
+
+    const env = props.envName;
+    const domain = props.domain;
+    // `-${env}` keeps dev names byte-identical to the pre-multienv stack
+    // (`aithos-assets-pds-dev`), so `cdk diff -c env=dev` is a no-op. ⚠️ PROD:
+    // confirm the ACTUAL deployed names (PLAN-MULTIENV Phase 0, host
+    // yfzex613w3) BEFORE any prod synth — renaming forces a replacement.
+    const sfx = `-${env}`;
+    const publicHost = process.env.ASSETS_PUBLIC_HOST ?? `assets.${domain}`;
+    const resolverUrl = process.env.ETHOS_RESOLVER_URL ?? `https://api.${domain}`;
 
     const perSubjectQuotaBytes = props?.perSubjectQuotaBytes ?? 5 * 1024 * 1024 * 1024; // 5 GB
     const perAssetCapBytes = props?.perAssetCapBytes ?? 100 * 1024 * 1024; // 100 MB
@@ -145,7 +163,7 @@ export class AithosAssetsPdsStack extends Stack {
     // bytes. Operators who need to tear down should empty the bucket
     // manually via the AWS console or CLI before `cdk destroy`.
     const assetsBucket = new Bucket(this, "AssetsBucket", {
-      bucketName: `aithos-assets-pds-dev-${this.account}`,
+      bucketName: `aithos-assets-pds${sfx}-${this.account}`,
       versioned: true,
       encryption: BucketEncryption.S3_MANAGED,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
@@ -172,7 +190,7 @@ export class AithosAssetsPdsStack extends Stack {
     /* -------------------------------------------------------------------- */
 
     const assetsTable = new Table(this, "AssetsTable", {
-      tableName: "aithos-assets-pds-dev",
+      tableName: `aithos-assets-pds${sfx}`,
       partitionKey: { name: "pk", type: AttributeType.STRING }, // subject_did
       sortKey: { name: "sk", type: AttributeType.STRING }, // asset_id
       billingMode: BillingMode.PAY_PER_REQUEST,
@@ -204,7 +222,7 @@ export class AithosAssetsPdsStack extends Stack {
     /* -------------------------------------------------------------------- */
 
     const nonceTable = new Table(this, "NonceTable", {
-      tableName: "aithos-assets-pds-nonces-dev",
+      tableName: `aithos-assets-pds-nonces${sfx}`,
       partitionKey: { name: "pk", type: AttributeType.STRING }, // <iss>#<nonce>
       billingMode: BillingMode.PAY_PER_REQUEST,
       encryption: TableEncryption.AWS_MANAGED,
@@ -221,7 +239,7 @@ export class AithosAssetsPdsStack extends Stack {
     // Limit=1). No extra index needed.
 
     const gammaTable = new Table(this, "GammaTable", {
-      tableName: "aithos-assets-pds-gamma-dev",
+      tableName: `aithos-assets-pds-gamma${sfx}`,
       partitionKey: { name: "subject_did", type: AttributeType.STRING },
       sortKey: { name: "entry_id", type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
@@ -235,7 +253,7 @@ export class AithosAssetsPdsStack extends Stack {
     /* -------------------------------------------------------------------- */
 
     const uploadsTable = new Table(this, "UploadsTable", {
-      tableName: "aithos-assets-pds-uploads-dev",
+      tableName: `aithos-assets-pds-uploads${sfx}`,
       partitionKey: { name: "upload_session", type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
       encryption: TableEncryption.AWS_MANAGED,
@@ -248,7 +266,7 @@ export class AithosAssetsPdsStack extends Stack {
     /* -------------------------------------------------------------------- */
 
     const router = new NodejsFunction(this, "RouterFn", {
-      functionName: "aithos-assets-pds-router-dev",
+      functionName: `aithos-assets-pds-router${sfx}`,
       runtime: Runtime.NODEJS_20_X,
       architecture: Architecture.ARM_64,
       entry: path.join(__dirname, "..", "lambda", "router.ts"),
@@ -270,17 +288,23 @@ export class AithosAssetsPdsStack extends Stack {
         PER_ASSET_CAP_BYTES: String(perAssetCapBytes),
         PRESIGNED_URL_TTL_SECONDS: String(presignedUrlTtlSeconds),
         AITHOS_ASSETS_PROTOCOL_VERSION: "0.1.0",
+        // Env surfaced on /healthz so callers (and the dev-isolation e2e) can
+        // confirm which environment an origin actually serves.
+        AITHOS_ENV: env,
         // Public vanity host fronting this assets PDS through CloudFront.
         // Enables dual-aud verification (vanity + execute-api origin) during
-        // the edge migration — see lambda/router.ts buildExpectedAud. Override
-        // via the ASSETS_PUBLIC_HOST shell env at synth time if it differs.
-        ASSETS_PUBLIC_HOST: process.env.ASSETS_PUBLIC_HOST ?? "assets.aithos.be",
+        // the edge migration — see lambda/router.ts buildExpectedAud. Derived
+        // from the env domain (assets.<domain>); ASSETS_PUBLIC_HOST overrides.
+        // NB: previously hardcoded to prod (assets.aithos.be) for ALL envs — a
+        // dev deploy resolved its aud against prod. Now env-correct (audit B3).
+        ASSETS_PUBLIC_HOST: publicHost,
         // Ethos identity registry the resolver calls to fetch a real, root-
         // signed did.json for did:aithos subjects (so owner asset envelopes can
         // sign under the dedicated #data sphere instead of #root). See
-        // lambda/auth/did-resolver.ts. Override via ETHOS_RESOLVER_URL at synth.
-        ETHOS_RESOLVER_URL:
-          process.env.ETHOS_RESOLVER_URL ?? "https://api.aithos.be",
+        // lambda/auth/did-resolver.ts. Derived from the env domain
+        // (https://api.<domain>); ETHOS_RESOLVER_URL overrides. Was hardcoded
+        // to prod api.aithos.be for ALL envs (audit B3).
+        ETHOS_RESOLVER_URL: resolverUrl,
       },
       bundling: {
         target: "node20",
@@ -305,8 +329,8 @@ export class AithosAssetsPdsStack extends Stack {
     /* -------------------------------------------------------------------- */
 
     const api = new HttpApi(this, "AssetsPdsApi", {
-      apiName: "aithos-assets-pds-dev",
-      description: "Aithos assets sub-protocol PDS — dev API",
+      apiName: `aithos-assets-pds${sfx}`,
+      description: `Aithos assets sub-protocol PDS — ${env} API`,
       corsPreflight: {
         allowOrigins: ["*"],
         allowMethods: [CorsHttpMethod.POST, CorsHttpMethod.GET, CorsHttpMethod.OPTIONS],
@@ -345,7 +369,7 @@ export class AithosAssetsPdsStack extends Stack {
       this,
       "PublicAssetResponseHeaders",
       {
-        responseHeadersPolicyName: "aithos-assets-public-headers-dev",
+        responseHeadersPolicyName: `aithos-assets-public-headers${sfx}`,
         comment:
           "Security headers for public asset delivery — no sniff, attachment disposition, strict referrer.",
         securityHeadersBehavior: {
@@ -365,7 +389,7 @@ export class AithosAssetsPdsStack extends Stack {
     );
 
     const distribution = new Distribution(this, "PublicAssetsCDN", {
-      comment: "Aithos public assets CDN — dev",
+      comment: `Aithos public assets CDN — ${env}`,
       defaultBehavior: {
         origin: S3BucketOrigin.withOriginAccessControl(assetsBucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -396,10 +420,26 @@ export class AithosAssetsPdsStack extends Stack {
     /*  Outputs                                                              */
     /* -------------------------------------------------------------------- */
 
+    // execute-api origin host published to SSM per env so Terraform reads it
+    // instead of a hardcoded host (PLAN-MULTIENV Phase 1/2; closes audit B1).
+    const originHost = `${api.apiId}.execute-api.${this.region}.amazonaws.com`;
+    new StringParameter(this, "AssetsPdsOriginHost", {
+      parameterName: `/aithos/${env}/assets-pds/origin-host`,
+      stringValue: originHost,
+      description: `Origin host for the ${env} assets PDS (consumed by Terraform CloudFront)`,
+    });
+
     new CfnOutput(this, "AssetsPdsApiUrl", {
       value: api.apiEndpoint,
       description: "Base URL for the Aithos assets PDS API",
+      // Stable export name (per-account, one env per account) — unchanged so
+      // `cdk diff -c env=dev` stays a no-op.
       exportName: "AithosAssetsPdsApiUrl",
+    });
+
+    new CfnOutput(this, "AssetsPdsOriginHostOut", {
+      value: originHost,
+      description: "execute-api origin host (for the SSM/CloudFront seam)",
     });
 
     new CfnOutput(this, "AssetsBucketName", {

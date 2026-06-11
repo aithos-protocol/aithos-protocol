@@ -17,23 +17,36 @@
 
 import { App, Tags } from "aws-cdk-lib";
 
-import { AithosDataPdsStack } from "../cdk/data-pds-stack.js";
+import { AithosDataPdsStack, type AithosEnv } from "../cdk/data-pds-stack.js";
 
 const app = new App();
 
-const env = {
+// `env` context selects the whole environment: it derives the domain, resource
+// names, env-vars and the SSM param. The AWS ACCOUNT comes from the deploy
+// profile (CDK_DEFAULT_ACCOUNT), never hardcoded. Usage: `-c env=dev|prod`.
+const deployEnv = (app.node.tryGetContext("env") as AithosEnv) ?? "dev";
+const domain = deployEnv === "prod" ? "aithos.be" : `${deployEnv}.aithos.be`;
+
+const awsEnv = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: process.env.CDK_DEFAULT_REGION ?? "eu-west-3",
 };
 
-new AithosDataPdsStack(app, "AithosDataPdsDev", {
-  env,
-  description:
-    "Aithos data sub-protocol PDS — dev environment. See spec/data/.",
+// Stack id. dev keeps its historical name (`AithosDataPdsDev`) so the existing
+// dev stack updates in place (no replacement). ⚠️ PROD: set this to the EXACT
+// name of the already-deployed prod stack (PLAN-MULTIENV Phase 0) before the
+// first prod deploy — a new id provisions a NEW execute-api (outage).
+const stackId = deployEnv === "dev" ? "AithosDataPdsDev" : `AithosDataPds-${deployEnv}`;
+
+new AithosDataPdsStack(app, stackId, {
+  env: awsEnv,
+  envName: deployEnv,
+  domain,
+  description: `Aithos data sub-protocol PDS — ${deployEnv} environment. See spec/data/.`,
 });
 
 // Apply project-wide tags
 Tags.of(app).add("Project", "aithos");
 Tags.of(app).add("Component", "data-pds");
-Tags.of(app).add("Environment", "dev");
+Tags.of(app).add("Environment", deployEnv);
 Tags.of(app).add("ManagedBy", "cdk");
