@@ -1,12 +1,12 @@
 {
   "name": "@aithos/protocol-core",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "sideEffects": [
     "./dist/envelope.js",
     "./dist/mandate.js",
     "./dist/did.js"
   ],
-  "description": "Aithos protocol — reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
+  "description": "Aithos protocol \u2014 reference implementation of the core primitives (DIDs, ethos, mandates, bundles) used by the CLI and by any host that speaks the protocol.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
   "homepage": "https://github.com/aithos-protocol/aithos-protocol#readme",

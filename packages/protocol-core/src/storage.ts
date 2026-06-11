@@ -36,7 +36,14 @@ import {
   chmodSync,
 } from "node:fs";
 
-export const AITHOS_HOME = process.env.AITHOS_HOME ?? join(homedir(), ".aithos");
+// Browser-safe: this module rides along in browser bundles whenever the core
+// root entry is imported (the v0.4 modules retain it through author/ethos).
+// Filesystem paths are meaningless there — guard the env/os access so module
+// INIT never touches node globals; node behaviour is unchanged.
+export const AITHOS_HOME =
+  typeof process === "undefined"
+    ? "/.aithos" // browser: present for the export surface, never used
+    : process.env.AITHOS_HOME ?? join(homedir(), ".aithos");
 
 export function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
