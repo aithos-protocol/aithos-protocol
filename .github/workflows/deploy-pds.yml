@@ -1,0 +1,107 @@
+name: deploy-pds
+
+# CD for the PDS backends (data + assets), via CDK + GitHub OIDC — the CDK
+# counterpart of aithos-provider's Terraform deploy-dev/deploy-prod. Closes the
+# "manual cdk deploy" gap (PLAN-MULTIENV: "a PDS OIDC cdk deploy CD workflow is
+# a possible follow-up").
+#
+# Pattern mirrors the provider:
+#   - push to main (PDS paths) -> auto-deploy DEV (the integration env);
+#   - workflow_dispatch        -> choose env (dev|prod) + action (diff|deploy).
+#     prod is gated by the `production` GitHub Environment (required reviewers)
+#     and defaults to `diff`.
+#
+# PREREQUISITE (one-time, maintainer): a repo variable AWS_PDS_DEPLOY_ROLE_ARN
+# pointing at an IAM role the GitHub OIDC provider can assume in the target
+# account, with CDK-deploy permissions (CloudFormation + the bootstrap roles, or
+# the same permission set as the provider's AWS_DEPLOY_ROLE_ARN). Trust must
+# allow repo:aithos-protocol/aithos-protocol per environment. See DEPLOY-PDS-CD.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/data-backend/**"
+      - "packages/assets-backend/**"
+      - "packages/pds-auth/**"
+      - "packages/protocol-core/**"
+      - ".github/workflows/deploy-pds.yml"
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Target environment"
+        type: choice
+        options: [dev, prod]
+        default: dev
+      action:
+        description: "cdk diff (review) or deploy"
+        type: choice
+        options: [diff, deploy]
+        default: diff
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-pds-${{ github.ref }}-${{ github.event.inputs.env || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  # Auto DEV deploy on every PDS-touching push to main.
+  deploy-dev:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: eu-west-3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PDS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-3
+      - name: cdk deploy data PDS (dev)
+        working-directory: packages/data-backend
+        run: npx cdk deploy --all -c env=dev --require-approval never
+      - name: cdk deploy assets PDS (dev)
+        working-directory: packages/assets-backend
+        run: npx cdk deploy --all -c env=dev --require-approval never
+
+  # Manual diff/deploy for either env. prod is human-gated by the `production`
+  # Environment. NOTE: before the FIRST prod deploy, confirm the prod stack id
+  # in bin/app.ts matches the already-deployed prod stack (PLAN-MULTIENV Phase 0,
+  # hosts slpknok0md / yfzex613w3) — a new id = a new execute-api = outage.
+  dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.env == 'prod' && 'production' || 'development' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: eu-west-3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PDS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-3
+      - name: cdk ${{ github.event.inputs.action }} data PDS (${{ github.event.inputs.env }})
+        working-directory: packages/data-backend
+        run: npx cdk ${{ github.event.inputs.action }} --all -c env=${{ github.event.inputs.env }} ${{ github.event.inputs.action == 'deploy' && '--require-approval never' || '' }}
+      - name: cdk ${{ github.event.inputs.action }} assets PDS (${{ github.event.inputs.env }})
+        working-directory: packages/assets-backend
+        run: npx cdk ${{ github.event.inputs.action }} --all -c env=${{ github.event.inputs.env }} ${{ github.event.inputs.action == 'deploy' && '--require-approval never' || '' }}
