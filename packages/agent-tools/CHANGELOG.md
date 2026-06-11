@@ -13,6 +13,8 @@ P6 incarnation (plan §6.2/§6.3):
   voice profile + budgeted context pack in ONE call. Exposed under any
   `ethos.read.*` scope. Args: `{ handle?, task, budget_tokens?, zones? }`.
 - Catalogue is now 21 specs; ratified-name test updated accordingly.
+- `ethos_search` description aligned on §12.4.2: an empty result means the
+  subject has not spoken to it — say so rather than fabricate.
 
 ## 0.1.0 — 2026-06-10
 

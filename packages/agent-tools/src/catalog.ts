@@ -196,7 +196,9 @@ const ethosSearch: AgentToolSpec = {
     "a snippet; read the full bodies of the ids you keep via " +
     "`ethos_read_sections`. Sections outside the session's read scopes are " +
     "NEVER searched or returned. Prefer this over listing + reading " +
-    "everything when the ethos is large.",
+    "everything when the ethos is large. An empty result means the subject " +
+    "has not spoken to it in what you can read — say so rather than " +
+    "fabricate (§12.4.2).",
   input_schema: {
     type: "object",
     properties: {
