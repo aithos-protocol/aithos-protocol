@@ -121,6 +121,9 @@ export const handler = async (
       ok: true,
       protocol: "aithos.assets",
       version: PROTOCOL_VERSION,
+      // Which environment this origin actually serves — lets a caller (and the
+      // dev-isolation e2e) detect a misrouted dev↔prod CloudFront origin.
+      env: process.env.AITHOS_ENV ?? "unknown",
       authentication: "envelope required on /mcp/primitives/write and on private reads",
     });
   }
