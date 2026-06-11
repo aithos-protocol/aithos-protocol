@@ -23,6 +23,7 @@ export * from "./ethos.js";
 export * from "./bundle.js";
 export * from "./bundle-v03.js";
 export * from "./bundle-v04.js";
+export * from "./bundle-v04-crypto.js";
 export * from "./bundle-migrate.js";
 export * from "./bundle-edit.js";
 export * from "./keystore-v3.js";
