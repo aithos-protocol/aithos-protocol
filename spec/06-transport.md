@@ -54,51 +54,56 @@ mandate document, live status, and the EXACT served tool set) and
 
 ### 6.2.2 Resources
 
-The server MUST expose the following resources (absent when inapplicable):
+The reference server exposes the following resources (absent when
+inapplicable). URIs are subject-addressed — one server can serve several
+identities:
 
 | URI | Condition | Content |
 |---|---|---|
-| `ethos://public` | always | Markdown, UTF-8. The public zone in bundle form. |
-| `ethos://circle` | server holds circle key OR a valid mandate with `ethos.read.circle` is presented | Markdown, UTF-8. |
-| `ethos://self` | server holds self key (only for the subject's own agents) | Markdown, UTF-8. |
-| `ethos://manifest` | always | JSON. The bundle manifest, minus the plaintext ciphertext fields. |
-| `ethos://did` | always | JSON. The signed DID document. |
+| `aithos://identities` | always | JSON. Index of every identity the host serves (handle, DID, tracked flag). |
+| `aithos://ethos/{handle}/manifest` | always | JSON. The current signed manifest (edition, zone digests, gamma anchor). |
+| `aithos://ethos/{handle}/voice` | always | The subject's presentation guidance (§12.3): an authored PUBLIC section tagged `voice` (or `guidance`) served verbatim (JSON §12.3.2, or prose), else the §12.3.4 default with `{handle}` substituted. JSON when authored-as-JSON or default; markdown when authored prose. |
+| `aithos://ethos/{handle}/public` | always | Markdown, UTF-8. The public zone (re-rendered per-section on v0.3 stores). |
+| `aithos://ethos/{handle}/circle` · `…/self` | server holds the zone key | Markdown, UTF-8, decrypted in memory. |
+| `aithos://ethos/{handle}/manifest-path` | filesystem hosts only | Plain text. Absolute on-disk manifest path (diagnostic). |
 
-Resources MUST be returned with `mimeType: "text/markdown"` for the zones and `mimeType: "application/json"` for the manifest and DID document.
-
-A server that cannot fulfill a zone resource due to missing key material or a missing mandate MUST:
-
-- Either omit the resource from `resources/list` entirely, or
-- Return a structured error from `resources/read` with an error code clients can recognize (`AITHOS_ZONE_INACCESSIBLE` — code `-32001`).
-
-Clients MUST handle both.
+A server that cannot decrypt a zone resource MUST NOT fail the read: it
+degrades — the raw ciphertext envelope (v0.2 single-blob stores), or an
+explanatory text pointing the agent at the per-section read tools (v0.3) —
+or returns a structured error clients can recognize
+(`AITHOS_ZONE_INACCESSIBLE`, code `-32001`). Clients MUST handle all three.
 
 ### 6.2.3 Tools
 
-The server MUST expose at least these tools:
+The tool surface is defined ONCE, in the canonical catalogue
+`@aithos/agent-tools` (decision D1): names, argument schemas, and normative
+descriptions live there and are served verbatim by every host (the parity
+tests T10 / T10-proxy pin this). This section does not duplicate the
+catalogue; normatively:
 
-| Tool name | Arguments | Returns |
-|---|---|---|
-| `ethos_search` | `{ query: string, zone?: "any"|"public"|"circle"|"self", limit?: number }` | `{ hits: [ { zone, section_id, title, snippet, score } ] }` |
-| `ethos_list_sections` | `{ zone?: "any"|...}` | `{ sections: { public: [...], circle?: [...], self?: [...] } }` |
+- A conformant server MUST serve at least the public read family —
+  `ethos_list_sections`, `ethos_read_section`, `ethos_read_sections`,
+  `ethos_search` — with the catalogue's exact specs.
+- `tools/list` MUST be filtered by the session mandate's scopes
+  (`toolsForScopes`), and per-call zone enforcement MUST remain at dispatch
+  time (defense in depth — a forced out-of-scope call never reads or
+  writes).
+- Writes are transactional by default (staged until `ethos_commit`;
+  per-write editions only under `auto_commit`).
+- The narration tools (`ethos_introduce`) are public-only STRUCTURALLY:
+  they never read circle/self whatever the mandate (§4 narration rule;
+  §12 is their behavioral reference).
+- `agent_briefing` composes `mandate_describe` + the voice profile (§12.3)
+  + `ethos_context_pack` in one call; servers SHOULD serve it wherever the
+  read family is served.
 
-Servers MAY add additional tools. The two listed are the minimum viable surface.
+### 6.2.4 Prompts (retired)
 
-### 6.2.4 Prompts
-
-The server MUST expose at least this prompt:
-
-| Prompt name | Arguments | Returns |
-|---|---|---|
-| `write_as` | `{ task?: string }` | A system-role message bundling the accessible zones and instructing the agent to write in the subject's voice. |
-
-The rendered prompt MUST include:
-
-1. A directive to write as the subject (by handle and display name).
-2. The complete text of each zone the server has access to, under clearly labeled "What is public about them (readable by anyone)", "What is visible to people they know (do not repeat to strangers)", "What they keep private (do not reveal, use only to inform your judgement)".
-3. If `task` is provided, that task as the agent's current objective.
-
-The exact wording of the system directive is implementation-defined; the structure and content are normative.
+Earlier drafts specified a `write_as` prompt bundling whole zones into a
+system message. It was never implemented and is RETIRED: budgeted, scoped
+grounding belongs to the `ethos_context_pack` / `agent_briefing` tools, and
+the subject's voice to the `aithos://ethos/{handle}/voice` resource (§12.3).
+Servers MUST NOT rely on MCP prompts for conformance.
 
 ### 6.2.5 Handshake and capabilities
 
@@ -107,7 +112,7 @@ An Aithos MCP server declares, in its `initialize` response:
 ```json
 {
   "serverInfo": { "name": "aithos-mcp", "version": "0.1.0" },
-  "capabilities": { "resources": {}, "tools": {}, "prompts": {} }
+  "capabilities": { "resources": {}, "tools": {} }
 }
 ```
 

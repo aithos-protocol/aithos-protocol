@@ -196,7 +196,9 @@ const ethosSearch: AgentToolSpec = {
     "a snippet; read the full bodies of the ids you keep via " +
     "`ethos_read_sections`. Sections outside the session's read scopes are " +
     "NEVER searched or returned. Prefer this over listing + reading " +
-    "everything when the ethos is large.",
+    "everything when the ethos is large. An empty result means the subject " +
+    "has not spoken to it in what you can read — say so rather than " +
+    "fabricate (§12.4.2).",
   input_schema: {
     type: "object",
     properties: {
@@ -496,6 +498,90 @@ const ethosPreflightWrite: AgentToolSpec = {
   write: false,
 };
 
+
+const ethosIntroduce: AgentToolSpec = {
+  name: "ethos_introduce",
+  title: "Introduce the subject to a third party",
+  description:
+    "Introduces the subject to a THIRD PARTY — a caller who is not the " +
+    "subject. Serves ONLY the public zone, STRUCTURALLY: circle and self " +
+    "are never read, whatever the session's mandate allows (spec §4/§12 " +
+    "narration rule). Returns the subject's presentation guidance (voice), " +
+    "a headline (a public section tagged `intro` when present), the pinned " +
+    "public sections, topic hints, and — when `focus` is given — the " +
+    "matching public sections. Speak in the voice the guidance specifies; " +
+    "open with its preamble and close with its close when present; quote " +
+    "the subject's own phrasing and never invent facts beyond the returned " +
+    "sections. Stay ANONYMOUS about other people: never name the subject's " +
+    "contacts. If the caller's question falls outside the returned public " +
+    "content, answer with `refusal_template` — the subject has not spoken " +
+    "to it publicly, so neither do you.",
+  input_schema: {
+    type: "object",
+    properties: {
+      handle: handleSchema,
+      audience: {
+        type: "string",
+        description:
+          "Who the subject is being introduced to (free text; tunes tone " +
+          "only — it never widens what is served).",
+      },
+      focus: {
+        type: "string",
+        description:
+          "Optional topic to focus the introduction on (keyword-matched " +
+          "against public sections only).",
+      },
+    },
+  },
+  requires: { anyOf: ["ethos.read.public"] },
+  write: false,
+};
+
+const agentBriefing: AgentToolSpec = {
+  name: "agent_briefing",
+  title: "Brief yourself as the subject's agent",
+  description:
+    "ONE call to incarnate: \"I am the subject's agent for task X — here " +
+    "is my voice, my powers, my context.\" Composes what three calls would " +
+    "return: the session's mandate description (`mandate_describe`), the " +
+    "subject's voice profile (authored presentation guidance or the spec " +
+    "default), and a budgeted context pack for `task` " +
+    "(`ethos_context_pack`). Zero inference, zero new mechanics. Call it " +
+    "ONCE when you start acting for the subject, then use each part " +
+    "exactly as its source tool prescribes: the announced powers are " +
+    "exact, the voice guides every word you produce, and the pack bodies " +
+    "are the subject's own words — never invent beyond them.",
+  input_schema: {
+    type: "object",
+    properties: {
+      handle: handleSchema,
+      task: {
+        type: "string",
+        minLength: 1,
+        description: "What you are about to do for the subject.",
+      },
+      budget_tokens: {
+        type: "integer",
+        minimum: 100,
+        maximum: 20000,
+        default: 1500,
+        description:
+          "Token budget for the context-pack part (estimated at ~4 chars/token).",
+      },
+      zones: {
+        type: "array",
+        items: { ...zoneSchema },
+        description:
+          "Restrict the context-pack part to these zones (default: all readable).",
+      },
+    },
+    required: ["task"],
+  },
+  requires: { anyOf: ETHOS_READ_SCOPES },
+  write: false,
+};
+
 /* -------------------------------------------------------------------------- */
 /*  mandate_*                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -587,6 +673,8 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
   ethosPreflightWrite,
   mandateVerify,
   mandateDescribe,
+  ethosIntroduce,
+  agentBriefing,
   dataQuery,
 ];
 

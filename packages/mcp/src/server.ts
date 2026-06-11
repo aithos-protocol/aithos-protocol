@@ -148,12 +148,23 @@ async function loadWriteIdentity(
   handle: string,
   auth: ResolvedWriteAuth | null,
 ): Promise<Identity | undefined> {
+  const selfSigning =
+    (storage as { selfSigningWrites?: boolean }).selfSigningWrites === true;
+  let identity: Identity | undefined;
   try {
-    return await storage.loadIdentity(handle);
+    identity = await storage.loadIdentity(handle);
   } catch (e) {
-    if (!auth) throw e;
+    if (!auth && !selfSigning) throw e;
     return undefined;
   }
+  if (identity === undefined && !auth && !selfSigning) {
+    throw new Error(
+      `storage returned no subject identity for '${handle}' and does not ` +
+        "declare `selfSigningWrites` — cannot sign this write (provide a " +
+        "mandate + agent_key, or a self-signing storage)",
+    );
+  }
+  return identity;
 }
 
 /**
@@ -174,6 +185,17 @@ async function loadReadIdentity(
     return undefined;
   }
 }
+
+/**
+ * Storage capability marker (P1 note, formalized in 0.13): a storage that
+ * signs writes with its own session keys (the SDK's `SdkStorage`) declares
+ * `selfSigningWrites: true` and may resolve `loadIdentity()` to `undefined`.
+ * Without the marker, an undefined subject identity on a non-delegated
+ * write REFUSES honestly instead of proceeding silently.
+ */
+export type SelfSigningStorage = AithosStorage & {
+  readonly selfSigningWrites?: boolean;
+};
 
 // ---------- server registration -------------------------------------------
 
@@ -643,6 +665,106 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     return (start > 0 ? "…" : "") + cut + (start + 160 < body.length ? "…" : "");
   };
 
+  // ------------------------------------------------ incarnation (P6 — V10/V11/V16)
+
+  /** Spec §12.3.4 default presentation guidance, `{handle}` substituted. */
+  const defaultGuidance = (handle: string) => ({
+    "aithos-guidance": "0.1.0",
+    voice: {
+      person: "first",
+      languages: ["en"],
+      tone: ["neutral", "factual"],
+      formality: "neutral",
+      verbosity: "short",
+    },
+    rendering: { pinned_sections: [], transition_style: "natural" },
+    disclosure: {
+      ai_disclosure: "always",
+      disclosure_text:
+        `You are speaking with an agent narrating from ${handle}'s Aithos ` +
+        `ethos, not with ${handle} directly.`,
+      scope_limits: [
+        "private feelings, intentions, or decisions not stated in the ethos",
+        "speculation about events not described in the ethos",
+        "commitments or promises on behalf of the subject",
+      ],
+    },
+    refusal_template:
+      `That is outside what ${handle} has recorded in their ethos, so I ` +
+      `cannot answer on their behalf.`,
+  });
+
+  interface VoiceProfileView {
+    source: "authored" | "default";
+    section_id: string | null;
+    /** Authored section body verbatim, or the default as pretty JSON. */
+    text: string;
+    /** Parsed guidance object when `text` is JSON (§12.3.2); else null. */
+    guidance: Record<string, unknown> | null;
+  }
+
+  /**
+   * V10 — the subject's voice. An authored PUBLIC section tagged `voice`
+   * (`guidance` as fallback tag) wins and its body is served verbatim;
+   * otherwise the spec §12.3.4 default with `{handle}` substituted.
+   * Public-only by design — §12.3.5: guidance is never private.
+   */
+  const voiceProfile = async (handle: string): Promise<VoiceProfileView> => {
+    try {
+      const idx = await storage.readSectionIndex(handle, "public");
+      const byTag = (tag: string) =>
+        idx.find((r) => (r.tags ?? []).some((t) => t.toLowerCase() === tag));
+      const hit = byTag("voice") ?? byTag("guidance");
+      if (hit) {
+        const [res] = await storage.readSections(handle, [hit.section_id], {
+          zone: "public",
+        });
+        if (res?.accessible && res.section) {
+          let parsed: Record<string, unknown> | null = null;
+          try {
+            const j = JSON.parse(res.section.body) as unknown;
+            if (j && typeof j === "object" && !Array.isArray(j)) {
+              parsed = j as Record<string, unknown>;
+            }
+          } catch {
+            /* prose guidance — served as text */
+          }
+          return {
+            source: "authored",
+            section_id: hit.section_id,
+            text: res.section.body,
+            guidance: parsed,
+          };
+        }
+      }
+    } catch {
+      /* no public index on this host — fall through to the default */
+    }
+    const dg = defaultGuidance(handle);
+    return {
+      source: "default",
+      section_id: null,
+      text: JSON.stringify(dg, null, 2),
+      guidance: dg as unknown as Record<string, unknown>,
+    };
+  };
+
+  /** Best-effort subject card (handle + did + display name when local). */
+  const subjectCard = async (
+    h: string,
+  ): Promise<{ handle: string; did?: string; display_name?: string }> => {
+    try {
+      const meta = await storage.loadIdentityMetadata(h);
+      return {
+        handle: h,
+        did: meta.did,
+        ...(meta.displayName ? { display_name: meta.displayName } : {}),
+      };
+    } catch {
+      return { handle: h };
+    }
+  };
+
   register(
     "ethos_search",
     {
@@ -679,24 +801,14 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
-  register(
-    "ethos_context_pack",
-    {
-      handle: z.string().optional(),
-      task: z.string().min(1),
-      budget_tokens: z.number().int().min(100).max(20000).optional(),
-      zones: z.array(z.enum(SPHERE_FRAGMENTS)).optional(),
-    },
-    async (args) => {
-      const { handle, task, budget_tokens, zones } = args as {
-        handle?: string;
-        task: string;
-        budget_tokens?: number;
-        zones?: Sphere[];
-      };
-      const h = await resolveHandle(storage, handle);
+  /** V4 assembly — shared by `ethos_context_pack` and `agent_briefing` (P6). */
+  const buildContextPack = async (
+    h: string,
+    task: string,
+    budget: number,
+    zones?: Sphere[],
+  ) => {
       const bounded = boundZones(zones);
-      const budget = budget_tokens ?? 1500;
       const tracked = await storage.isTrackedIdentity(h);
       const identity = await loadReadIdentity(storage, h, tracked);
 
@@ -788,13 +900,168 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         room = await push(m.zone, m.id, "match", { title: m.title, body: m.body });
       }
 
-      return ok({
+      return {
         handle: h,
         task,
         zones_considered: bounded,
         budget_tokens: budget,
         used_tokens_est: used,
         sections,
+      };
+  };
+
+  register(
+    "ethos_context_pack",
+    {
+      handle: z.string().optional(),
+      task: z.string().min(1),
+      budget_tokens: z.number().int().min(100).max(20000).optional(),
+      zones: z.array(z.enum(SPHERE_FRAGMENTS)).optional(),
+    },
+    async (args) => {
+      const { handle, task, budget_tokens, zones } = args as {
+        handle?: string;
+        task: string;
+        budget_tokens?: number;
+        zones?: Sphere[];
+      };
+      const h = await resolveHandle(storage, handle);
+      return ok(await buildContextPack(h, task, budget_tokens ?? 1500, zones));
+    },
+  );
+
+  register(
+    "ethos_introduce",
+    {
+      handle: z.string().optional(),
+      audience: z.string().optional(),
+      focus: z.string().optional(),
+    },
+    async (args) => {
+      const { handle, audience, focus } = args as {
+        handle?: string;
+        audience?: string;
+        focus?: string;
+      };
+      const h = await resolveHandle(storage, handle);
+      // V16 — narration to a third party NEVER serves circle/self (spec
+      // §4/§12). Exposure already requires ethos.read.public; defense in
+      // depth for a forced call on a session that lacks it:
+      if (opts.mandate && !opts.mandate.scopes.includes("ethos.read.public")) {
+        throw new Error(
+          "ethos_introduce requires scope ethos.read.public — third-party " +
+            "narration is public-only, whatever the mandate (spec §4)",
+        );
+      }
+
+      const vp = await voiceProfile(h);
+      const guidance = vp.guidance ?? defaultGuidance(h);
+      const subject = await subjectCard(h);
+
+      // PUBLIC index only — the zone is hardcoded, never mandate-derived.
+      let index: Awaited<ReturnType<AithosStorage["readSectionIndex"]>> = [];
+      try {
+        index = await storage.readSectionIndex(h, "public");
+      } catch {
+        /* no readable public index — introduction degrades to guidance only */
+      }
+      const taggedIds = (tag: string): string[] =>
+        index
+          .filter((r) => (r.tags ?? []).some((t) => t.toLowerCase() === tag))
+          .map((r) => r.section_id);
+
+      const readPublic = async (ids: string[]) => {
+        if (ids.length === 0) {
+          return [] as { id: string; title: string; body: string }[];
+        }
+        const res = await storage.readSections(h, ids, { zone: "public" });
+        return res
+          .filter((r) => r.accessible && r.section)
+          .map((r) => ({
+            id: r.section!.id,
+            title: r.section!.title,
+            body: r.section!.body,
+          }));
+      };
+
+      // Headline: first public section tagged `intro` (§12.4.1 transposed).
+      const [headline] = await readPublic(taggedIds("intro").slice(0, 1));
+
+      // Pinned: authored guidance order wins; the `pinned` tag is the fallback.
+      const rendering = (
+        guidance as {
+          rendering?: { pinned_sections?: string[]; topic_hints?: string[] };
+        }
+      ).rendering;
+      const pinnedIds = rendering?.pinned_sections?.length
+        ? rendering.pinned_sections.filter((id) =>
+            index.some((r) => r.section_id === id),
+          )
+        : taggedIds("pinned");
+      const pinned = await readPublic(pinnedIds.slice(0, 8));
+
+      const matches = focus
+        ? (await searchSections(h, focus, ["public"])).slice(0, 5).map((m) => ({
+            id: m.id,
+            title: m.title,
+            score: m.score,
+            body: m.body,
+          }))
+        : null;
+
+      const refusal =
+        (guidance as { refusal_template?: string }).refusal_template ??
+        defaultGuidance(h).refusal_template;
+
+      return ok({
+        subject,
+        audience: audience ?? null,
+        presentation_guidance: vp.guidance ?? vp.text,
+        guidance_source: vp.source,
+        headline: headline ?? null,
+        pinned,
+        topics: rendering?.topic_hints ?? [],
+        ...(focus !== undefined ? { focus, matches } : {}),
+        refusal_template: refusal,
+        zones_served: ["public"],
+      });
+    },
+  );
+
+  register(
+    "agent_briefing",
+    {
+      handle: z.string().optional(),
+      task: z.string().min(1),
+      budget_tokens: z.number().int().min(100).max(20000).optional(),
+      zones: z.array(z.enum(SPHERE_FRAGMENTS)).optional(),
+    },
+    async (args) => {
+      const { handle, task, budget_tokens, zones } = args as {
+        handle?: string;
+        task: string;
+        budget_tokens?: number;
+        zones?: Sphere[];
+      };
+      const h = await resolveHandle(storage, handle);
+      // V11 — one call to incarnate: powers + voice + grounded context,
+      // composed from the SAME helpers the three source tools use.
+      const subject = await subjectCard(h);
+      const [mandateView, vp, pack] = await Promise.all([
+        describeSession(),
+        voiceProfile(h),
+        buildContextPack(h, task, budget_tokens ?? 1500, zones),
+      ]);
+      return ok({
+        subject,
+        task,
+        mandate: mandateView,
+        voice_profile: {
+          source: vp.source,
+          section_id: vp.section_id,
+          guidance: vp.guidance ?? vp.text,
+        },
+        context_pack: pack,
       });
     },
   );
@@ -1464,6 +1731,31 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     };
   };
 
+  /** The no-argument `mandate_describe` view — also the `mandate` part of
+   *  `agent_briefing` (P6). */
+  const describeSession = async () => {
+    const doc = opts.mandate?.document;
+    if (doc) return describeMandate(doc);
+    if (opts.mandate) {
+      // Scope-filtered session without the full document (library host
+      // that passed scopes only): report what is knowable.
+      return {
+        session: "delegate" as const,
+        scopes: [...opts.mandate.scopes],
+        tools: [...registeredTools].sort(),
+        note:
+          "session is mandate-scoped but the host did not provide the " +
+          "mandate document — id/window/revocation unavailable here",
+      };
+    }
+    return {
+      session: "owner" as const,
+      scopes: null,
+      tools: [...registeredTools].sort(),
+      note: "owner session — full authority over the subject's own ethos",
+    };
+  };
+
   register(
     "mandate_describe",
     { mandate: z.string().optional() },
@@ -1473,26 +1765,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         const m = await storage.loadMandate(mandate);
         return ok(await describeMandate(m));
       }
-      const doc = opts.mandate?.document;
-      if (doc) return ok(await describeMandate(doc));
-      if (opts.mandate) {
-        // Scope-filtered session without the full document (library host
-        // that passed scopes only): report what is knowable.
-        return ok({
-          session: "delegate" as const,
-          scopes: [...opts.mandate.scopes],
-          tools: [...registeredTools].sort(),
-          note:
-            "session is mandate-scoped but the host did not provide the " +
-            "mandate document — id/window/revocation unavailable here",
-        });
-      }
-      return ok({
-        session: "owner" as const,
-        scopes: null,
-        tools: [...registeredTools].sort(),
-        note: "owner session — full authority over the subject's own ethos",
-      });
+      return ok(await describeSession());
     },
   );
 
@@ -1637,6 +1910,11 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
         name: `ethos-manifest:${h}`,
         mimeType: "application/json",
       });
+      out.push({
+        uri: `aithos://ethos/${h}/voice`,
+        name: `ethos-voice:${h}`,
+        mimeType: "application/json",
+      });
       for (const zn of SPHERE_FRAGMENTS) {
         out.push({
           uri: `aithos://ethos/${h}/${zn}`,
@@ -1680,6 +1958,42 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     },
   );
 
+  // `aithos://ethos/{handle}/voice` — presentation guidance (V10, §12.3).
+  // Registered BEFORE the {zone} template: both match `…/voice`, and
+  // resolution follows registration order.
+  server.registerResource(
+    "aithos_ethos_voice",
+    new ResourceTemplate("aithos://ethos/{handle}/voice", {
+      list: async () => ({
+        resources: (await listEthosResources()).filter((r) =>
+          r.uri.endsWith("/voice"),
+        ),
+      }),
+    }),
+    {
+      title: "Voice profile (presentation guidance)",
+      mimeType: "application/json",
+      description:
+        "How to narrate this subject (§12.3): an authored public section " +
+        "tagged `voice`/`guidance` served verbatim, or the spec §12.3.4 " +
+        "default with {handle} substituted.",
+    },
+    async (uri, { handle }) => {
+      const h = Array.isArray(handle) ? handle[0] : handle;
+      if (!h) throw new Error(`malformed uri: ${uri.href}`);
+      const vp = await voiceProfile(h);
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: vp.guidance ? "application/json" : "text/markdown",
+            text: vp.text,
+          },
+        ],
+      };
+    },
+  );
+
   // `aithos://ethos/{handle}/{zone}` — markdown source of a zone (plaintext
   // for `public`, decrypted in memory for `circle`/`self` if the identity is
   // local; otherwise the raw ciphertext is returned as a fallback).
@@ -1688,7 +2002,10 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     new ResourceTemplate("aithos://ethos/{handle}/{zone}", {
       list: async () => ({
         resources: (await listEthosResources()).filter(
-          (r) => !r.uri.endsWith("/manifest") && !r.uri.endsWith("/manifest-path"),
+          (r) =>
+            !r.uri.endsWith("/manifest") &&
+            !r.uri.endsWith("/manifest-path") &&
+            !r.uri.endsWith("/voice"),
         ),
       }),
     }),

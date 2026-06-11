@@ -1,5 +1,21 @@
 # Changelog — @aithos/agent-tools
 
+## 0.5.0 — 2026-06-11
+
+P6 incarnation (plan §6.2/§6.3):
+
+- NEW `ethos_introduce` — introduce the subject to a THIRD PARTY.
+  Public-only STRUCTURALLY (circle/self never read, whatever the mandate —
+  spec §4/§12 narration rule), anonymous about contacts, refusal-template
+  behaviour for out-of-ethos questions. Exposed under `ethos.read.public`.
+  Args: `{ handle?, audience?, focus? }`.
+- NEW `agent_briefing` — composite incarnation call: mandate description +
+  voice profile + budgeted context pack in ONE call. Exposed under any
+  `ethos.read.*` scope. Args: `{ handle?, task, budget_tokens?, zones? }`.
+- Catalogue is now 21 specs; ratified-name test updated accordingly.
+- `ethos_search` description aligned on §12.4.2: an empty result means the
+  subject has not spoken to it — say so rather than fabricate.
+
 ## 0.1.0 — 2026-06-10
 
 Initial release. Canonical catalogue ratified per decision D1
