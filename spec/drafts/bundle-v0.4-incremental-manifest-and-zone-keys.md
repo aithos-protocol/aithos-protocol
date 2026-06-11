@@ -1,9 +1,9 @@
 # Bundle v0.4 — manifest incrémental & clés de zone (BRIEF de design)
 
-> **Statut : BRIEF à valider** — ce document est le design P3+P4 issu de la
-> campagne perf de juin 2026 (voir `PLAN-SEALING-SCALE-2026-06-10.md` côté
-> provider). Une fois validé, il devient la spec détaillée et pilote
-> l'implémentation : serveur → protocol-client → SDK → app → e2e.
+> **Statut : VALIDÉ & IMPLÉMENTÉ** (11 juin 2026) — core 0.11.3, protocol-client
+> alpha.38, sdk alpha.90, serveur déployé dev. Conformité : série M 7/7 + parité
+> §6 prouvée (34 suites, double run). Mesures : `code/RAPPORT-V04-2026-06-11.md`.
+> La Partie II est normative ; la Partie I reste le rationale historique.
 
 ## 1. Problème (mesuré)
 
