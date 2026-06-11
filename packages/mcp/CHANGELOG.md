@@ -5,6 +5,13 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] — 2026-06-11
+
+- `@aithos/protocol-core` range widened to `>=0.10.3 <0.12.0` (was
+  `^0.10.3`): consumers on the v0.4 line (core 0.11.x) no longer carry a
+  duplicate nested 0.10.3 — H1 30/30 + e2e validated against 0.11.3.
+  No code change.
+
 ## 0.13.0 — 2026-06-11
 
 P6 incarnation (plan §6.2/§6.3) — agent-tools ^0.5.0:
