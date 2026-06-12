@@ -64,6 +64,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Build the workspace deps the lambdas import — esbuild resolves
+      # @aithos/protocol-core from its ./dist (built output), which `npm ci`
+      # does not produce. The canonical root build emits protocol-core's dist.
+      - run: npm run build
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_PDS_DEPLOY_ROLE_ARN }}
@@ -95,6 +99,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Build the workspace deps the lambdas import (protocol-core dist), see above.
+      - run: npm run build
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_PDS_DEPLOY_ROLE_ARN }}
