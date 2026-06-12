@@ -116,6 +116,20 @@ This generalises §3.5.4′ (which read the single top-level `section_scope`) to
 
 A **delegate** author (§3.8′ #5) does not re-derive other delegates' grants — adding/removing section-scoped delegates is an **owner** operation (the owner re-authors the affected sections). Unchanged from §3.5.4′.
 
+## 3.5.7″ Sealed-selector read gate: wrap-as-capability (normative)
+
+§4.8.4′ established that the provider enforces from the **clear manifest only**. On the read side this leaves exactly one hole: a **read-bearing `tag=` perimeter on a sealed-index zone** (`self` — tags live inside `title_cipher`). The strict per-section read gate cannot evaluate the selector there and would fail closed — even though §3.5.7′ already made the **author** evaluate it, with plaintext tags in hand, when it wrapped the section DEK to the delegate.
+
+**Rule.** For a delegate read of section `S` in zone `Z` whose strict scope evaluation failed, the provider MUST serve `S` iff **all** of:
+
+1. the envelope's mandate is **active** — signature, validity window, revocation and revocation-epoch checks all pass (these run upstream of the gate, so the residual wrap of a revoked or expired mandate is never honored);
+2. the mandate holds a **read-bearing** verb (`read`/`edit`/`append`/`write`) on `Z` with a **`tag=` selector**, and `Z` has a **sealed index** (today: `self` only);
+3. the **stored** section carries a DEK wrap whose recipient label is the delegate's (`granteeId#pubkeyMultibase`) — v0.3: the descriptor's `cipher.wraps`; v0.4: the zone's `extra_wraps` entry for `S`.
+
+**Why this is sound.** The wrap is the author's recorded authorization decision, made where the tags were readable; only authoring identities can place wraps (owner publishes, or a mandate-bounded delegate publish whose ExtraWraps changes are tied to authorized ops — Partie II N6.4). And the gate releases only **ciphertext the delegate can already decrypt** — the wrap *is* the DEK — so honoring it grants nothing the cryptography has not already granted. The marginal protection lost is ciphertext-exfiltration resistance for exactly the sections the owner sealed to that delegate.
+
+**Non-rescue (normative).** The fallback applies to **no other case**: `id=`/`prefix=` selectors and clear-index `tag=` (public/circle) remain strictly server-evaluated — an explicit mismatch is **never** rescued by a wrap; `delete` is not read-bearing and never opens the fallback; an inactive mandate never reaches it.
+
 ## Worked examples
 
 ```jsonc
