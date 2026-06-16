@@ -250,6 +250,15 @@ export interface CreateServerOptions {
     readonly keySeed: Uint8Array;
     readonly keyMultibase: string;
   };
+  /**
+   * Cumulative grant (multi-zone): the FULL set of delegate mandate documents
+   * — one per zone, all bound to the same `delegate` key. When present, a write
+   * to zone Z resolves the mandate whose scopes include `ethos.write.Z` (so a
+   * single grant can cover public+circle+self without one over-broad mandate),
+   * and `mandate_describe` reports the whole set. Absent => single-mandate
+   * behaviour (unchanged): the write-auth uses `mandate.document`.
+   */
+  delegateMandates?: readonly Mandate[];
   /** Optional extra restriction: only expose these canonical tool names. */
   exposeTools?: readonly string[];
   /**
@@ -1182,10 +1191,19 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   };
 
   /** The session's default delegate auth (mandate pack), if configured. */
-  const packAuth = (): ResolvedWriteAuth | null => {
-    const doc = opts.mandate?.document;
+  const packAuth = (zone?: Sphere): ResolvedWriteAuth | null => {
     const del = opts.delegate;
-    if (!doc || !del) return null;
+    if (!del) return null;
+    // Cumulative grant: pick the mandate that authorises THIS zone's write.
+    // Falls back to the single session document (back-compat).
+    let doc = opts.mandate?.document;
+    if (zone && opts.delegateMandates && opts.delegateMandates.length > 0) {
+      const m = opts.delegateMandates.find((x) =>
+        x.scopes.includes(`ethos.write.${zone}`),
+      );
+      if (m) doc = m;
+    }
+    if (!doc) return null;
     return {
       mandate: doc,
       mandatePath: "mandate-pack",
@@ -1195,7 +1213,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
       },
       agentKeyPath: "mandate-pack",
       delegate: {
-        mandateId: del.mandateId,
+        mandateId: doc.id ?? del.mandateId,
         keySeed: del.keySeed,
         keyMultibase: del.keyMultibase,
       },
@@ -1213,7 +1231,7 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     );
     // P4.4 — no per-call auth args: fall back to the session's mandate-pack
     // delegate (the "agent chez le client" shape).
-    if (!auth) auth = packAuth();
+    if (!auth) auth = packAuth(zone);
     if (auth) {
       const writeScope = `ethos.write.${zone}`;
       if (!auth.mandate.scopes.includes(writeScope)) {
@@ -1734,6 +1752,22 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   /** The no-argument `mandate_describe` view — also the `mandate` part of
    *  `agent_briefing` (P6). */
   const describeSession = async () => {
+    const set = opts.delegateMandates;
+    if (set && set.length > 1) {
+      // Cumulative grant: report the whole set + the union of scopes, so the
+      // agent sees every zone it can act on (not just the primary document).
+      return {
+        session: "delegate" as const,
+        cumulative: true,
+        scopes: [...new Set(set.flatMap((m) => [...m.scopes]))],
+        mandates: set.map((m) => ({
+          id: m.id,
+          actor_sphere: m.actor_sphere,
+          scopes: [...m.scopes],
+        })),
+        tools: [...registeredTools].sort(),
+      };
+    }
     const doc = opts.mandate?.document;
     if (doc) return describeMandate(doc);
     if (opts.mandate) {
