@@ -1047,3 +1047,53 @@ test("0.13 — a self-signing storage WITHOUT the marker refuses an identity-les
   assert.match(res.content[0].text, /selfSigningWrites/);
   assert.deepEqual(base.writes, { add: 0, modify: 0, delete: 0 });
 });
+
+// ---------------------------------------------------------------- T5c/T5d (cumulative)
+
+const mkMandate = (zone) => ({
+  id: `mandate_${zone}`,
+  issuer: DID,
+  actor_sphere: zone,
+  scopes: ["ethos.read.public", `ethos.read.${zone}`, `ethos.write.${zone}`],
+  grantee: { pubkey: "zDelegateKey" },
+});
+
+const CUMULATIVE_OPTS = (storage) => ({
+  storage,
+  mandate: {
+    scopes: [
+      "ethos.read.public", "ethos.write.public",
+      "ethos.read.circle", "ethos.write.circle",
+      "ethos.read.self", "ethos.write.self",
+    ],
+    document: { id: "mandate_public", issuer: DID, actor_sphere: "public", scopes: ["ethos.read.public", "ethos.write.public"], grantee: { pubkey: "zDelegateKey" } },
+  },
+  delegate: { mandateId: "mandate_public", keySeed: new Uint8Array(32), keyMultibase: "zDelegateKey" },
+  delegateMandates: [
+    { id: "mandate_public", issuer: DID, actor_sphere: "public", scopes: ["ethos.read.public", "ethos.write.public"], grantee: { pubkey: "zDelegateKey" } },
+    mkMandate("circle"),
+    mkMandate("self"),
+  ],
+});
+
+test("T5c — cumulative grant: session default resolves the per-zone mandate (circle write not blocked)", async () => {
+  const storage = memoryStorage();
+  const { client } = await connect(CUMULATIVE_OPTS(storage));
+  // No per-call mandate args → falls back to the session's delegateMandates;
+  // packAuth(circle) MUST pick the circle mandate, so the write is NOT refused.
+  const res = await client.callTool({
+    name: "ethos_add_section",
+    arguments: { zone: "circle", title: "C", body: "Y" },
+  });
+  assert.notEqual(res.isError, true, res.isError ? res.content[0].text : "ok");
+  assert.equal(storage.writes.add, 1);
+});
+
+test("T5d — mandate_describe reports the cumulative set (union scopes + per-zone mandates)", async () => {
+  const storage = memoryStorage();
+  const { client } = await connect(CUMULATIVE_OPTS(storage));
+  const d = JSON.parse((await client.callTool({ name: "mandate_describe", arguments: {} })).content[0].text);
+  assert.equal(d.cumulative, true);
+  assert.ok(d.scopes.includes("ethos.write.circle") && d.scopes.includes("ethos.write.self") && d.scopes.includes("ethos.write.public"));
+  assert.deepEqual(d.mandates.map((m) => m.actor_sphere).sort(), ["circle", "public", "self"]);
+});
