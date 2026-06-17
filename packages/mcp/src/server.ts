@@ -51,6 +51,8 @@ import { z } from "zod";
 // pulls FilesystemStorage (node:fs/os/crypto) and would break browser hosts.
 import { SPHERE_FRAGMENTS, rootDid } from "@aithos/protocol-core/did";
 import { verifyMandate } from "@aithos/protocol-core/mandate";
+import { signEnvelopeWithMandate } from "@aithos/protocol-core/envelope";
+import { scheduleViaLinkedone } from "./linkedone-broker.js";
 import type {
   AithosStorage,
   ApplyEditsResult,
@@ -294,6 +296,14 @@ export interface CreateServerOptions {
       createdAt: string;
     },
   ) => string;
+  /**
+   * Linkedone broker (PROVISIONAL — cf. linkedone PLAN-AITHOS-BROKER-MVP).
+   * Base URL of the Linkedone backend the `linkedone_schedule_post` tool POSTs
+   * to. Defaults to `https://api.linkedone.fr`.
+   */
+  linkedoneApiBase?: string;
+  /** Fetch override (tests / non-global-fetch hosts). Defaults to globalThis.fetch. */
+  fetchImpl?: typeof fetch;
 }
 
 export function createServer(opts: CreateServerOptions = {}): McpServer {
@@ -361,6 +371,74 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
   };
 
   // ------------------------------------------------------------------ identity
+
+  // ---------------------------------------------------- linkedone (provisional)
+  // Third-party app broker tool. Self-gates on `data.linkedone-posts.write`
+  // (the catalogue spec's requires.anyOf). Signs a delegate-path envelope with
+  // the session's delegate key and POSTs to Linkedone's compose-and-schedule
+  // endpoint. cf. linkedone PLAN-AITHOS-BROKER-MVP (Option 1, provisional).
+  register(
+    "linkedone_schedule_post",
+    { content: z.string(), scheduled_at: z.string() },
+    async (args) => {
+      const del = opts.delegate;
+      const doc =
+        opts.delegateMandates?.find((m) =>
+          (m.scopes ?? []).includes("data.linkedone-posts.write"),
+        ) ?? opts.mandate?.document;
+      if (!del || !doc) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "linkedone_schedule_post requires a delegate session whose mandate " +
+                "carries data.linkedone-posts.write (no delegate signing key available).",
+            },
+          ],
+        };
+      }
+      const subjectDid = doc.issuer;
+      const apiBase = opts.linkedoneApiBase ?? "https://api.linkedone.fr";
+      const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+      try {
+        const result = await scheduleViaLinkedone({
+          apiBase,
+          content: String(args.content ?? ""),
+          scheduledAt: String(args.scheduled_at ?? ""),
+          fetchImpl,
+          signDelegate: ({ aud, method, params }) =>
+            Promise.resolve(
+              signEnvelopeWithMandate({
+                iss: subjectDid,
+                aud,
+                method,
+                params,
+                delegateKey: { seed: del.keySeed, pubkeyMultibase: del.keyMultibase },
+                mandate: doc,
+              }),
+            ),
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Scheduled LinkedIn post for ${result.scheduledAt}` +
+                (result.postId ? ` (post ${result.postId})` : "") +
+                ` via Linkedone, under mandate ${del.mandateId}.`,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [
+            { type: "text", text: `Could not schedule via Linkedone: ${(e as Error).message}` },
+          ],
+        };
+      }
+    },
+  );
 
   register("identity_list", {}, async () => {
     const handles = await storage.listHandles();
