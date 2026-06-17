@@ -41,6 +41,7 @@ const RATIFIED_NAMES = [
   "ethos_introduce",
   "agent_briefing",
   "data_query",
+  "linkedone_schedule_post",
 ];
 
 test("catalogue exposes exactly the ratified D1 names, in order", () => {
@@ -72,16 +73,22 @@ test("every spec is well-formed", () => {
 });
 
 test("write tools carry a write-scope rule; read tools never do", () => {
+  // A write scope is either an ethos write scope or a data collection write
+  // scope (`data.<collection>.write`). The latter admits third-party app
+  // tools such as linkedone_schedule_post (provisional broker, cf. linkedone
+  // PLAN-AITHOS-BROKER-MVP).
+  const isWriteScope = (s) =>
+    ETHOS_WRITE_SCOPES.includes(s) || /^data\.[a-z0-9-]+\.write$/.test(s);
   for (const t of AGENT_TOOL_CATALOG) {
     if (t.write) {
       assert.ok(t.requires, `${t.name}: write tool must be scope-gated`);
       assert.ok(
-        t.requires.anyOf.every((s) => ETHOS_WRITE_SCOPES.includes(s)),
+        t.requires.anyOf.every((s) => isWriteScope(s)),
         `${t.name}: write tool gated by write scopes`,
       );
     } else if (t.requires) {
       assert.ok(
-        t.requires.anyOf.every((s) => !ETHOS_WRITE_SCOPES.includes(s)),
+        t.requires.anyOf.every((s) => !isWriteScope(s)),
         `${t.name}: read tool must not require write scopes`,
       );
     }

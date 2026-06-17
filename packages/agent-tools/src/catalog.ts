@@ -646,6 +646,39 @@ const dataQuery: AgentToolSpec = {
 };
 
 /* -------------------------------------------------------------------------- */
+/*  Linkedone (third-party app broker — provisional, cf. linkedone PLAN)       */
+/* -------------------------------------------------------------------------- */
+
+const linkedoneSchedulePost: AgentToolSpec = {
+  name: "linkedone_schedule_post",
+  title: "Schedule a LinkedIn post via Linkedone",
+  description:
+    "Schedules a LinkedIn post for a future date through the subject's " +
+    "connected Linkedone app. Creates the post as a draft in the subject's " +
+    "data store, then registers the scheduled publication via Linkedone. " +
+    "`scheduled_at` MUST be ISO 8601 and at least 30 seconds in the future. " +
+    "Requires a Linkedone delegate mandate on the session. Never invent post " +
+    "content beyond what the subject provides.",
+  input_schema: {
+    type: "object",
+    properties: {
+      content: {
+        type: "string",
+        description: "The post body (markdown) to publish.",
+      },
+      scheduled_at: {
+        type: "string",
+        description:
+          "ISO 8601 datetime for publication, at least 30s in the future.",
+      },
+    },
+    required: ["content", "scheduled_at"],
+  },
+  requires: { anyOf: ["data.linkedone-posts.write"] },
+  write: true,
+};
+
+/* -------------------------------------------------------------------------- */
 /*  Catalogue                                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -676,6 +709,7 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
   ethosIntroduce,
   agentBriefing,
   dataQuery,
+  linkedoneSchedulePost,
 ];
 
 /** Lookup by canonical name. */
