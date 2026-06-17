@@ -5,6 +5,16 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.4] — 2026-06-17
+
+- NEW handler `linkedone_schedule_post` (PROVISIONAL third-party app broker, cf.
+  linkedone PLAN-AITHOS-BROKER-MVP). Signs a delegate-path envelope with the
+  session delegate key (protocol-core `signEnvelopeWithMandate`) and POSTs to
+  Linkedone's `/v1/compose-and-schedule`. Pure orchestration in
+  `linkedone-broker.ts` (5 unit tests). New `createServer` options:
+  `linkedoneApiBase`, `fetchImpl`. Self-gates on `data.linkedone-posts.write`.
+- (0.13.2 / 0.13.3 were version-only publishes; no code delta vs 0.13.1.)
+
 ## [0.13.1] — 2026-06-11
 
 - `@aithos/protocol-core` range widened to `>=0.10.3 <0.12.0` (was
