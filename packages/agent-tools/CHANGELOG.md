@@ -1,5 +1,14 @@
 # Changelog — @aithos/agent-tools
 
+## 0.5.1 — 2026-06-17
+
+- NEW `linkedone_schedule_post` — provisional third-party app broker tool
+  (cf. linkedone `PLAN-AITHOS-BROKER-MVP`). Schedules a LinkedIn post via the
+  subject's connected Linkedone app. Gated on `data.linkedone-posts.write`.
+  Args: `{ content, scheduled_at }`. Catalogue is now 22 specs.
+- Test invariant broadened: write tools may be gated by a data collection
+  write scope (`data.<collection>.write`), not only ethos write scopes.
+
 ## 0.5.0 — 2026-06-11
 
 P6 incarnation (plan §6.2/§6.3):

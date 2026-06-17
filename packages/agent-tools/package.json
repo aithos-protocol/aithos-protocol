@@ -1,6 +1,6 @@
 {
   "name": "@aithos/agent-tools",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Aithos agent tools — the canonical, shared catalogue of tool names, normative descriptions, JSON Schemas, scope rules, and legacy aliases consumed by every Aithos tool host (@aithos/mcp server, aithos-sdk, platform compute proxy).",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
