@@ -5,6 +5,12 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.5] — 2026-06-18
+
+- `bin.ts` (node host) now forwards `LINKEDONE_API_BASE` env → `createServer({ linkedoneApiBase })`,
+  so a locally-run MCP can target a local/dev Linkedone backend for the
+  `linkedone_schedule_post` tool. Defaults to https://api.linkedone.fr.
+
 ## [0.13.4] — 2026-06-17
 
 - NEW handler `linkedone_schedule_post` (PROVISIONAL third-party app broker, cf.

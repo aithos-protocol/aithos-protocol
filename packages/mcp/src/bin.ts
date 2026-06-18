@@ -58,6 +58,12 @@ function nodeServerOptions(autoCommit?: boolean, pack?: MandatePack): CreateServ
     manifestPath: ethosManifestPath,
     io: nodeIo,
     renderZone: renderZoneMarkdown,
+    // Provisional Linkedone broker: point the linkedone_schedule_post tool at a
+    // given Linkedone backend (e.g. http://localhost:PORT for a local dev test,
+    // or the prod api). Defaults inside createServer to https://api.linkedone.fr.
+    ...(process.env.LINKEDONE_API_BASE
+      ? { linkedoneApiBase: process.env.LINKEDONE_API_BASE }
+      : {}),
     ...(autoCommit || pack?.options?.auto_commit ? { autoCommit: true } : {}),
     // P4.4 — mandate pack (§6.2.1): scope-filtered exposure + the pack's
     // delegate key as the default write authority.

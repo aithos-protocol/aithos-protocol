@@ -1,6 +1,6 @@
 {
   "name": "@aithos/mcp",
-  "version": "0.13.4",
+  "version": "0.13.5",
   "description": "Aithos MCP server — exposes an Aithos identity's ethos and mandates to MCP-speaking agents over stdio or HTTP.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
