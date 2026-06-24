@@ -353,9 +353,16 @@ export function createServer(opts: CreateServerOptions = {}): McpServer {
     if (!exposed.has(name)) return;
     const s = spec(name);
     registeredTools.add(name);
+    // Connectors Directory requirement: every tool carries a `title` plus the
+    // applicable behavioural hint. Derived centrally from the catalogue's
+    // single `write` flag so reads (readOnlyHint) auto-run and writes
+    // (destructiveHint) always prompt — no per-tool bookkeeping to drift.
+    const annotations = s.write
+      ? { title: s.title, readOnlyHint: false, destructiveHint: true }
+      : { title: s.title, readOnlyHint: true };
     server.registerTool(
       name,
-      { title: s.title, description: s.description, inputSchema: shape },
+      { title: s.title, description: s.description, inputSchema: shape, annotations },
       handler as never,
     );
   };
