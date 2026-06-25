@@ -32,11 +32,16 @@ const awsEnv = {
   region: process.env.CDK_DEFAULT_REGION ?? "eu-west-3",
 };
 
-// Stack id. dev keeps its historical name (`AithosDataPdsDev`) so the existing
-// dev stack updates in place (no replacement). ⚠️ PROD: set this to the EXACT
-// name of the already-deployed prod stack (PLAN-MULTIENV Phase 0) before the
-// first prod deploy — a new id provisions a NEW execute-api (outage).
-const stackId = deployEnv === "dev" ? "AithosDataPdsDev" : `AithosDataPds-${deployEnv}`;
+// Stack id. BOTH dev and prod were historically deployed (pre-multi-env, manual
+// `cdk deploy`) under the SAME id `AithosDataPdsDev`, each in its own account.
+// Confirmed against the LIVE prod stack owning execute-api `slpknok0md`
+// (account 446503126111) → `AithosDataPdsDev`. We keep that exact name for
+// dev+prod so the deploy updates IN PLACE — renaming would replace the stack =
+// a NEW execute-api = outage. Any other (throwaway) env uses the suffixed name.
+const stackId =
+  deployEnv === "dev" || deployEnv === "prod"
+    ? "AithosDataPdsDev"
+    : `AithosDataPds-${deployEnv}`;
 
 new AithosDataPdsStack(app, stackId, {
   env: awsEnv,
