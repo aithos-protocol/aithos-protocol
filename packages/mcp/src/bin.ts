@@ -44,6 +44,12 @@ import {
 
 import { createServer, type CreateServerOptions, type HostIo } from "./server.js";
 import { parseMandatePack, hexToBytes, type MandatePack } from "./pack.js";
+import {
+  federate,
+  parseRegistry,
+  type McpRegistry,
+  type FederationHandle,
+} from "./gateway.js";
 
 const nodeIo: HostIo = {
   readTextFile: (p) => readFile(p, "utf8"),
@@ -83,6 +89,24 @@ async function loadPack(p?: string): Promise<MandatePack | undefined> {
   return parseMandatePack(text);
 }
 
+async function loadRegistry(p?: string): Promise<McpRegistry | undefined> {
+  if (!p) return undefined;
+  const text = await readFile(path.resolve(p), "utf8");
+  return parseRegistry(text);
+}
+
+/**
+ * T7 — the mandate's validity window. Federated tools must not be exposed under
+ * an expired / not-yet-valid mandate. (Full revocation = server-side status
+ * lookup; deferred for the proto — cf. PLAN-PROTO-SELFWIRED.md.)
+ */
+function isMandateLive(pack: MandatePack, now = Date.now()): boolean {
+  const nb = Date.parse(pack.mandate.not_before);
+  const na = Date.parse(pack.mandate.not_after);
+  if (Number.isNaN(nb) || Number.isNaN(na)) return false;
+  return now >= nb && now <= na;
+}
+
 interface CliOpts {
   transport: "stdio" | "http";
   port?: string;
@@ -90,6 +114,8 @@ interface CliOpts {
   stateless?: boolean;
   autoCommit?: boolean;
   mandatePack?: string;
+  mcpRegistry?: string;
+  auditLog?: string;
 }
 
 const program = new Command();
@@ -122,18 +148,76 @@ program
       "pack's delegate key signs writes, validity/revocation re-checked " +
       "before anything persists.",
   )
+  .option(
+    "--mcp-registry <path>",
+    "Federate downstream MCP servers declared in this registry (self-wired " +
+      "gateway). A server is exposed only if the mandate carries scope " +
+      "mcp.<id>. Requires --mandate-pack.",
+  )
+  .option(
+    "--audit-log <path>",
+    "Append a JSONL audit line per federated tool call (default: " +
+      "./aithos-audit.jsonl).",
+  )
   .action(async (opts: CliOpts) => {
     const pack = await loadPack(opts.mandatePack);
+    const registry = await loadRegistry(opts.mcpRegistry);
+    if (registry && !pack) {
+      throw new Error("--mcp-registry requires --mandate-pack (scopes drive exposure)");
+    }
     if (opts.transport === "stdio") {
-      await runStdio(opts.autoCommit === true, pack);
+      await runStdio(opts.autoCommit === true, pack, registry, opts.auditLog);
     } else {
+      if (registry) {
+        // Federation is wired for the stdio host (the proto's target). HTTP
+        // federation is per-session and deferred — fail loud rather than
+        // silently ignoring the registry.
+        throw new Error("--mcp-registry is supported with --transport stdio only (proto)");
+      }
       await runHttp(opts, pack);
     }
   });
 
-async function runStdio(autoCommit: boolean, pack?: MandatePack): Promise<void> {
+async function runStdio(
+  autoCommit: boolean,
+  pack?: MandatePack,
+  registry?: McpRegistry,
+  auditLog?: string,
+): Promise<void> {
   const server = createServer(nodeServerOptions(autoCommit, pack));
+
+  // Self-wired gateway: federate downstream MCPs before connecting the
+  // transport (tools must be registered up front). Only when a pack is present
+  // and live; an expired/not-yet-valid mandate exposes NO federated tools.
+  let federation: FederationHandle | undefined;
+  if (registry && pack) {
+    if (!isMandateLive(pack)) {
+      console.error(
+        "aithos-mcp gateway: mandate not live (window) — no federated tools exposed",
+      );
+    } else {
+      federation = await federate({
+        server: server as unknown as Parameters<typeof federate>[0]["server"],
+        scopes: pack.mandate.scopes,
+        mandateId: pack.mandate.id,
+        registry,
+        ...(auditLog ? { auditLogPath: auditLog } : {}),
+      });
+    }
+  }
+
   const transport = new StdioServerTransport();
+  // T6 — tear down downstream subprocesses when the session ends.
+  if (federation) {
+    transport.onclose = () => {
+      void federation!.teardown();
+    };
+    const onSignal = () => {
+      void federation!.teardown().finally(() => process.exit(0));
+    };
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+  }
   await server.connect(transport);
   // The stdio transport keeps stdin open for us; no further work needed.
 }
