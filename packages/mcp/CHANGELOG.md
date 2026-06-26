@@ -5,6 +5,29 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-06-26
+
+Self-wired MCP gateway + retirement of the provisional Linkedone broker.
+
+- **NEW `@aithos/mcp/gateway`** (`src/gateway.ts`): the node host can federate
+  downstream MCP servers declared in an owner-defined registry, behind the
+  single Aithos MCP. For each registry server whose per-server scope `mcp.<id>`
+  is carried by the session mandate, the gateway connects a client, re-exposes
+  its tools NAMESPACED (`<id>__<tool>`), routes `tools/call`, and audits each
+  call. Downstream transports: **stdio** (local host) and **http**
+  (`StreamableHTTPClientTransport`, works hosted/Lambda). Pluggable audit sink
+  (`fileAuditSink` local / `consoleAuditSink` → CloudWatch). Connection
+  failures degrade gracefully. New `bin` flags `--mcp-registry`, `--audit-log`.
+  New package export `./gateway`. +12 gateway tests.
+- **REMOVED (provisional) `linkedone_schedule_post`** and the `createServer`
+  options `linkedoneApiBase` / `fetchImpl` that only ever shipped in the
+  npm-only `0.13.4`/`0.13.5` (never committed to source). The third-party app
+  broker is superseded by generic gateway federation; Linkedone returns later
+  as a first-party connector or a federated downstream MCP.
+- Supersedes the source-uncommitted `0.13.2`–`0.13.5` npm publishes
+  (`0.13.2/0.13.3` were version-only; `0.13.4/0.13.5` were the Linkedone broker,
+  now intentionally dropped).
+
 ## [0.13.1] — 2026-06-11
 
 - `@aithos/protocol-core` range widened to `>=0.10.3 <0.12.0` (was
