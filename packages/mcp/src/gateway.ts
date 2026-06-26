@@ -27,6 +27,7 @@ import {
   StdioClientTransport,
   getDefaultEnvironment,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
 import { appendFile } from "node:fs/promises";
 
@@ -34,11 +35,10 @@ import { appendFile } from "node:fs/promises";
 /* T1 — registry format + parsing                                             */
 /* -------------------------------------------------------------------------- */
 
-/** One downstream MCP server the owner makes available. */
-export interface RegistryServer {
+/** A downstream MCP spawned as a local subprocess (self-wired / local host). */
+export interface StdioRegistryServer {
   /** Stable id; drives the scope `mcp.<id>` and the `<id>__` tool namespace. */
   readonly id: string;
-  /** Proto: stdio only. */
   readonly transport: "stdio";
   /** Executable to spawn (e.g. "npx"). */
   readonly command: string;
@@ -47,6 +47,21 @@ export interface RegistryServer {
   /** Extra env for the subprocess (e.g. the downstream's own credential). */
   readonly env?: Readonly<Record<string, string>>;
 }
+
+/** A downstream MCP reached over HTTP (the only kind that works hosted/Lambda). */
+export interface HttpRegistryServer {
+  readonly id: string;
+  readonly transport: "http";
+  /** Streamable-HTTP MCP endpoint, e.g. https://api.githubcopilot.com/mcp/ */
+  readonly url: string;
+  /** Static headers to send on every request. */
+  readonly headers?: Readonly<Record<string, string>>;
+  /** Name of an env var whose value is sent as `Authorization: Bearer <value>`. */
+  readonly bearer_env?: string;
+}
+
+/** One downstream MCP server the owner makes available. */
+export type RegistryServer = StdioRegistryServer | HttpRegistryServer;
 
 export interface McpRegistry {
   readonly servers: readonly RegistryServer[];
@@ -65,31 +80,48 @@ export function parseRegistry(jsonText: string): McpRegistry {
     throw new Error('mcp registry: "servers" must be an array');
   }
   const seen = new Set<string>();
-  for (const [i, s] of r.servers.entries()) {
+  const list = r.servers as unknown[];
+  const isStrMap = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null;
+  for (let i = 0; i < list.length; i++) {
     const where = `mcp registry: servers[${i}]`;
-    if (!s || typeof s !== "object") throw new Error(`${where} must be an object`);
-    if (typeof s.id !== "string" || !s.id) throw new Error(`${where}.id missing`);
-    if (seen.has(s.id)) throw new Error(`${where}.id duplicated ("${s.id}")`);
-    seen.add(s.id);
-    if (s.transport !== "stdio") {
-      throw new Error(`${where}.transport must be "stdio" (proto)`);
-    }
-    if (typeof s.command !== "string" || !s.command) {
-      throw new Error(`${where}.command missing`);
-    }
-    if (
-      s.args !== undefined &&
-      (!Array.isArray(s.args) || s.args.some((a: unknown) => typeof a !== "string"))
-    ) {
-      throw new Error(`${where}.args must be a string array`);
-    }
-    if (s.env !== undefined) {
-      if (typeof s.env !== "object" || s.env === null) {
-        throw new Error(`${where}.env must be an object`);
+    const item = list[i];
+    if (!isStrMap(item)) throw new Error(`${where} must be an object`);
+    const o = item;
+    if (typeof o["id"] !== "string" || !o["id"]) throw new Error(`${where}.id missing`);
+    const id = o["id"];
+    if (seen.has(id)) throw new Error(`${where}.id duplicated ("${id}")`);
+    seen.add(id);
+
+    if (o["transport"] === "stdio") {
+      if (typeof o["command"] !== "string" || !o["command"]) {
+        throw new Error(`${where}.command missing`);
       }
-      for (const [k, v] of Object.entries(s.env)) {
-        if (typeof v !== "string") throw new Error(`${where}.env.${k} must be a string`);
+      const args = o["args"];
+      if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== "string"))) {
+        throw new Error(`${where}.args must be a string array`);
       }
+      if (o["env"] !== undefined) {
+        if (!isStrMap(o["env"])) throw new Error(`${where}.env must be an object`);
+        for (const [k, v] of Object.entries(o["env"])) {
+          if (typeof v !== "string") throw new Error(`${where}.env.${k} must be a string`);
+        }
+      }
+    } else if (o["transport"] === "http") {
+      if (typeof o["url"] !== "string" || !/^https?:\/\//.test(o["url"])) {
+        throw new Error(`${where}.url must be an http(s) URL`);
+      }
+      if (o["headers"] !== undefined) {
+        if (!isStrMap(o["headers"])) throw new Error(`${where}.headers must be an object`);
+        for (const [k, v] of Object.entries(o["headers"])) {
+          if (typeof v !== "string") throw new Error(`${where}.headers.${k} must be a string`);
+        }
+      }
+      if (o["bearer_env"] !== undefined && typeof o["bearer_env"] !== "string") {
+        throw new Error(`${where}.bearer_env must be a string`);
+      }
+    } else {
+      throw new Error(`${where}.transport must be "stdio" or "http"`);
     }
   }
   return r as McpRegistry;
@@ -214,7 +246,13 @@ export interface FederateOptions {
   /** Attribution for the audit log. */
   readonly mandateId: string;
   readonly registry: McpRegistry;
-  /** Where to append per-call audit lines (JSONL). Default: ./aithos-audit.jsonl */
+  /**
+   * Where audit entries go. Default: a JSONL file (`auditLogPath`). Hosted hosts
+   * (Lambda) pass `consoleAuditSink()` so entries land in CloudWatch instead of
+   * an ephemeral file.
+   */
+  readonly auditSink?: AuditSink;
+  /** Path for the default file sink (used only when `auditSink` is omitted). Default: ./aithos-audit.jsonl */
   readonly auditLogPath?: string;
   /** Diagnostics sink (default: stderr). */
   readonly log?: (msg: string) => void;
@@ -235,13 +273,33 @@ export interface FederationHandle {
 const hasScope = (scopes: readonly string[], id: string): boolean =>
   scopes.includes(`mcp.${id}`);
 
-/** Default connector: spawn the downstream server over stdio. */
-async function connectStdio(entry: RegistryServer): Promise<DownstreamClient> {
+/** Default connector: dispatch on the entry's transport. */
+async function defaultConnect(entry: RegistryServer): Promise<DownstreamClient> {
+  return entry.transport === "http" ? connectHttp(entry) : connectStdio(entry);
+}
+
+/** Spawn the downstream server over stdio (local host only — not Lambda). */
+async function connectStdio(entry: StdioRegistryServer): Promise<DownstreamClient> {
   const client = new Client({ name: `aithos-gateway:${entry.id}`, version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: entry.command,
     args: [...(entry.args ?? [])],
     env: { ...getDefaultEnvironment(), ...(entry.env ?? {}) },
+  });
+  await client.connect(transport);
+  return client as unknown as DownstreamClient;
+}
+
+/** Connect to a downstream MCP over Streamable HTTP (works hosted/Lambda). */
+async function connectHttp(entry: HttpRegistryServer): Promise<DownstreamClient> {
+  const headers: Record<string, string> = { ...(entry.headers ?? {}) };
+  if (entry.bearer_env) {
+    const v = process.env[entry.bearer_env];
+    if (v) headers["Authorization"] = `Bearer ${v}`;
+  }
+  const client = new Client({ name: `aithos-gateway:${entry.id}`, version: "0.1.0" });
+  const transport = new StreamableHTTPClientTransport(new URL(entry.url), {
+    requestInit: { headers },
   });
   await client.connect(transport);
   return client as unknown as DownstreamClient;
@@ -255,8 +313,8 @@ async function connectStdio(entry: RegistryServer): Promise<DownstreamClient> {
  */
 export async function federate(opts: FederateOptions): Promise<FederationHandle> {
   const log = opts.log ?? ((m: string) => console.error(`aithos-mcp gateway: ${m}`));
-  const auditPath = opts.auditLogPath ?? "./aithos-audit.jsonl";
-  const connect = opts.connect ?? connectStdio;
+  const sink = opts.auditSink ?? fileAuditSink(opts.auditLogPath ?? "./aithos-audit.jsonl");
+  const connect = opts.connect ?? defaultConnect;
   const clients: DownstreamClient[] = [];
   let connected = 0;
 
@@ -273,7 +331,7 @@ export async function federate(opts: FederateOptions): Promise<FederationHandle>
       client = await connect(entry);
       const listed = await client.listTools();
       for (const tool of listed.tools) {
-        registerFederatedTool(opts, entry, client, tool, auditPath);
+        registerFederatedTool(opts, entry, client, tool, sink);
       }
       clients.push(client);
       connected += 1;
@@ -310,7 +368,7 @@ function registerFederatedTool(
   entry: RegistryServer,
   client: DownstreamClient,
   tool: { name: string; description?: string; inputSchema?: Record<string, unknown> },
-  auditPath: string,
+  sink: AuditSink,
 ): void {
   const exposedName = `${entry.id}__${tool.name}`;
   opts.server.registerTool(
@@ -325,7 +383,7 @@ function registerFederatedTool(
       // T3 — defense in depth: re-check the scope at dispatch, even though the
       // tool would not have been registered without it.
       if (!hasScope(opts.scopes, entry.id)) {
-        await audit(auditPath, opts.mandateId, entry.id, tool.name, args, "denied");
+        await emit(sink, opts.mandateId, entry.id, tool.name, args, "denied");
         return {
           content: [
             { type: "text" as const, text: `denied: mandate lacks scope mcp.${entry.id}` },
@@ -335,8 +393,8 @@ function registerFederatedTool(
       }
       // T4 — route to the owning downstream client + map the result.
       const r = await callDownstream(client, tool.name, args ?? {});
-      await audit(
-        auditPath,
+      await emit(
+        sink,
         opts.mandateId,
         entry.id,
         tool.name,
@@ -380,6 +438,39 @@ async function callDownstream(
 /* T5 — audit log (JSONL)                                                     */
 /* -------------------------------------------------------------------------- */
 
+/** One audited federated call. */
+export interface AuditEntry {
+  readonly ts: string;
+  readonly mandateId: string;
+  readonly server: string;
+  readonly tool: string;
+  readonly paramsSummary: string;
+  readonly status: "ok" | "error" | "denied";
+  readonly error?: string;
+}
+
+/** Where audit entries go. Must never throw (it's called in the tool path). */
+export type AuditSink = (entry: AuditEntry) => void | Promise<void>;
+
+/** Append entries as JSONL to a file (local / self-wired host). */
+export function fileAuditSink(path: string): AuditSink {
+  return async (entry) => {
+    try {
+      await appendFile(path, JSON.stringify(entry) + "\n", "utf8");
+    } catch (e) {
+      console.error(`aithos-mcp gateway: audit write failed: ${(e as Error).message}`);
+    }
+  };
+}
+
+/** Emit entries as structured JSON on stdout (hosted / Lambda → CloudWatch). */
+export function consoleAuditSink(): AuditSink {
+  return (entry) => {
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify({ kind: "aithos.gateway.audit", ...entry }));
+  };
+}
+
 function summarizeParams(args: Record<string, unknown>): string {
   try {
     const s = JSON.stringify(args);
@@ -389,8 +480,8 @@ function summarizeParams(args: Record<string, unknown>): string {
   }
 }
 
-async function audit(
-  path: string,
+async function emit(
+  sink: AuditSink,
   mandateId: string,
   server: string,
   tool: string,
@@ -398,8 +489,8 @@ async function audit(
   status: "ok" | "error" | "denied",
   error?: string,
 ): Promise<void> {
-  const line =
-    JSON.stringify({
+  try {
+    await sink({
       ts: new Date().toISOString(),
       mandateId,
       server,
@@ -407,11 +498,9 @@ async function audit(
       paramsSummary: summarizeParams(args ?? {}),
       status,
       ...(error ? { error } : {}),
-    }) + "\n";
-  try {
-    await appendFile(path, line, "utf8");
+    });
   } catch (e) {
-    // Audit must never crash a tool call; surface on stderr instead.
-    console.error(`aithos-mcp gateway: audit write failed: ${(e as Error).message}`);
+    // Audit must never crash a tool call.
+    console.error(`aithos-mcp gateway: audit sink failed: ${(e as Error).message}`);
   }
 }

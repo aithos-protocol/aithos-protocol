@@ -19,6 +19,7 @@ import {
   parseRegistry,
   inputSchemaToShape,
   federate,
+  consoleAuditSink,
 } from "../dist/gateway.js";
 
 /* --- a fake Aithos server that records registered tools + dispatches them --- */
@@ -93,8 +94,12 @@ test("T1 — parseRegistry rejects malformed input", () => {
   assert.throws(() => parseRegistry("not json"), /not valid JSON/);
   assert.throws(() => parseRegistry(JSON.stringify({})), /servers.*array/);
   assert.throws(
-    () => parseRegistry(JSON.stringify({ servers: [{ id: "a", transport: "http", command: "x" }] })),
-    /transport must be "stdio"/,
+    () => parseRegistry(JSON.stringify({ servers: [{ id: "a", transport: "carrier-pigeon" }] })),
+    /transport must be "stdio" or "http"/,
+  );
+  assert.throws(
+    () => parseRegistry(JSON.stringify({ servers: [{ id: "a", transport: "http" }] })),
+    /url must be an http\(s\) URL/,
   );
   assert.throws(
     () =>
@@ -108,6 +113,48 @@ test("T1 — parseRegistry rejects malformed input", () => {
       ),
     /duplicated/,
   );
+});
+
+test("H1 — parseRegistry accepts an http downstream entry", () => {
+  const reg = parseRegistry(
+    JSON.stringify({
+      servers: [
+        {
+          id: "github",
+          transport: "http",
+          url: "https://api.githubcopilot.com/mcp/",
+          bearer_env: "GITHUB_PAT",
+          headers: { "X-Demo": "1" },
+        },
+      ],
+    }),
+  );
+  assert.equal(reg.servers[0].transport, "http");
+  assert.equal(reg.servers[0].url, "https://api.githubcopilot.com/mcp/");
+});
+
+test("H1 — http downstream is federated via the injected connector", async () => {
+  const server = fakeServer();
+  const client = fakeClient(GH_TOOLS);
+  const seen = [];
+  const handle = await federate({
+    server,
+    scopes: ["mcp.github"],
+    mandateId: "m",
+    registry: {
+      servers: [
+        { id: "github", transport: "http", url: "https://api.githubcopilot.com/mcp/" },
+      ],
+    },
+    connect: async (entry) => {
+      seen.push(entry.transport);
+      return client;
+    },
+    log: () => {},
+  });
+  assert.equal(handle.connected, 1);
+  assert.deepEqual(seen, ["http"]);
+  assert.deepEqual(server.list().sort(), ["github__create_issue", "github__get_me"]);
 });
 
 test("inputSchemaToShape — produces a shape with the schema keys", () => {
@@ -175,6 +222,28 @@ test("T4/T5 — calling a federated tool routes downstream + writes an audit lin
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("H3 — a custom audit sink receives entries (no file written)", async () => {
+  const server = fakeServer();
+  const client = fakeClient(GH_TOOLS);
+  const entries = [];
+  await federate({
+    server,
+    scopes: ["mcp.github"],
+    mandateId: "m_sink",
+    registry: { servers: [{ id: "github", transport: "stdio", command: "x" }] },
+    connect: async () => client,
+    auditSink: (e) => entries.push(e),
+    log: () => {},
+  });
+  await server.call("github__get_me", {});
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].mandateId, "m_sink");
+  assert.equal(entries[0].server, "github");
+  assert.equal(entries[0].status, "ok");
+  // exported console sink is callable
+  assert.equal(typeof consoleAuditSink(), "function");
 });
 
 test("T4 — downstream isError is mapped through", async () => {
