@@ -7,6 +7,15 @@ and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4] — 2026-06-26
+
+### Added
+
+- `mcp.<server>.<…>` connector scopes are now sphere-neutral (like `data.*`):
+  `validateScopesAgainstSphere` accepts them under the public sphere. The access
+  axis is the connector (gated at the gateway), not an ethos zone, so a consent
+  bundle can carry a connector grant in its single `#public` mandate.
+
 ## [0.9.0] — 2026-06-07
 
 ### Added

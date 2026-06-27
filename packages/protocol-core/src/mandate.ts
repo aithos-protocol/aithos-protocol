@@ -406,10 +406,15 @@ function validateScopesAgainstSphere(scopes: string[], sphere: Sphere): void {
         // binding is the grantee key + CMK wrap (data spec §4.4). They are
         // permitted under every sphere, including public — this lets a
         // public-read mandate also carry data-collection access.
-        s.startsWith("data.");
+        s.startsWith("data.") ||
+        // Connector scopes (`mcp.<server>.<…>`) are likewise sphere-neutral: the
+        // access axis is the connector, not an ethos zone. They gate a federated
+        // downstream MCP at the gateway, never an ethos read/write, so they ride
+        // under any sphere (public included) like data scopes.
+        s.startsWith("mcp.");
       if (!ok) {
         throw new Error(
-          `Scope ${s} is not permitted for the public sphere. Only ethos.<verb>.public, ethos.read.all, gamma.read, ${COMPUTE_INVOKE_SCOPE}, and data.* scopes are allowed.`,
+          `Scope ${s} is not permitted for the public sphere. Only ethos.<verb>.public, ethos.read.all, gamma.read, ${COMPUTE_INVOKE_SCOPE}, data.*, and mcp.* scopes are allowed.`,
         );
       }
     }
