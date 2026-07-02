@@ -9,7 +9,7 @@ Project home: <https://www.aithos.be>
 
 Aithos lets a person publish a signed, versioned, zone-partitioned description of themselves — their *ethos* — that any AI agent can read, under rules the person sets. The person can grant a time-bounded, scoped mandate to a specific agent and revoke it. The agent's actions, when taken under that mandate, are cryptographically attributable.
 
-**Status: v0.2.1.** Spec is stabilizing. CLI is a working reference implementation. v0.2.0 promoted the signed **gamma log** (append-only, hash-chained, Ed25519-signed, sealed under the self sphere) to the sole authority on section mutation history — the per-section `revisions[]` chain from v0.1.x is gone. v0.2.1 closes the loop on **delegated writes against a tracked identity**: a delegate produces a fully verifiable edition (signed manifest, signed gamma entries, sealed zones) without ever holding the owner's sphere seeds, and the owner pulls that edition back in with `aithos ethos install --force`. Nothing is frozen yet.
+**Status: bundle v0.4 is the current, normative, in-production on-disk format** (manifest marker `aithos: "0.4.0"`). The v0.4 model — an incremental content-addressed manifest with per-zone keys — is specified normatively by Part II of [`spec/drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md`](./spec/drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md) and is live end-to-end (protocol-core 0.11.3, `@aithos/protocol-client` alpha.41 authors v0.4 from birth, the hosting platform dual-reads v0.3/v0.4, and `@aithos/sdk` 0.2.0 is v0.4-only). v0.3 (per-section) remains readable via dual-read but a subject migrated to v0.4 refuses any subsequent v0.3 publish (`-32045 ethos_spec_version_regression`); v0.2 is a hard error on the SDK side. The signed **gamma log** (append-only, hash-chained, Ed25519-signed, sealed under the self sphere) remains the sole authority on section mutation history, and delegated writes against a tracked identity remain fully verifiable (signed manifest, signed gamma entries, sealed zones) without the delegate ever holding the owner's sphere seeds. The CLI is a working reference implementation of the earlier line.
 
 ## Start here
 
@@ -19,13 +19,15 @@ Aithos lets a person publish a signed, versioned, zone-partitioned description o
 - **[ROADMAP.md](./ROADMAP.md)** — what's next, what's not, and how the pieces fit.
 - **[CONTRIBUTING.md](./CONTRIBUTING.md)** — how to engage if you want to help.
 
-## Currently in design
+## Format lineage and drafts
 
-The protocol is still evolving and several proposals are in active design. They are versioned under [`spec/drafts/`](./spec/drafts/) and open for review:
+The bundle format has moved forward in two ratified steps beyond the v0.2 monolithic container, and several proposals remain in active design. All proposals are versioned under [`spec/drafts/`](./spec/drafts/) and open for review:
 
-- **[Bundle v0.3 — per-section encryption](./spec/drafts/bundle-v0.3-per-section-encryption.md)** — split each zone into per-section blobs (one ciphertext file per section in `circle` and `self`, one plaintext markdown file per section in `public`). Editing one section costs O(section size) instead of O(zone size). Symmetric across all three zones.
-- **[Gamma v0.3 — per-entry envelopes](./spec/drafts/gamma-v0.3-per-entry-envelopes.md)** — split append capability from read capability in the gamma log, so a write-delegate no longer gets retroactive read access to the subject's history. Adds a new `gamma.read` scope.
-- **Section-level mandates** *(companion draft, in design)* — extend the mandate scope grammar to address individual sections (`ethos.write.self#gmail:*`). Builds on per-section encryption.
+- **[Bundle v0.4 — incremental manifest & zone keys](./spec/drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md)** — *validated & implemented; the current on-disk format.* An O(1) content-addressed manifest (~3 KB) that references immutable zone objects (ZoneShard / KeyRing / ExtraWraps) by sha instead of inlining descriptors. One 32-byte **zone key** per encrypted zone, sealed once per recipient in the KeyRing; per-section DEKs are sealed symmetrically under the zone key (`enc_dek`). Consequences: `sealGrant` on a zone scope is **O(1)** (one wrap added to the KeyRing), and hard revocation is a **zone-key rotation** (re-seal the `enc_dek` entries) that leaves the bodies untouched. Part II of the draft is normative.
+- **[Bundle v0.3 — per-section encryption](./spec/drafts/bundle-v0.3-per-section-encryption.md)** — *promoted, now superseded by v0.4 for on-disk representation; kept as the per-section historical reference.* Split each zone into per-section blobs (one ciphertext file per section in `circle` and `self`, one plaintext markdown file per section in `public`). Editing one section costs O(section size) instead of O(zone size). Still readable via dual-read.
+- **[Gamma v0.3 — per-entry envelopes](./spec/drafts/gamma-v0.3-per-entry-envelopes.md)** *(in design)* — split append capability from read capability in the gamma log, so a write-delegate no longer gets retroactive read access to the subject's history. Adds a new `gamma.read` scope.
+- **[Bundle v0.3 — section-verb scopes](./spec/drafts/bundle-v0.3-section-verb-scopes.md)** *(in design)* — per-scope section selectors (`#id=` / `#prefix=` / `#tag=`) and a verb vocabulary so one mandate expresses distinct read vs write perimeters.
+- **[Sponsorship mandate v0.1](./spec/drafts/sponsorship-mandate-v0.1.md)** *(in design)* — commercial sponsorship between Ethos, purely by composition of existing signatures.
 
 See [`spec/drafts/README.md`](./spec/drafts/README.md) for the full draft index and lifecycle, and [`ROADMAP.md`](./ROADMAP.md) for how these fit into the broader trajectory toward v1.0.
 

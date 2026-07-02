@@ -14,6 +14,28 @@
 > - A new §10.11 describes the **write-only gamma** hosting mode a platform
 >   may adopt.
 
+> **Revision note (bundle v0.4).** The platform serves the v0.4 bundle format
+> (manifest marker `aithos: "0.4.0"`, [`bundle-v0.4`](./drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md)
+> §N5–N7) alongside v0.3 (dual-read):
+>
+> - `aithos.get_ethos_manifest` returns the manifest **as stored** — either a
+>   v0.3 (`0.3.0`) or a v0.4 (`0.4.0`) manifest. A v0.4 manifest is the small
+>   incremental document that references zone objects by sha (draft §N5).
+> - A **new read route `aithos.get_ethos_objects`** (§10.5.4a) batch-fetches
+>   content-addressed objects: `{ did, shas: [≤64] }` → `{ objects:
+>   [{sha, b64}], missing: [sha] }`. ACL by object type: `zone_shard` follows
+>   the manifest ACL (anonymous readers admitted — a shard carries no recipient
+>   label); `keyring` and `extra_wraps` require read-auth (owner or an active
+>   delegate). `missing` is used for *absent-or-forbidden* alike — no oracle
+>   (draft §N7).
+> - `aithos.publish_ethos_edition` accepts the v0.4 envelope (`{ manifest,
+>   objects, blobs }`, draft §N6). Dual-write: a subject already migrated to
+>   v0.4 that attempts a v0.3 publish is rejected with the new error
+>   **`-32045 ethos_spec_version_regression`** (`aithos` never regresses).
+>   Related object errors: `-32043 ethos_object_missing`,
+>   `-32044 ethos_object_hash_mismatch`, `-32046 ethos_keyring_forbidden`
+>   (draft §N12).
+
 ## 10.1 Overview
 
 Chapter 6 specifies a **per-subject local MCP server** that exposes one
@@ -224,6 +246,36 @@ that want to verify history independently walk the gamma log starting from
 `gamma.head`; see §10.11 for how a platform may choose to serve (or not
 serve) those gamma entries.
 
+### 10.5.4a `aithos.get_ethos_objects` (v0.4)
+
+Batch-fetch content-addressed zone objects referenced by a v0.4 manifest.
+
+Input: `{ "did": DidRef, "shas": string[] }` — at most **64** shas per call.
+
+Output:
+
+```ts
+interface EthosObjectsResult {
+  objects: { sha: string; b64: string }[]; // JCS bytes of each object, base64
+  missing: string[];                        // requested shas not returned
+}
+```
+
+ACL is applied **per object type**: `zone_shard` follows the manifest ACL (an
+anonymous reader is admitted — a shard exposes no recipient label); `keyring`
+and `extra_wraps` require read-auth (owner or an active delegate of the
+subject, exactly as `circle`/`self` bodies). An object that is absent *or*
+forbidden is reported in `missing` — the two cases are indistinguishable, so
+the route is not an authorization oracle (draft §N7). See §N12 for the object
+integrity errors returned by the write path.
+
+> **Canonical v0.4 read path.** A v0.4 client reads an ethos as: `get_ethos_manifest`
+> → `get_ethos_objects` (the zone's shards, plus `keyring`/`extra_wraps` on the
+> authenticated channel) → unwrap the zone key → `enc_dek` → DEK, then fetch the
+> section bodies with `get_ethos_section` / `get_ethos_sections` (draft §N8).
+> The whole-zone routes §10.5.4/§10.5.5 below are **not** the canonical v0.4
+> access path.
+
 ### 10.5.4 `aithos.get_ethos_zone`
 
 Input: `{ "did": DidRef, "zone": "public" | "circle" | "self", "edition"?: EditionRef }`.
@@ -239,6 +291,16 @@ type ZoneFetchResult =
 The server MUST return ciphertext for `circle` / `self` zones without
 inspecting them. Plaintext for `public` only. Decryption is always
 client-side.
+
+> **Actual behavior across formats.** This route (and §10.5.5) was designed for
+> the v0.2 whole-zone blob model. Verified behavior:
+> - **v0.4 subject** — the route works and returns the zone's sections; clients
+>   SHOULD nonetheless prefer the canonical `get_ethos_manifest` +
+>   `get_ethos_objects` + `get_ethos_section(s)` path above.
+> - **Legacy v0.3 per-section subject** — the route fails with **`-32020`**: its
+>   legacy branch expects a single whole-zone file (`zm.file`) that per-section
+>   manifests do not carry. Per-section v0.3 subjects must be read section by
+>   section.
 
 ### 10.5.5 `aithos.get_ethos_edition`
 
@@ -258,6 +320,11 @@ interface EthosEdition {
   bundle_id: string;
 }
 ```
+
+> **Actual behavior across formats.** Same as §10.5.4: functional for a v0.4
+> subject, but fails with **`-32020`** on a legacy v0.3 per-section subject
+> (the whole-zone `zm.file` is absent from per-section manifests). The canonical
+> v0.4 path is `get_ethos_manifest` + `get_ethos_objects` + `get_ethos_section(s)`.
 
 ### 10.5.6 `aithos.list_editions`
 

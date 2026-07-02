@@ -1,9 +1,14 @@
 # Bundle v0.4 — manifest incrémental & clés de zone (BRIEF de design)
 
-> **Statut : VALIDÉ & IMPLÉMENTÉ** (11 juin 2026) — core 0.11.3, protocol-client
-> alpha.38, sdk alpha.90, serveur déployé dev. Conformité : série M 7/7 + parité
+> **Statut : PROMOTED / IMPLEMENTED — format on-disk courant** (validé le
+> 11 juin 2026) — core 0.11.3, protocol-client alpha.41 (naît v0.4), sdk 0.2.0
+> (v0.4-only), plateforme en dual-read live. Conformité : série M 7/7 + parité
 > §6 prouvée (34 suites, double run). Mesures : `code/RAPPORT-V04-2026-06-11.md`.
-> La Partie II est normative ; la Partie I reste le rationale historique.
+> La **Partie II est normative** (marqueur manifest `aithos: "0.4.0"`) et
+> supersede les §3.x correspondants du chapitre 3 ; la Partie I reste le
+> rationale historique. La promotion normative complète de la Partie II en
+> amendement §3′/§10′ des chapitres numérotés est différée (les chapitres
+> portent pour l'instant des encarts de renvoi vers ce draft).
 
 ## 1. Problème (mesuré)
 

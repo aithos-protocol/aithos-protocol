@@ -1,18 +1,31 @@
 # 3 · Bundle — the `.ethos` container
 
-> **Format status (protocol-core 0.8.0).** The **default on-disk format is now
-> v0.3 (per-section)**: each zone is split into independently-addressed
-> per-section blobs (`public/<id>.md` plaintext, `circle|self/<id>.enc`
-> ciphertext under a fresh per-section DEK), the `self` index is encrypted via
-> per-section `title_cipher`, and editing one section costs O(section) instead
-> of O(zone). v0.3 is specified normatively by the two promoted drafts
+> **Format status (protocol-core 0.11.3).** The **current on-disk format is
+> v0.4** (manifest marker `aithos: "0.4.0"`): an incremental content-addressed
+> manifest (~3 KB, O(1)) that references immutable zone objects — ZoneShard /
+> KeyRing / ExtraWraps — by sha, one 32-byte **zone key** per encrypted zone
+> sealed once per recipient, and per-section DEKs sealed symmetrically under the
+> zone key (`enc_dek`). v0.4 is specified normatively by Part II of
+> [`bundle-v0.4-incremental-manifest-and-zone-keys.md`](./drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md),
+> whose `§N-x` sections supersede the corresponding `§3.x` below.
+>
+> **v0.3 (per-section)** — split each zone into per-section blobs
+> (`public/<id>.md` plaintext, `circle|self/<id>.enc` ciphertext under a fresh
+> per-section DEK), `self` index via per-section `title_cipher` — remains
+> **readable via dual-read**, specified by the two promoted drafts
 > [`bundle-v0.3-per-section-encryption.md`](./drafts/bundle-v0.3-per-section-encryption.md)
-> and [`bundle-v0.3-section-level-mandates.md`](./drafts/bundle-v0.3-section-level-mandates.md),
-> whose `§3.x′` sections amend the corresponding `§3.x` below. The **v0.2
-> monolithic format described in the rest of this chapter remains fully
-> readable and verifiable** (compat path §3.10.2′) and can be re-selected for a
-> fresh install with `AITHOS_FORMAT=v0.2`. A v0.3 runtime detects the format
-> from the manifest `aithos` marker (`0.2.x` vs `0.3.0`, §3.10.1′).
+> and [`bundle-v0.3-section-level-mandates.md`](./drafts/bundle-v0.3-section-level-mandates.md).
+> However, a subject once migrated to v0.4 **refuses any subsequent v0.3
+> publish** — `aithos` never regresses (server error
+> `-32045 ethos_spec_version_regression`, draft §N6/§N12). The **v0.2 monolithic
+> format described in the rest of this chapter remains readable and verifiable**
+> for legacy inspection, but authoring v0.2 is a **hard error on the SDK side**.
+> Runtimes detect the format from the manifest `aithos` marker
+> (`0.2.x` / `0.3.0` / `0.4.0`).
+>
+> The bulk of this chapter still describes the v0.2/v0.3 model; the per-`§3.x`
+> banners below flag where v0.4 supersedes it. Full normative promotion of
+> Part II into §3′ is tracked separately.
 
 ## 3.1 Overview
 
@@ -21,6 +34,12 @@ A bundle is a **ZIP archive** (PKZIP) with the `.ethos` extension. It carries on
 The choice of ZIP is deliberate. ZIP is understood everywhere, has good tooling, preserves file structure, and is the container underlying `.docx`, `.apk`, `.epub`, and countless other established formats. A curious reader can always `unzip` a bundle to see what's inside.
 
 ## 3.2 Layout
+
+> ⚠ **v0.2 historical layout.** The single-file-per-zone layout below is the
+> v0.2 monolithic form. v0.3 splits each zone into per-section blobs, and v0.4
+> stores content-addressed objects under `ethos/{did}/objects/{sha}` referenced
+> from an incremental manifest (draft §N1/§N5). See the format status banner at
+> the top of this chapter.
 
 ```
 john-doe.ethos
@@ -227,6 +246,15 @@ The `migrated_from` field is informative; it does not establish cryptographic co
 
 ## 3.4 Encryption of circle and self zones
 
+> ⚠ **v0.2/v0.3 historical.** This section describes a **per-zone DEK** wrapped
+> once per recipient in the manifest. The current model is v0.4 (see
+> [`bundle-v0.4`](./drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md)
+> §N2–N4): each encrypted zone has **one 32-byte zone key**; the per-section
+> DEK still encrypts the section body but is itself sealed **symmetrically**
+> under the zone key (`enc_dek`, AAD bound to `section_id`), and the recipient
+> wrap (§3.6) now applies to the **zone key** in the KeyRing rather than to a
+> per-zone or per-section DEK.
+
 Encrypted zones use **XChaCha20-Poly1305-IETF**, per the libsodium construction.
 
 ### 3.4.1 Procedure (author side)
@@ -259,6 +287,14 @@ The AEAD additional data MUST be `"aithos-zone-v1\0"` (the ASCII bytes, includin
 
 ## 3.5 Recipients
 
+> ⚠ **v0.2/v0.3 historical.** In v0.4 the recipient list lives in the per-zone
+> **KeyRing** object (`{ zone_key_id, wraps[] }`, draft §N4), served only over
+> the authenticated channel, and each `wrap` seals the **zone key** (not a DEK)
+> once per recipient. A recipient granted a zone-scoped mandate opens **every**
+> section of the zone through that single wrap; per-section (`#id=` / `#prefix=`
+> / `#tag=`) grants instead go through **ExtraWraps** (per-section DEK wraps,
+> bit-for-bit the v0.3 format). See draft §N3/§N4/§N8.
+
 The `wraps` array lists every recipient that can decrypt the zone. Each recipient is identified by a DID URL fragment whose key is X25519.
 
 ### 3.5.1 Subject as recipient
@@ -275,9 +311,30 @@ Authors SHOULD avoid granting recipient status liberally; the more recipients, t
 
 ### 3.5.3 Adding and removing recipients
 
+> ⚠ **Corrected by v0.4.** The paragraph below (v0.2/v0.3) claims that *adding a
+> recipient requires re-encrypting the zone*. **This is no longer true.** In v0.4
+> (draft §N3/§N4/§N8/§N9.4, §4):
+> - **Adding a recipient (`sealGrant`, zone scope) is O(1)**: the author adds one
+>   `wrap` of the **zone key** to the KeyRing. No new DEK, no new nonce, no body
+>   re-encryption. (A per-section grant adds a DEK wrap to ExtraWraps, also O(1).)
+> - **Hard revocation is a zone-key rotation** (`reseal({mode:"rotate"})`): a new
+>   zone key is generated, the KeyRing is re-sealed to the still-active grants,
+>   and every section's `enc_dek` is re-sealed symmetrically under the new zone
+>   key — **the section bodies are left untouched, no blob is re-encrypted**. It
+>   cuts the crypto path for future editions; real access is denied by the
+>   server gate (bodies for `circle`/`self` never leave the authenticated
+>   channel). Full cryptographic erasure of the bodies is the separate, opt-in
+>   `reseal({mode:"rotate-deep"})`.
+
 Adding a recipient requires re-encrypting the zone (new DEK, new nonce, all wraps regenerated). The old bundle remains readable by the old recipient set, forever — this is the reality of giving someone ciphertext. Removing a recipient is the same operation: a new edition with the ex-recipient omitted from the wraps. An author who needs to actually revoke prior access has no cryptographic path; they must accept that the data is out.
 
 ## 3.6 Key wrapping (X25519-HKDF-SHA256-AEAD)
+
+> ⚠ **Still current, but re-targeted in v0.4.** The wrap construction below is
+> unchanged and remains normative. In v0.4 it is applied to the **zone key**
+> (in the KeyRing, over `jcs({kid, zone_key})`) rather than to a per-zone DEK;
+> per-section DEK wraps in ExtraWraps use this exact same construction,
+> bit-for-bit as in v0.3. See draft §N4.
 
 To wrap a DEK for a given recipient:
 

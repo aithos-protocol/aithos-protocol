@@ -1,5 +1,13 @@
 # 2 · Ethos document
 
+> **Format note (bundle v0.4).** The **logical model in this chapter is unchanged**
+> under v0.4 — an ethos is still three zones (`public` / `circle` / `self`) of
+> free-form sections, versioned as an immutable edition chain. What changed is
+> the **physical representation**: the current on-disk format serializes this
+> model as an incremental content-addressed manifest with per-zone keys,
+> specified by [`bundle-v0.4`](./drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md)
+> (see chapter 3). The document form below remains normative for signing.
+
 ## 2.1 Overview
 
 An **ethos** is the structured artifact that describes a subject. It exists in two forms:
@@ -81,6 +89,14 @@ Implementations MAY add fields under a `x-` prefix for experimental extensions (
 - `canonical_url` — OPTIONAL. The URL at which this edition is authoritatively served, if any.
 
 Editions are immutable. Any change to the document — content, signatures, metadata — requires a new edition with a new `version` string.
+
+**Correspondence with the v0.4 manifest chain.** In a v0.4 manifest the edition
+metadata additionally carries `height` and `prev_hash` (chapter 3, §3.3.3;
+draft §N5): `version`/`supersedes` here map one-to-one to that spine. The
+subject's **first v0.4 edition has `height: 1`, `prev_hash: null`, and
+`supersedes: null`**; each subsequent edition has `height = prev.height + 1`
+and `prev_hash = sha256(canonical(prev.manifest_with_blank_sig))`. Migration
+from v0.3 to v0.4 is a normal `height+1` edition — it does not reset the chain.
 
 ## 2.5 Zones
 
