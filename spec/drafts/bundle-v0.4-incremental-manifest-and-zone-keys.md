@@ -4,11 +4,16 @@
 > 11 juin 2026) — core 0.11.3, protocol-client alpha.41 (naît v0.4), sdk 0.2.0
 > (v0.4-only), plateforme en dual-read live. Conformité : série M 7/7 + parité
 > §6 prouvée (34 suites, double run). Mesures : `code/RAPPORT-V04-2026-06-11.md`.
-> La **Partie II est normative** (marqueur manifest `aithos: "0.4.0"`) et
-> supersede les §3.x correspondants du chapitre 3 ; la Partie I reste le
-> rationale historique. La promotion normative complète de la Partie II en
-> amendement §3′/§10′ des chapitres numérotés est différée (les chapitres
-> portent pour l'instant des encarts de renvoi vers ce draft).
+> La **Partie II (N1–N13) est désormais pleinement intégrée aux chapitres
+> canoniques** : elle constitue le corps normatif **§3A du chapitre 3**
+> (objets content-addressed, manifest incrémental, clés de zone, KeyRing /
+> ExtraWraps, algorithmes de lecture/écriture, migration, GC, erreurs) et le
+> comportement normatif des primitives v0.4 du **chapitre 10** (§10.5.3,
+> §10.5.4a, §10.5.4/§10.5.5, §10.6.3a, table d'erreurs §10.9, conformité
+> §10.8). Les §3.2–§3.10 du chapitre 3 sont conservés en **annexe historique**
+> (v0.2/v0.3, dual-read). Ce draft reste la source de rationale (Partie I) et le
+> texte de référence d'origine de la Partie II ; le texte faisant foi est
+> désormais celui des chapitres §3A / §10.
 
 ## 1. Problème (mesuré)
 

@@ -14,27 +14,29 @@
 > - A new §10.11 describes the **write-only gamma** hosting mode a platform
 >   may adopt.
 
-> **Revision note (bundle v0.4).** The platform serves the v0.4 bundle format
-> (manifest marker `aithos: "0.4.0"`, [`bundle-v0.4`](./drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md)
-> §N5–N7) alongside v0.3 (dual-read):
+> **Format status (bundle v0.4 — NORMATIVE).** The platform MUST serve the v0.4
+> bundle format (manifest marker `aithos: "0.4.0"`, spec §3A) alongside v0.3
+> (dual-read). The v0.4 behavior of the primitives is normative and specified in
+> the body below:
 >
-> - `aithos.get_ethos_manifest` returns the manifest **as stored** — either a
->   v0.3 (`0.3.0`) or a v0.4 (`0.4.0`) manifest. A v0.4 manifest is the small
->   incremental document that references zone objects by sha (draft §N5).
-> - A **new read route `aithos.get_ethos_objects`** (§10.5.4a) batch-fetches
->   content-addressed objects: `{ did, shas: [≤64] }` → `{ objects:
->   [{sha, b64}], missing: [sha] }`. ACL by object type: `zone_shard` follows
->   the manifest ACL (anonymous readers admitted — a shard carries no recipient
->   label); `keyring` and `extra_wraps` require read-auth (owner or an active
->   delegate). `missing` is used for *absent-or-forbidden* alike — no oracle
->   (draft §N7).
-> - `aithos.publish_ethos_edition` accepts the v0.4 envelope (`{ manifest,
->   objects, blobs }`, draft §N6). Dual-write: a subject already migrated to
->   v0.4 that attempts a v0.3 publish is rejected with the new error
+> - `aithos.get_ethos_manifest` (§10.5.3) returns the manifest **as stored** —
+>   either a v0.3 (`0.3.0`) or a v0.4 (`0.4.0`) manifest. A v0.4 manifest is the
+>   small incremental document that references zone objects by sha (§3A.5).
+> - The read route **`aithos.get_ethos_objects`** (§10.5.4a) is the normative
+>   v0.4 object-fetch route: `{ did, shas: [≤64] }` → `{ objects: [{sha, b64}],
+>   missing: [sha] }`, with per-object-type ACL (§10.5.4a, §3A.7).
+> - `aithos.publish_ethos_edition` (§10.6.3a) accepts the v0.4 envelope
+>   `{ manifest, objects, blobs }` (§3A.6). Dual-write: a subject already
+>   migrated to v0.4 that attempts a v0.3 publish MUST be rejected with
 >   **`-32045 ethos_spec_version_regression`** (`aithos` never regresses).
->   Related object errors: `-32043 ethos_object_missing`,
->   `-32044 ethos_object_hash_mismatch`, `-32046 ethos_keyring_forbidden`
->   (draft §N12).
+> - The whole-zone routes `aithos.get_ethos_zone` (§10.5.4) and
+>   `aithos.get_ethos_edition` (§10.5.5) are functional for a v0.4 subject but
+>   are **not** the canonical v0.4 access path; on a legacy v0.3 per-section
+>   subject they fail with `-32020` (§10.5.4). The canonical v0.4 path is
+>   `get_ethos_manifest` + `get_ethos_objects` + `get_ethos_section(s)`.
+> - New object/integrity errors: `-32043 ethos_object_missing`,
+>   `-32044 ethos_object_hash_mismatch`, `-32045 ethos_spec_version_regression`,
+>   `-32046 ethos_keyring_forbidden` (§10.9, §3A.12).
 
 ## 10.1 Overview
 
@@ -238,7 +240,11 @@ Errors: `AITHOS_NOT_FOUND` (§10.9).
 
 Input: `{ "did": DidRef, "edition"?: EditionRef }`. Default `edition = latest`.
 
-Output: `SignedObject<Manifest>` per spec §2.6.
+Output: `SignedObject<Manifest>` per spec §2.6. The server MUST return the
+manifest **as stored**, discriminated by the `aithos` marker: a v0.3 (`0.3.0`)
+manifest or a v0.4 (`0.4.0`) incremental manifest (spec §3A.5). A v0.4 manifest
+references the zone objects by sha and is read via `aithos.get_ethos_objects`
+(§10.5.4a).
 
 The returned `Manifest` carries `gamma.head` and `gamma.count` (spec §10.7 of
 the gamma chapter) whenever the subject has ever authored a section. Callers
@@ -246,11 +252,14 @@ that want to verify history independently walk the gamma log starting from
 `gamma.head`; see §10.11 for how a platform may choose to serve (or not
 serve) those gamma entries.
 
-### 10.5.4a `aithos.get_ethos_objects` (v0.4)
+### 10.5.4a `aithos.get_ethos_objects` (v0.4, NORMATIVE)
 
-Batch-fetch content-addressed zone objects referenced by a v0.4 manifest.
+Batch-fetch content-addressed zone objects (`zone_shard`, `keyring`,
+`extra_wraps`; spec §3A.1) referenced by a v0.4 manifest. This is the normative
+object-fetch route of the canonical v0.4 read path.
 
-Input: `{ "did": DidRef, "shas": string[] }` — at most **64** shas per call.
+Input: `{ "did": DidRef, "shas": string[] }` — at most **64** shas per call. A
+call carrying more than 64 shas MUST be rejected.
 
 Output:
 
@@ -261,20 +270,24 @@ interface EthosObjectsResult {
 }
 ```
 
-ACL is applied **per object type**: `zone_shard` follows the manifest ACL (an
-anonymous reader is admitted — a shard exposes no recipient label); `keyring`
-and `extra_wraps` require read-auth (owner or an active delegate of the
-subject, exactly as `circle`/`self` bodies). An object that is absent *or*
-forbidden is reported in `missing` — the two cases are indistinguishable, so
-the route is not an authorization oracle (draft §N7). See §N12 for the object
-integrity errors returned by the write path.
+Each returned `b64` MUST be the exact JCS bytes whose `sha256` equals `sha`, so
+the caller re-verifies integrity locally (§3A.1). The server MUST NOT re-sign,
+re-canonicalize, or otherwise rewrite an object.
 
-> **Canonical v0.4 read path.** A v0.4 client reads an ethos as: `get_ethos_manifest`
-> → `get_ethos_objects` (the zone's shards, plus `keyring`/`extra_wraps` on the
-> authenticated channel) → unwrap the zone key → `enc_dek` → DEK, then fetch the
-> section bodies with `get_ethos_section` / `get_ethos_sections` (draft §N8).
-> The whole-zone routes §10.5.4/§10.5.5 below are **not** the canonical v0.4
-> access path.
+ACL is applied **per object type** (spec §3A.7): `zone_shard` follows the
+manifest ACL (an anonymous reader is admitted — a shard exposes no recipient
+label); `keyring` and `extra_wraps` require read-auth (owner or an active
+delegate of the subject, exactly as `circle`/`self` bodies). An object that is
+absent *or* forbidden MUST be reported in `missing` — the two cases are
+indistinguishable, so the route is **not an authorization oracle**. See §10.9 /
+§3A.12 for the object integrity errors returned by the write path.
+
+> **Canonical v0.4 read path (normative for clients).** A v0.4 client reads an
+> ethos as: `get_ethos_manifest` → `get_ethos_objects` (the zone's shards, plus
+> `keyring` / `extra_wraps` on the authenticated channel) → unwrap the zone key
+> → `enc_dek` → DEK, then fetch the section bodies with `get_ethos_section` /
+> `get_ethos_sections` (spec §3A.8). The whole-zone routes §10.5.4 / §10.5.5
+> below are **not** the canonical v0.4 access path.
 
 ### 10.5.4 `aithos.get_ethos_zone`
 
@@ -292,15 +305,15 @@ The server MUST return ciphertext for `circle` / `self` zones without
 inspecting them. Plaintext for `public` only. Decryption is always
 client-side.
 
-> **Actual behavior across formats.** This route (and §10.5.5) was designed for
-> the v0.2 whole-zone blob model. Verified behavior:
-> - **v0.4 subject** — the route works and returns the zone's sections; clients
->   SHOULD nonetheless prefer the canonical `get_ethos_manifest` +
->   `get_ethos_objects` + `get_ethos_section(s)` path above.
-> - **Legacy v0.3 per-section subject** — the route fails with **`-32020`**: its
->   legacy branch expects a single whole-zone file (`zm.file`) that per-section
->   manifests do not carry. Per-section v0.3 subjects must be read section by
->   section.
+> **Behavior across formats (normative).** This route (and §10.5.5) was
+> designed for the v0.2 whole-zone blob model. Normative behavior:
+> - **v0.4 subject** — the route MUST return the zone's sections; clients SHOULD
+>   nonetheless prefer the canonical `get_ethos_manifest` + `get_ethos_objects`
+>   + `get_ethos_section(s)` path (§10.5.4a, §3A.8), which this route is not.
+> - **Legacy v0.3 per-section subject** — the route MUST fail with **`-32020`**:
+>   its legacy branch expects a single whole-zone file (`zm.file`) that
+>   per-section manifests do not carry. Per-section v0.3 subjects are read
+>   section by section.
 
 ### 10.5.5 `aithos.get_ethos_edition`
 
@@ -321,10 +334,11 @@ interface EthosEdition {
 }
 ```
 
-> **Actual behavior across formats.** Same as §10.5.4: functional for a v0.4
-> subject, but fails with **`-32020`** on a legacy v0.3 per-section subject
-> (the whole-zone `zm.file` is absent from per-section manifests). The canonical
-> v0.4 path is `get_ethos_manifest` + `get_ethos_objects` + `get_ethos_section(s)`.
+> **Behavior across formats (normative).** Same as §10.5.4: functional for a
+> v0.4 subject, but MUST fail with **`-32020`** on a legacy v0.3 per-section
+> subject (the whole-zone `zm.file` is absent from per-section manifests). The
+> canonical v0.4 path is `get_ethos_manifest` + `get_ethos_objects` +
+> `get_ethos_section(s)` (§10.5.4a, §3A.8).
 
 ### 10.5.6 `aithos.list_editions`
 
@@ -597,6 +611,66 @@ Errors: `AITHOS_EDITION_HEIGHT_CONFLICT`, `AITHOS_PREV_HASH_MISMATCH`,
 `AITHOS_MANDATE_REVOKED`, `AITHOS_INSUFFICIENT_SCOPE`,
 `AITHOS_IDENTITY_TOMBSTONED`.
 
+### 10.6.3a `aithos.publish_ethos_edition` — v0.4 envelope (NORMATIVE)
+
+For a subject on the v0.4 format (manifest marker `aithos: "0.4.0"`),
+`aithos.publish_ethos_edition` takes the content-addressed envelope of spec
+§3A.6 instead of the v0.3 `zones` + `new_gamma_entries` payload of §10.6.3:
+
+```ts
+interface PublishEthosEditionV04Input {
+  manifest: Manifest;                       // v0.4 manifest (§3A.5), signed
+  objects: { [sha: string]: string };       // sha → base64(JCS object bytes)
+  blobs:   { [sha: string]: string };       // sha → base64(section body bytes)
+}
+```
+
+`objects` carries the ZoneShard / KeyRing / ExtraWraps objects that are **new**
+to this edition; `blobs` carries the section bodies that are new. Objects and
+blobs unchanged since the previous edition are NOT re-uploaded — they are
+carried by sha.
+
+The server MUST, in this order, before any write lands:
+
+1. **Envelope + chain (unchanged from §10.6.3 / §3.8).** Verify the §11
+   envelope, the `manifest_signature` (owner `#public` or delegate +
+   `authorized_by`, §3.8 form), the linear `height` / `prev_hash` chain
+   (`-32030` on a height conflict, `-32031` on a `prev_hash` mismatch), and
+   `sha256_of_did_json`.
+2. **Object integrity.** Every key of `objects` and `blobs` MUST equal the real
+   `sha256` of its decoded content, else `-32044 ethos_object_hash_mismatch`.
+   Every sha the manifest references (each `shard_shas[]`, `keyring_sha`,
+   `extrawraps_sha`) MUST be present in the uploaded `objects` **or** in the set
+   of objects referenced by the previous edition (carry by induction — the exact
+   analogue of `carriedShaSet`), else `-32043 ethos_object_missing`.
+3. **Body carry.** For each shard object that is **absent from the previous
+   edition** (a new sha), each of its `entries[].blob_sha` MUST be present in
+   the uploaded `blobs` **or** in `carriedShaSet(prev)`, else `-32043`. Shards
+   carried identically are not re-read.
+4. **Delegated authorization** (when the envelope carries a mandate). Verify the
+   mandate (FRESH `did.json`, epoch, ConsistentRead revocation — unchanged),
+   then diff only the **changed shards**: per zone, `entries(prev changed
+   shards)` vs `entries(new changed shards)` → `create` / `edit` / `delete` ops
+   keyed by `section_id` (create = new id; edit = `blob_sha` / `sha256_of_plaintext`
+   / `title*` / `enc_dek` changed; delete = id gone), mapped onto the §4.8.2′
+   verbs + selectors (draft `bundle-v0.3-section-verb-scopes.md`). Structural
+   rules, enforced with
+   `-32046 ethos_keyring_forbidden`: `keyring_sha` MUST change ONLY in an owner
+   publish; an ExtraWraps entry MUST change only if the corresponding op on that
+   `section_id` is authorized; `shard_count` MUST be stable outside an owner
+   publish unless a re-shard is made necessary by an authorized `create`.
+5. **Version regression.** A v0.3 publish on a subject already at v0.4 MUST be
+   refused with `-32045 ethos_spec_version_regression` — `aithos` never
+   regresses (dual-write does not permit a downgrade).
+6. **Persistence.** Objects and blobs are written in parallel; the DDB index row
+   is written LAST (atomicity unchanged from §10.6.3 step 7–8).
+
+The output shape is that of §10.6.3 (`PublishEthosEditionResult`); `gamma_head`
+/ `gamma_count` continue to reflect the edition's gamma anchor.
+
+Migration (§3A.10) is an ordinary owner publish under this envelope: the objects
++ manifest are uploaded, **zero blob** (all bodies carried), `height + 1`.
+
 ### 10.6.4 `aithos.publish_mandate`
 
 Input: `{ mandate: Mandate }` — full §4.2 object, signed by the issuer.
@@ -690,9 +764,13 @@ place of them.
 
 A conformant platform MUST implement:
 
-- §10.5.1, §10.5.2, §10.5.3, §10.5.4, §10.5.5, §10.5.6, §10.5.9, §10.5.10,
-  §10.5.11 (all core read tools);
-- §10.6.2, §10.6.3, §10.6.4, §10.6.5, §10.6.6 (all core write tools);
+- §10.5.1, §10.5.2, §10.5.3, §10.5.4, §10.5.4a, §10.5.5, §10.5.6, §10.5.9,
+  §10.5.10, §10.5.11 (all core read tools, including the v0.4 object-fetch route
+  §10.5.4a);
+- §10.6.2, §10.6.3, §10.6.3a, §10.6.4, §10.6.5, §10.6.6 (all core write tools,
+  including the v0.4 publish envelope §10.6.3a);
+- dual-read of both the v0.3 (`0.3.0`) and v0.4 (`0.4.0`) bundle formats
+  (spec §3A), with the version-regression refusal of §10.6.3a step 5;
 - §10.7 with at least the rate limits listed.
 
 A conformant platform SHOULD implement §10.5.7 (feed), §10.5.8 (search),
@@ -724,6 +802,10 @@ JSON-RPC errors use the standard envelope. Aithos-specific codes live in
 | -32040  | `AITHOS_MANDATE_INVALID`          | Mandate structure, signature, or time window invalid. |
 | -32041  | `AITHOS_MANDATE_REVOKED`          | Mandate presented is revoked. |
 | -32042  | `AITHOS_INSUFFICIENT_SCOPE`       | Presented mandate does not cover the requested operation. |
+| -32043  | `ethos_object_missing`            | A sha referenced by a v0.4 manifest is neither uploaded nor carried (§10.6.3a, §3A.6). |
+| -32044  | `ethos_object_hash_mismatch`      | An uploaded v0.4 object/blob's content does not match its announced sha (§10.6.3a). |
+| -32045  | `ethos_spec_version_regression`   | A v0.3 publish on a subject already migrated to v0.4 (§10.6.3a). |
+| -32046  | `ethos_keyring_forbidden`         | `keyring_sha` or `shard_count` changed outside an owner publish (§10.6.3a). |
 | -32050  | `AITHOS_RATE_LIMITED`             | Caller exceeded the platform rate limit. |
 | -32051  | `AITHOS_BUDGET_TRIPPED`           | Platform-wide kill switch active; writes are paused. |
 

@@ -1,13 +1,14 @@
 # 3 · Bundle — the `.ethos` container
 
-> **Format status (protocol-core 0.11.3).** The **current on-disk format is
-> v0.4** (manifest marker `aithos: "0.4.0"`): an incremental content-addressed
-> manifest (~3 KB, O(1)) that references immutable zone objects — ZoneShard /
-> KeyRing / ExtraWraps — by sha, one 32-byte **zone key** per encrypted zone
-> sealed once per recipient, and per-section DEKs sealed symmetrically under the
-> zone key (`enc_dek`). v0.4 is specified normatively by Part II of
-> [`bundle-v0.4-incremental-manifest-and-zone-keys.md`](./drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md),
-> whose `§N-x` sections supersede the corresponding `§3.x` below.
+> **Format status (protocol-core 0.11.3).** The **current, normative on-disk
+> format is v0.4** (manifest marker `aithos: "0.4.0"`), specified in the body of
+> this chapter by **§3A (v0.4 — incremental manifest & zone keys)**. It is an
+> incremental content-addressed manifest (~3 KB, O(1)) that references immutable
+> zone objects — ZoneShard / KeyRing / ExtraWraps — by sha, with one 32-byte
+> **zone key** per encrypted zone sealed once per recipient, and per-section
+> DEKs sealed symmetrically under the zone key (`enc_dek`). §3A is the promotion
+> into this chapter of Part II (§N1–N13) of
+> [`bundle-v0.4-incremental-manifest-and-zone-keys.md`](./drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md).
 >
 > **v0.3 (per-section)** — split each zone into per-section blobs
 > (`public/<id>.md` plaintext, `circle|self/<id>.enc` ciphertext under a fresh
@@ -17,15 +18,16 @@
 > and [`bundle-v0.3-section-level-mandates.md`](./drafts/bundle-v0.3-section-level-mandates.md).
 > However, a subject once migrated to v0.4 **refuses any subsequent v0.3
 > publish** — `aithos` never regresses (server error
-> `-32045 ethos_spec_version_regression`, draft §N6/§N12). The **v0.2 monolithic
-> format described in the rest of this chapter remains readable and verifiable**
-> for legacy inspection, but authoring v0.2 is a **hard error on the SDK side**.
-> Runtimes detect the format from the manifest `aithos` marker
-> (`0.2.x` / `0.3.0` / `0.4.0`).
+> `-32045 ethos_spec_version_regression`, §3A.10 / §10.9). The **v0.2 monolithic
+> format**, described in the **historical annex §3.2–§3.10** at the end of this
+> chapter, **remains readable and verifiable** for legacy inspection, but
+> authoring v0.2 is a **hard error on the SDK side**. Runtimes detect the format
+> from the manifest `aithos` marker (`0.2.x` / `0.3.0` / `0.4.0`).
 >
-> The bulk of this chapter still describes the v0.2/v0.3 model; the per-`§3.x`
-> banners below flag where v0.4 supersedes it. Full normative promotion of
-> Part II into §3′ is tracked separately.
+> **Chapter layout.** §3.1 is common (the ZIP container rationale). **§3A is the
+> normative body** (v0.4). **§3.2–§3.10 are the historical annex** (v0.2/v0.3),
+> retained verbatim for dual-read and legacy verification; per-`§3.x` banners in
+> the annex point back to the §3A section that supersedes them.
 
 ## 3.1 Overview
 
@@ -33,12 +35,311 @@ A bundle is a **ZIP archive** (PKZIP) with the `.ethos` extension. It carries on
 
 The choice of ZIP is deliberate. ZIP is understood everywhere, has good tooling, preserves file structure, and is the container underlying `.docx`, `.apk`, `.epub`, and countless other established formats. A curious reader can always `unzip` a bundle to see what's inside.
 
-## 3.2 Layout
+> **v0.4 note.** Under v0.4 the container carries content-addressed **objects**
+> (§3A.1) rather than whole-zone files: the ZIP (or the platform object store,
+> §10.3) holds the signed manifest, the immutable zone objects
+> (ZoneShard / KeyRing / ExtraWraps) under `objects/{sha}`, the per-section
+> blobs under their own sha, and `did.json`. The whole-zone `circle.md.enc` /
+> `self.md.enc` layout of §3.2 is v0.2 and is retained only in the annex.
+
+## 3A · v0.4 — incremental manifest & zone keys (NORMATIVE)
+
+This section is the normative on-disk model for the current format
+(`aithos: "0.4.0"`). It supersedes the corresponding parts of the historical
+annex §3.2–§3.6. Everything not redefined here is inherited unchanged from the
+v0.3 drafts (per-section encryption, section-level mandates, section verb
+scopes): the §11 envelopes, the edition chain (§3A.5), the content-addressed
+blobs, the wrap construction (§3A.4.3 / §3.6), the scope grammar, and the
+`did.json` / revocation-epoch model.
+
+Three coupled changes define v0.4:
+
+1. The **manifest becomes O(1)**: it no longer carries the zone descriptors, only
+   content-addressed references to zone objects. Only the manifest is signed
+   (JCS, as before); the integrity of everything else follows from the sha it
+   references (recursively).
+2. The **wraps leave the manifest** (and every anonymously-served object): they
+   live in objects served only over the authenticated channel.
+3. A **per-zone master key** is encrypted: a zone-scoped mandate receives ONE
+   wrap (the zone key), not one per section. Per-section DEKs remain, sealed
+   symmetrically under the zone key.
+
+### 3A.1 Content-addressed objects
+
+An **object** is a JSON document canonicalized with **JCS (RFC 8785)**; its
+identifier is `sha256(canonical_bytes)` in lowercase hex. Objects are stored at
+`ethos/{did}/objects/{sha}` — a namespace distinct from blobs, with its own ACL
+and GC. Objects are immutable; any "modification" is a new object referenced by
+the next manifest. Every object carries `{"object": "<type>", "v": 1, …}` as a
+discriminant.
+
+There are three object types: `zone_shard` (§3A.2), `keyring` and `extra_wraps`
+(§3A.4). Blobs (the section bodies) are content-addressed as in v0.3 and are
+carried by sha across editions with zero re-upload.
+
+### 3A.2 ZoneShard
+
+A ZoneShard holds `1/N` of a zone's index, partitioned by `section_id`:
+
+```jsonc
+{ "object": "zone_shard", "v": 1,
+  "zone": "circle",
+  "entries": [ {
+      "section_id": "…",
+      "title": "…",            // public/circle: cleartext (v0.3 spec unchanged)
+      "tags": ["…"],           // optional, cleartext where title is cleartext
+      "title_cipher": { "n": "...", "ct": "..." },  // self: AEAD(DEK) — see §3A.2.1
+      "blob_sha": "…", "sha256_of_plaintext": "…", "gamma_ref": "…",
+      "n": "…",                // body nonce (REQUIRED circle/self, absent public) —
+                               // v0.3 carried it in cipher.nonce; here blobs stay
+                               // bit-identical across migration (carried by sha)
+      "approx_size_bytes": 1234,                        // P3 hint (optional, zero-cost)
+      "enc_dek": { "kid": "zk…", "n": "…", "c": "…" }   // absent ⇢ see §3A.9.3
+  } ] }
+```
+
+Rules:
+
+- `entries` MUST be sorted by `section_id` (bytewise) — this determinism is
+  what makes the shard sha reproducible.
+- **Sharding.** `shard_count = next_pow2(ceil(n / 128))` bounded to `[1, 64]`,
+  recomputed at each edition from the zone's TOTAL section count.
+  `shard_index = u32be(sha256(section_id)[0..4]) mod shard_count`. A change of
+  `shard_count` (a threshold crossing) rewrites all shards of the zone (bodies
+  untouched); it is rare and amortized, and the power-of-two step avoids
+  yo-yoing.
+- `public`: `entries` carry neither `enc_dek` nor `title_cipher` (blobs are
+  cleartext).
+- `self`: `title`/`tags` are ABSENT and `title_cipher` is REQUIRED — see §3A.2.1.
+
+Editing one section rewrites **its** shard only (plus the manifest, and the
+blob when the body changed).
+
+#### 3A.2.1 `title_cipher` (self)
+
+For `self`, the title index is sealed under the section DEK:
+
+```
+title_cipher = XChaCha20-Poly1305(DEK, n, jcs({title, tags?}))
+AAD          = "aithos-title-v2\0" ‖ subject_did ‖ "\0" ‖ section_id
+```
+
+This is v2 (sealed under the section DEK, not per-recipient as v0.3 sealed the
+title): whoever can open the body can read the title, with the same recipients
+by construction — the v0.3 disclosure contract is preserved and simplified.
+
+### 3A.3 Zone key & `enc_dek`
+
+- **Zone key.** 32 random bytes, identified by `kid = "zk" ‖ 16 random hex`.
+  One per encrypted zone (`circle`, `self`).
+- **`enc_dek`.** The per-section DEK is sealed symmetrically under the zone key:
+  ```
+  enc_dek = XChaCha20-Poly1305(zone_key, n, DEK)
+  AAD     = "aithos-dek-v1\0" ‖ subject_did ‖ "\0" ‖ zone ‖ "\0" ‖ section_id ‖ "\0" ‖ kid
+  ```
+  The section DEK is still the key that encrypts the blob (and `title_cipher` in
+  `self`) — so v0.3 blobs are portable as-is.
+- A zone has ONE current `kid`. After a rotation all entries carry the new
+  `kid` (rewriting the shards is part of the rotation edition — a manifest MUST
+  NOT reference two `kid`s for the same zone).
+
+### 3A.4 KeyRing & ExtraWraps (authenticated channel only)
+
+```jsonc
+{ "object": "keyring", "v": 1, "zone": "circle", "kid": "zk…",
+  "wraps": [ { "recipient": "<v0.3 label, unchanged>",
+               "wrap": { /* §3.6 over jcs({kid, zone_key}) */ } } ] }
+
+{ "object": "extra_wraps", "v": 1, "zone": "circle",
+  "entries": [ { "section_id": "…",
+                 "wraps": [ { "recipient": "…", "wrap": { /* §3.6 over DEK — IDENTICAL to v0.3 */ } } ] } ] }
+```
+
+- `recipient` uses the v0.3 label format (`granteeId#pubkeyMultibase` |
+  `did#<zone>-kex`).
+- The owner (`did#<zone>-kex`) MUST ALWAYS appear in the KeyRing.
+- ExtraWraps' `wrap`s are bit-for-bit the v0.3 format (migration is a copy).
+- `entries` and `wraps` MUST be sorted (by `section_id`, then `recipient`) for
+  determinism.
+
+A **zone-scoped** mandate gets a single wrap of the **zone key** in the KeyRing
+and thereby opens every section of the zone. **Per-section** grants (`#id=` /
+`#prefix=` / `#tag=`) do NOT receive the zone key; they go through ExtraWraps
+(per-section DEK wraps). The KeyRing is normally tiny (recipients × ~120 bytes);
+ExtraWraps is normally empty.
+
+#### 3A.4.3 Wrap construction
+
+The wrap construction is unchanged from §3.6 (X25519-HKDF-SHA256-AEAD). In v0.4
+it is applied to the **zone key** in the KeyRing (over `jcs({kid, zone_key})`)
+and, unchanged, to the **per-section DEK** in ExtraWraps. See §3.6 for the full
+procedure.
+
+### 3A.5 Manifest v0.4
+
+```jsonc
+{ "aithos": "0.4.0", "bundle_id": "…", "subject_did": "…",
+  "subject_handle": "…", "display_name": "…",
+  "edition": { "version": "…", "created_at": "…", "supersedes": null,
+               "prev_hash": "…", "height": 107 },
+  "zones": {
+    "public": { "n": 3,   "shard_count": 1, "shard_shas": ["…"] },
+    "circle": { "n": 209, "shard_count": 2, "shard_shas": ["…","…"],
+                 "keyring_sha": "…", "extrawraps_sha": "…" },
+    "self":   { "n": 12,  "shard_count": 1, "shard_shas": ["…"],
+                 "keyring_sha": "…" } },
+  "integrity": { "sha256_of_did_json": "…",
+                  "manifest_signature": { /* §3.8 form, unchanged: owner #public or delegate+authorized_by, JCS with blank value */ } } }
+```
+
+- `shard_shas` lists the shard object shas for the zone, ordered by
+  `shard_index`.
+- `keyring_sha` is REQUIRED for encrypted zones (`circle`, `self`).
+- `extrawraps_sha` is OPTIONAL — absent iff the zone has no ExtraWraps entry.
+- `edition.prev_hash` / `edition.height` are the edition chain, unchanged from
+  §3.3.3 (sha of the previous canonical manifest; genesis `prev_hash: null`,
+  `height: 1`).
+- The signature covers ONLY this manifest document; the integrity of the
+  objects and blobs follows from the sha it references (recursively). The
+  `integrity` envelope (`sha256_of_did_json`, `manifest_signature`) is the same
+  as §3.8.
+
+### 3A.6 Publish (extension of the §11 envelope)
+
+`aithos.publish_ethos_edition` (§10.6.3a) accepts, in v0.4:
+
+```
+params = { manifest, objects: { "<sha>": b64, … }, blobs: { "<sha>": b64, … } }
+```
+
+The server validation order is normative and specified in §10.6.3a. In outline:
+envelope + manifest signature + `height`/`prev_hash` + `sha256_of_did_json`
+(unchanged); object/blob **integrity** (every key equals the real sha256 of its
+content, every manifest-referenced sha is uploaded or carried by induction from
+the previous edition — the analogue of `carriedShaSet`); **body carry** (for
+each shard new to this edition, each `entries[].blob_sha` is uploaded or
+carried); **delegated authorization** by diff of the changed shards; then
+persistence with the DDB row written last (atomicity unchanged).
+
+Dual-write: the server keeps accepting v0.3 publishes, but a subject already
+migrated to v0.4 that attempts a later v0.3 publish is refused —
+`-32045 ethos_spec_version_regression` (`aithos` never regresses; §3A.10,
+§10.9).
+
+### 3A.7 Reads
+
+- `aithos.get_ethos_manifest` returns the manifest as stored (`0.3.0` or
+  `0.4.0`).
+- `aithos.get_ethos_objects` (§10.5.4a) batch-fetches objects (≤64 shas) and
+  reports `missing[]`. ACL by object type: `zone_shard` follows the manifest
+  ACL (anonymous readers admitted — a shard exposes no recipient label);
+  `keyring` and `extra_wraps` require read-auth (owner or an active delegate),
+  exactly as `circle`/`self` bodies. `missing` covers *absent-or-forbidden*
+  alike — no authorization oracle.
+- Blobs are read with `aithos.get_ethos_section` / `get_ethos_sections`,
+  unchanged.
+
+### 3A.8 Read algorithm (informative, expected of clients)
+
+Owner/delegate: manifest → the zone's shards (one `get_ethos_objects` batch) →
+`keyring` (authenticated) → unwrap the zone key (session cache keyed by `kid`) →
+`enc_dek` → DEK → blob. Without a zone key (a per-section grant): use
+ExtraWraps. `readable(entry)` = (zone key held ∧ `enc_dek` present) ∨ (an
+ExtraWraps entry under my label) — computable without touching bodies, exactly
+as v0.3. Anonymous: full `public`; `circle` titles/ids; `self` ids only. A
+delegate without access sees the same surfaces as an anonymous reader (v0.3
+parity preserved).
+
+### 3A.9 Write algorithms (normative)
+
+1. **Edit / add / delete (owner).** Rewrite the touched shard(s) (+ blob),
+   manifest, publish. When editing a section the owner MUST refresh its
+   `enc_dek` under the current `kid` and MUST prune from that section's
+   ExtraWraps entry the labels of dead mandates (the v0.3 auto-cleanup, now per
+   section AND per object).
+2. **Edit (zone delegate).** The delegate holds the zone key → new DEK, blob,
+   `enc_dek` under the current `kid`, shard, manifest. NO grant resolution
+   (no `list`/`get_mandate` crawl) — the zone key already covers zone
+   delegates, and existing ExtraWraps are carried as-is (additive doctrine).
+3. **Create (delegate WITHOUT the zone key)** (a `#prefix=` fence / append):
+   generate the DEK, write the entry WITHOUT `enc_dek`, and set ExtraWraps to
+   `{author, owner}` (the v0.3 "sealed to both" contract). The next owner edit
+   of that section (or a `sealGrant`) endows it with an `enc_dek` — the
+   "resync at the edition" rule is unchanged.
+4. **`sealGrant` (owner).** Zone scope → one wrap added to the KeyRing (**O(1)**);
+   per-section scope → DEK wraps into ExtraWraps for the covered sections (the
+   owner unwraps the DEKs via its own `enc_dek` — no body read).
+5. **`pruneWraps` (owner).** Remove the labels of revoked/expired mandates from
+   the KeyRing and ExtraWraps. Pure metadata, v0.3 semantics unchanged.
+6. **`reseal({mode:"rotate"})` (owner).** New zone key (new `kid`); the KeyRing
+   is re-sealed to the still-active grants + owner; EVERY entry's `enc_dek` is
+   re-sealed symmetrically under the new zone key; shards rewritten; **bodies
+   untouched, no blob re-encrypted**. This cuts the crypto path for future
+   editions; real access denial is served by the server gate (`circle`/`self`
+   bodies never leave the authenticated channel).
+7. **`reseal({mode:"rotate-deep"})` (owner).** `rotate` + fresh DEKs + bodies
+   re-encrypted and re-uploaded (+ `self` `title_cipher`) — the strong
+   cryptographic erasure, for "this content must no longer exist for anyone."
+
+### 3A.10 Migration v0.3 → v0.4 (owner publish, one edition)
+
+1. Read the v0.3 manifest; for each encrypted section, unwrap ITS owner wrap →
+   DEK (local, no body read).
+2. Generate the zone keys; build shards (fields carried as-is, `blob_sha`
+   carried, `enc_dek` sealed), the KeyRing (owner + ACTIVE zone-scoped mandates
+   — the kex pubkey is extracted from the v0.3 label), ExtraWraps (v0.3 wraps
+   copied bit-for-bit for active per-section mandates; dead ones pruned).
+3. Publish `aithos: "0.4.0"`, `height + 1`: the uploads are objects + manifest,
+   **zero blob**. The server validates the full carry via `carriedShaSet(prev)`.
+4. A delegate NEVER initiates the migration: on a v0.3 subject a delegate keeps
+   writing v0.3. Mandate bundles are unchanged and valid on both sides. The
+   server accepts v0.3 publishes without a time limit for now.
+
+Bundles of mandate, `did.json`, the revocation epoch and the §11 envelopes are
+**unchanged** across the migration.
+
+### 3A.11 GC
+
+Objects join blobs in the offline GC scope: alive = referenced by a retained
+edition. This is an extension of the existing runbook (`RUNBOOK-MANDATE-GC`) —
+append-only storage plus offline GC, no new primitive.
+
+### 3A.12 New errors (v0.4)
+
+| Code    | Name                              | When |
+|---------|-----------------------------------|------|
+| -32043  | `ethos_object_missing`            | A sha referenced by the manifest is neither uploaded nor carried. |
+| -32044  | `ethos_object_hash_mismatch`      | An uploaded object/blob's content does not match its announced sha. |
+| -32045  | `ethos_spec_version_regression`   | A v0.3 publish on a subject already migrated to v0.4. |
+| -32046  | `ethos_keyring_forbidden`         | `keyring_sha` or `shard_count` changed outside an owner publish. |
+
+These are also listed in the platform error table §10.9.
+
+### 3A.13 What v0.4 does NOT change (locked perimeter)
+
+The public API surface (`Ethos` / zones / sections / mandates / `sealGrant` /
+`reseal` / `pruneWraps`), the scope grammar, the §11 envelopes, the edition
+chain (`height` / `prev_hash`), content-addressed blobs, `did.json` + the
+revocation epoch, the "`circle`/`self` bodies never leave the authenticated
+channel" policy, and the anonymous/public semantics are all unchanged. The
+security posture (gate / prune / rotate) is unchanged: the server remains the
+instantaneous guard (mandate verified per request, fresh `did.json` for the
+epoch, ConsistentRead on revocations), and rotation remains the rare, explicit
+cryptographic act.
+
+---
+
+## 3.2 Layout (v0.2 historical annex)
+
+> ⚠ **Historical annex — v0.2/v0.3.** §3.2–§3.10 describe the older whole-zone
+> (v0.2) and per-section (v0.3) models. They are retained verbatim for dual-read
+> and legacy verification. The **normative body is §3A** above. Per-section
+> banners in this annex point to the §3A section that supersedes each part.
 
 > ⚠ **v0.2 historical layout.** The single-file-per-zone layout below is the
 > v0.2 monolithic form. v0.3 splits each zone into per-section blobs, and v0.4
 > stores content-addressed objects under `ethos/{did}/objects/{sha}` referenced
-> from an incremental manifest (draft §N1/§N5). See the format status banner at
+> from an incremental manifest (§3A.1 / §3A.5). See the format status banner at
 > the top of this chapter.
 
 ```
@@ -246,14 +547,13 @@ The `migrated_from` field is informative; it does not establish cryptographic co
 
 ## 3.4 Encryption of circle and self zones
 
-> ⚠ **v0.2/v0.3 historical.** This section describes a **per-zone DEK** wrapped
-> once per recipient in the manifest. The current model is v0.4 (see
-> [`bundle-v0.4`](./drafts/bundle-v0.4-incremental-manifest-and-zone-keys.md)
-> §N2–N4): each encrypted zone has **one 32-byte zone key**; the per-section
-> DEK still encrypts the section body but is itself sealed **symmetrically**
-> under the zone key (`enc_dek`, AAD bound to `section_id`), and the recipient
-> wrap (§3.6) now applies to the **zone key** in the KeyRing rather than to a
-> per-zone or per-section DEK.
+> ⚠ **v0.2/v0.3 historical — superseded by §3A.2–§3A.4.** This section describes
+> a **per-zone DEK** wrapped once per recipient in the manifest. The current
+> model is v0.4 (§3A.2–§3A.4): each encrypted zone has **one 32-byte zone key**;
+> the per-section DEK still encrypts the section body but is itself sealed
+> **symmetrically** under the zone key (`enc_dek`, AAD bound to `section_id`),
+> and the recipient wrap (§3.6) now applies to the **zone key** in the KeyRing
+> rather than to a per-zone or per-section DEK.
 
 Encrypted zones use **XChaCha20-Poly1305-IETF**, per the libsodium construction.
 
@@ -287,13 +587,14 @@ The AEAD additional data MUST be `"aithos-zone-v1\0"` (the ASCII bytes, includin
 
 ## 3.5 Recipients
 
-> ⚠ **v0.2/v0.3 historical.** In v0.4 the recipient list lives in the per-zone
-> **KeyRing** object (`{ zone_key_id, wraps[] }`, draft §N4), served only over
-> the authenticated channel, and each `wrap` seals the **zone key** (not a DEK)
-> once per recipient. A recipient granted a zone-scoped mandate opens **every**
-> section of the zone through that single wrap; per-section (`#id=` / `#prefix=`
-> / `#tag=`) grants instead go through **ExtraWraps** (per-section DEK wraps,
-> bit-for-bit the v0.3 format). See draft §N3/§N4/§N8.
+> ⚠ **v0.2/v0.3 historical — superseded by §3A.4.** In v0.4 the recipient list
+> lives in the per-zone **KeyRing** object (`{ kid, wraps[] }`, §3A.4), served
+> only over the authenticated channel, and each `wrap` seals the **zone key**
+> (not a DEK) once per recipient. A recipient granted a zone-scoped mandate
+> opens **every** section of the zone through that single wrap; per-section
+> (`#id=` / `#prefix=` / `#tag=`) grants instead go through **ExtraWraps**
+> (per-section DEK wraps, bit-for-bit the v0.3 format). See §3A.3 / §3A.4 /
+> §3A.8.
 
 The `wraps` array lists every recipient that can decrypt the zone. Each recipient is identified by a DID URL fragment whose key is X25519.
 
@@ -311,9 +612,9 @@ Authors SHOULD avoid granting recipient status liberally; the more recipients, t
 
 ### 3.5.3 Adding and removing recipients
 
-> ⚠ **Corrected by v0.4.** The paragraph below (v0.2/v0.3) claims that *adding a
-> recipient requires re-encrypting the zone*. **This is no longer true.** In v0.4
-> (draft §N3/§N4/§N8/§N9.4, §4):
+> ⚠ **Corrected by v0.4 — see §3A.9.** The paragraph below (v0.2/v0.3) claims
+> that *adding a recipient requires re-encrypting the zone*. **This is no longer
+> true.** In v0.4 (§3A.3 / §3A.4 / §3A.8 / §3A.9.4 / §3A.9.6):
 > - **Adding a recipient (`sealGrant`, zone scope) is O(1)**: the author adds one
 >   `wrap` of the **zone key** to the KeyRing. No new DEK, no new nonce, no body
 >   re-encryption. (A per-section grant adds a DEK wrap to ExtraWraps, also O(1).)
@@ -330,11 +631,11 @@ Adding a recipient requires re-encrypting the zone (new DEK, new nonce, all wrap
 
 ## 3.6 Key wrapping (X25519-HKDF-SHA256-AEAD)
 
-> ⚠ **Still current, but re-targeted in v0.4.** The wrap construction below is
-> unchanged and remains normative. In v0.4 it is applied to the **zone key**
-> (in the KeyRing, over `jcs({kid, zone_key})`) rather than to a per-zone DEK;
-> per-section DEK wraps in ExtraWraps use this exact same construction,
-> bit-for-bit as in v0.3. See draft §N4.
+> ⚠ **Still current, but re-targeted in v0.4 — see §3A.4.3.** The wrap
+> construction below is unchanged and remains normative. In v0.4 it is applied
+> to the **zone key** (in the KeyRing, over `jcs({kid, zone_key})`) rather than
+> to a per-zone DEK; per-section DEK wraps in ExtraWraps use this exact same
+> construction, bit-for-bit as in v0.3. See §3A.4.
 
 To wrap a DEK for a given recipient:
 
