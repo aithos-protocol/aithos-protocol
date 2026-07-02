@@ -35,7 +35,15 @@ import { RpcError } from "./errors.js";
 const ETHOS_RESOLVER_URL = (process.env.ETHOS_RESOLVER_URL ?? "https://api.aithos.be").replace(/\/$/, "");
 const RESOLVE_TIMEOUT_MS = 3_000;
 const RESOLVE_TTL_MS = 5 * 60_000; // positive cache: a published doc rarely changes
-const RESOLVE_NEG_TTL_MS = 30_000; // negative cache: unpublished / transient failure
+// Negative cache: covers a genuinely-unpublished subject OR a transient miss.
+// Kept SHORT because the root-only synthesis has no #data sphere: caching it too
+// long turns a sub-second propagation lag on a freshly-onboarded v0.4 identity
+// (published did.json not yet readable) into a guaranteed outage window — every
+// #data-signed write returns -32011 "#data not found" until the entry expires.
+// 3s lets a propagation race self-heal on the next write instead of ~30s. A real
+// published doc is served from the 5-min positive cache, so this only affects the
+// unpublished/lagging path. (F2 — first-write -32011 after onboarding.)
+const RESOLVE_NEG_TTL_MS = 3_000;
 
 interface CacheEntry {
   doc: DidDocument | null;
