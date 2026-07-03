@@ -143,7 +143,7 @@ export class AithosAssetsPdsStack extends Stack {
     // `-${env}` keeps dev names byte-identical to the pre-multienv stack
     // (`aithos-assets-pds-dev`), so `cdk diff -c env=dev` is a no-op. ⚠️ PROD:
     // confirm the ACTUAL deployed names (PLAN-MULTIENV Phase 0, host
-    // yfzex613w3) BEFORE any prod synth — renaming forces a replacement.
+    // the live host) BEFORE any prod synth — renaming forces a replacement.
     const sfx = `-${env}`;
     const publicHost = process.env.ASSETS_PUBLIC_HOST ?? `assets.${domain}`;
     const resolverUrl = process.env.ETHOS_RESOLVER_URL ?? `https://api.${domain}`;

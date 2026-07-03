@@ -82,7 +82,7 @@ jobs:
   # Manual diff/deploy for either env. prod is human-gated by the `production`
   # Environment. NOTE: before the FIRST prod deploy, confirm the prod stack id
   # in bin/app.ts matches the already-deployed prod stack (PLAN-MULTIENV Phase 0,
-  # hosts slpknok0md / yfzex613w3) — a new id = a new execute-api = outage.
+  # the live dev/prod hosts) — a new id = a new execute-api = outage.
   dispatch:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
