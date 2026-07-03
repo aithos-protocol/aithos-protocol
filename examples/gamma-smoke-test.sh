@@ -23,7 +23,7 @@ set -euo pipefail
 
 AITHOS_HOME="${AITHOS_HOME:-/tmp/aithos-gamma-smoke}"
 CLI="${CLI:-node $(pwd)/packages/cli/dist/index.js}"
-HANDLE="${HANDLE:-mathieu}"
+HANDLE="${HANDLE:-alice}"
 
 export AITHOS_HOME
 
@@ -34,7 +34,7 @@ say "Reset $AITHOS_HOME"
 rm -rf "$AITHOS_HOME"
 
 say "1. init identity (creates the ethos layout too)"
-$CLI init --handle "$HANDLE" --display-name "Mathieu Colla" >/dev/null
+$CLI init --handle "$HANDLE" --display-name "Alice Example" >/dev/null
 
 say "2. gamma show --head on an empty identity"
 # Nothing has been written yet — expect a '(none)' head and count=0.

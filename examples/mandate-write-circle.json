@@ -5,8 +5,8 @@
   "issuer": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9",
   "issued_by_key": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9#circle",
   "grantee": {
-    "id": "urn:aithos:agent:phone@pixel",
-    "label": "Mathieu's phone (Pixel 8)",
+    "id": "urn:aithos:agent:phone@alice-phone",
+    "label": "Alice's phone",
     "pubkey": "z6MkvDELEGATEkeyEd25519Multibase0000000000000000000000"
   },
   "actor_sphere": "circle",

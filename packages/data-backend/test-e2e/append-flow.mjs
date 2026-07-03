@@ -37,8 +37,8 @@ import { canonicalize } from "@aithos/protocol-core/canonical";
 
 ed.etc.sha512Sync = (...messages) => sha512(ed.etc.concatBytes(...messages));
 
-const API_URL =
-  process.env.PDS_API_URL ?? "https://slpknok0md.execute-api.eu-west-3.amazonaws.com";
+const API_URL = process.env.PDS_API_URL;
+if (!API_URL) throw new Error("Set PDS_API_URL to a dev PDS endpoint");
 
 function assert(cond, msg) {
   if (!cond) {

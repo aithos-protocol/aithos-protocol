@@ -12,7 +12,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import AdmZip from "adm-zip";
 
 import {
@@ -121,15 +121,31 @@ export function runEthosUnpack(opts: EthosUnpackOpts): void {
   // Reject forbidden entries (spec §3.2.4). Plaintext markdown is allowed only
   // for the public zone: the v0.2 monolithic `public.md`, or v0.3 per-section
   // `public/<id>.md`. Any other `.md` (a leaked circle/self body) is rejected.
+  //
+  // Security: bundles are explicitly designed to be imported from third
+  // parties, so every entry name is untrusted. Reject absolute paths,
+  // backslashes (Windows separators in a foreign bundle) and any traversal
+  // (`..`) BEFORE any filesystem write, then re-verify containment of the
+  // resolved target (zip-slip, CWE-22).
+  const outRoot = resolve(opts.out);
   for (const e of entries) {
     const n = e.entryName;
     if (n.endsWith(".md") && n !== "public.md" && !n.startsWith("public/")) {
       throw new Error(`Forbidden plaintext zone file in bundle: ${n}`);
     }
+    if (isAbsolute(n) || n.includes("\\") || /^[A-Za-z]:/.test(n)) {
+      throw new Error(`Unsafe entry path in bundle (absolute or backslash): ${n}`);
+    }
+    if (n.split("/").includes("..")) {
+      throw new Error(`Unsafe entry path in bundle (traversal): ${n}`);
+    }
   }
 
   for (const e of entries) {
-    const outPath = join(opts.out, e.entryName);
+    const outPath = resolve(outRoot, e.entryName);
+    if (outPath !== outRoot && !outPath.startsWith(outRoot + sep)) {
+      throw new Error(`Entry escapes extraction root: ${e.entryName}`);
+    }
     if (e.isDirectory) {
       mkdirSync(outPath, { recursive: true, mode: 0o700 });
       continue;

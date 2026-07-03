@@ -30,7 +30,7 @@
 import { Command } from "commander";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -56,13 +56,30 @@ const nodeIo: HostIo = {
   resolvePath: (p) => path.resolve(p),
 };
 
-/** The node host's createServer options: filesystem storage + host io. */
-function nodeServerOptions(autoCommit?: boolean, pack?: MandatePack): CreateServerOptions {
+/**
+ * The node host's createServer options: filesystem storage + (optional) host io.
+ *
+ * Security: `io` grants the server the ability to read arbitrary files named in
+ * tool arguments (path-form `mandate` / `agent_key`, which contain `seed_hex`).
+ * That is acceptable for the **stdio** transport, where the caller *is* the
+ * local user who already owns the filesystem. It is NOT acceptable for the
+ * **http** transport, where any bearer-authenticated (possibly remote) client
+ * could pass `agent_key: "/…/identities/<victim>/self.sealed.json"` and have the
+ * server read it back (LFI, CWE-22). HTTP callers therefore get NO `io`:
+ * id-form mandates still resolve through the storage backend, and path-form
+ * mandates / agent keyfiles fail closed with a clear "resolves by id only"
+ * error (see auth.ts). Pass `io` only for stdio.
+ */
+function nodeServerOptions(
+  autoCommit?: boolean,
+  pack?: MandatePack,
+  io?: HostIo,
+): CreateServerOptions {
   return {
     storage: new FilesystemStorage(),
     home: AITHOS_HOME,
     manifestPath: ethosManifestPath,
-    io: nodeIo,
+    ...(io ? { io } : {}),
     renderZone: renderZoneMarkdown,
     ...(autoCommit || pack?.options?.auto_commit ? { autoCommit: true } : {}),
     // P4.4 — mandate pack (§6.2.1): scope-filtered exposure + the pack's
@@ -184,7 +201,8 @@ async function runStdio(
   registry?: McpRegistry,
   auditLog?: string,
 ): Promise<void> {
-  const server = createServer(nodeServerOptions(autoCommit, pack));
+  // stdio: caller is the local user, so host file access (io) is safe.
+  const server = createServer(nodeServerOptions(autoCommit, pack, nodeIo));
 
   // Self-wired gateway: federate downstream MCPs before connecting the
   // transport (tools must be registered up front). Only when a pack is present
@@ -240,11 +258,23 @@ async function runHttp(opts: CliOpts, pack?: MandatePack): Promise<void> {
   }
   const sessions = new Map<string, Session>();
 
+  // Precompute the expected token bytes once for constant-time comparison.
+  const expectedToken = Buffer.from(token, "utf8");
   const authorize = (req: http.IncomingMessage): boolean => {
     const h = req.headers["authorization"];
     if (typeof h !== "string") return false;
     const [scheme, value] = h.split(" ", 2);
-    return scheme?.toLowerCase() === "bearer" && value === token;
+    if (scheme?.toLowerCase() !== "bearer" || typeof value !== "string") {
+      return false;
+    }
+    // Constant-time compare to avoid leaking the shared secret via a timing
+    // side channel. timingSafeEqual requires equal-length buffers, so gate on
+    // length first (the length of a rejected guess is not itself sensitive).
+    const provided = Buffer.from(value, "utf8");
+    return (
+      provided.length === expectedToken.length &&
+      timingSafeEqual(provided, expectedToken)
+    );
   };
 
   const httpServer = http.createServer(async (req, res) => {

@@ -11,8 +11,8 @@ import {
 } from "@aithos/protocol-core/envelope";
 import { randomBytes } from "node:crypto";
 
-const API_URL =
-  process.env.PDS_API_URL ?? "https://slpknok0md.execute-api.eu-west-3.amazonaws.com";
+const API_URL = process.env.PDS_API_URL;
+if (!API_URL) throw new Error("Set PDS_API_URL to a dev PDS endpoint");
 
 // ─── 1. Generate a did:key locally ───────────────────────────────────────────
 const seed = new Uint8Array(randomBytes(32));

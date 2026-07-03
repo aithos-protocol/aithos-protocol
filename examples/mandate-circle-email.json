@@ -5,8 +5,8 @@
   "issuer": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9",
   "issued_by_key": "did:aithos:z6MkrJVnaZkeFzdQyMZu1cmd3Mh1jGhxqfekzMC8TdZeTwj9#circle",
   "grantee": {
-    "id": "urn:aithos:agent:gmail-agent@macbook-mathieu",
-    "label": "Personal Gmail agent (local install on macbook-mathieu)"
+    "id": "urn:aithos:agent:gmail-agent@alice-laptop",
+    "label": "Personal Gmail agent (local install on alice-laptop)"
   },
   "actor_sphere": "circle",
   "scopes": ["ethos.read.public", "ethos.read.circle", "email.reply"],
