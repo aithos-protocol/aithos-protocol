@@ -106,11 +106,12 @@ The editor stays useful as the simplest possible way to author a bundle by hand 
 
 ## Relationship to `aithos/` (the product repo)
 
-The repository at `mnt/aithos/` is the Aithos product workspace — it holds the SaaS backend (`apps/mvp-backend`), the SaaS frontend (`apps/mvp-frontend`), a Node SDK, a Python SDK, and an earlier draft of the spec. This `Aithos-protocol` repository supersedes that draft and becomes the canonical specification source; the product repo will align to this spec over the next editions.
+An earlier draft of the spec lived in the (private) Aithos product workspace. This `Aithos-protocol` repository supersedes that draft and is the canonical specification source; the product repositories align to this spec over the next editions.
 
 ## License
 
-**Software** in `packages/protocol-core`, `packages/cli`, and `packages/mcp` is under the
+**Software** in all `packages/*` (protocol-core, cli, mcp, agent-tools, assets-crypto,
+assets-backend, data-crypto, data-backend, pds-auth) is under the
 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [LICENSE](./LICENSE)
 and each package’s `LICENSE` file.
 
