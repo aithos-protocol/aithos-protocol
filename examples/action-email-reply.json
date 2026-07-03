@@ -5,7 +5,7 @@
   "mandate_id": "mandate_01JG4X7RABCDXYZ123456789",
   "issued_at": "2026-04-19T14:22:11Z",
   "actor": {
-    "id": "urn:aithos:agent:gmail-agent@macbook-mathieu",
+    "id": "urn:aithos:agent:gmail-agent@alice-laptop",
     "pubkey": "z6MkAGENTKEYEd25519Multibase0000000000000000000000000"
   },
   "action": {

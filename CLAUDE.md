@@ -36,9 +36,9 @@ des primitives, browser-compat. Voir la note de dette technique dans
 `protocol-client/CLAUDE.md` pour la migration future vers un module
 unifié.
 
-Le PDS dev est déployé sur le compte AWS `446503126111` en `eu-west-3` :
+Le PDS dev est déployé sur un compte AWS de dev (voir docs/internal/, non publié) :
 - Stack `AithosDataPdsDev`
-- API `https://slpknok0md.execute-api.eu-west-3.amazonaws.com`
+- API : endpoint API Gateway dev (URL dans la config d'environnement locale)
 - 4 tables DDB (`aithos-data-pds-dev`, `…-nonces-dev`, `…-revocations-dev`,
   `…-gamma-dev`)
 - `cdk destroy` depuis `packages/data-backend/` pour tout démanteler.

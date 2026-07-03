@@ -82,7 +82,7 @@ export class AithosDataPdsStack extends Stack {
     // Resource-name suffix. `-${env}` keeps dev names byte-identical to the
     // pre-multienv stack (`aithos-data-pds-dev`), so `cdk diff -c env=dev` is a
     // no-op. ⚠️ PROD: confirm the ACTUAL deployed resource + stack names
-    // (PLAN-MULTIENV Phase 0, host slpknok0md) BEFORE any prod synth — a name
+    // (see docs/internal PLAN-MULTIENV Phase 0) BEFORE any prod synth — a name
     // change forces a replacement (new execute-api = outage). Do not assume.
     const sfx = `-${env}`;
     // Public vanity host + Ethos resolver, derived from the env domain.
