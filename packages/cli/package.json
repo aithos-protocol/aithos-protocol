@@ -1,6 +1,6 @@
 {
   "name": "aithos",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Reference CLI for the Aithos protocol: create an Aithos identity, grant and revoke mandates, sign actions, author and publish ethos bundles.",
   "license": "Apache-2.0",
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",

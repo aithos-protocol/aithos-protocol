@@ -5,6 +5,22 @@ All notable changes to `@aithos/mcp` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] — 2026-07-03
+
+Security patch release.
+
+### Fixed
+- **SECURITY — LFI via path-form tool arguments over HTTP (CWE-22).** The HTTP
+  transport no longer receives host file access (`io`). A bearer-authenticated
+  (possibly remote) client could previously pass a path-form `agent_key` /
+  `mandate` and have the server read arbitrary local files back. HTTP now
+  resolves mandates by id only and fails closed on path form; stdio (where the
+  caller is the local user) keeps host file access.
+- **SECURITY — timing side channel in HTTP bearer auth.** Token comparison now
+  uses `crypto.timingSafeEqual` (length-gated).
+- The `.ts` regression suites (LFI fail-closed contract) now run in `npm test`
+  via tsx alongside the `.mjs` suites.
+
 ## [0.14.0] — 2026-06-26
 
 Self-wired MCP gateway + retirement of the provisional Linkedone broker.

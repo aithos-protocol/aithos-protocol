@@ -5,6 +5,18 @@ All notable changes to the Aithos reference CLI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-07-03
+
+Security patch release.
+
+### Fixed
+- **SECURITY — zip-slip (CWE-22) in `ethos unpack`.** Every bundle entry name
+  is now validated before any filesystem write (absolute paths, backslashes,
+  Windows drive prefixes and `..` traversal are rejected), and the resolved
+  target is re-checked to stay under the output directory. `.ethos` bundles
+  are explicitly designed to be imported from third parties, so entry names
+  are untrusted. Regression tests cover malicious and legitimate bundles.
+
 ## [0.8.0] — 2026-06-06
 
 ### Changed
