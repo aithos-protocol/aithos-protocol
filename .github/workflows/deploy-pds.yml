@@ -15,7 +15,7 @@ name: deploy-pds
 # pointing at an IAM role the GitHub OIDC provider can assume in the target
 # account, with CDK-deploy permissions (CloudFormation + the bootstrap roles, or
 # the same permission set as the provider's AWS_DEPLOY_ROLE_ARN). Trust must
-# allow repo:aithos-protocol/aithos-protocol per environment. See DEPLOY-PDS-CD.md.
+# allow repo:aithos-protocol/aithos-protocol per environment. See docs/internal/DEPLOY-PDS-CD.md (local, untracked).
 
 on:
   push:

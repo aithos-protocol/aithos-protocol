@@ -37,6 +37,7 @@ packages/*/dist/commands/*.removed
 ~$*
 
 # Local-only operational / strategic / outreach material — never commit to the public repo
+docs/internal/
 MIGRATION-APACHE-2.0.md
 marketing/
 aithos_competitive_map.md
