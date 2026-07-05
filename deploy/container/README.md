@@ -33,6 +33,26 @@ The runtime is agent-agnostic. Any agent that can
 runs in the cage. `runtime-claude-code` is the first reference image (Claude
 Code, headless). Swap it for the Agent SDK, a custom loop, or a local model.
 
+## Images
+
+Published to GHCR (primary) by `.github/workflows/container-images.yml` on a
+`container-v*` tag; a manual `workflow_dispatch` can publish an `edge` tag.
+
+```
+ghcr.io/aithos-protocol/gateway
+ghcr.io/aithos-protocol/runtime-claude-code
+```
+
+Bring-your-own-agent: point your agent at `$AITHOS_GATEWAY_URL` and the rest is
+the gateway's affair. Swap the `runtime-*` image for your own; only the gateway
+is ours to trust.
+
+> The CI run **is** the first real Docker build of these images (it runs on
+> GitHub's Docker-capable runners). A green run validates the build; pushes
+> happen only on a tag or an explicit dispatch, so a broken build never
+> publishes. Docker Hub mirroring (`aithosprotocol/*`) activates automatically
+> when `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets are set.
+
 ## Quick start (Docker)
 
 ```bash

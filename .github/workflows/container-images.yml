@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Mathieu Colla
+#
+# Build, test, and publish the Mandated Container Runtime images
+# (PLAN-CONTAINER P3.1). GHCR is primary; Docker Hub is an optional mirror,
+# active only when DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets are set.
+#
+# This workflow IS the first real Docker build of these images — it runs on
+# GitHub's runners (which have Docker), so a green run here is the validation
+# the sandbox could not perform. Images are pushed ONLY on a `container-v*`
+# tag or a manual dispatch; pull requests build-only (no login, no push), so a
+# broken build never publishes.
+name: container-images
+
+on:
+  push:
+    tags: ["container-v*"]
+  pull_request:
+    paths:
+      - "deploy/container/**"
+      - "packages/mcp/**"
+      - ".github/workflows/container-images.yml"
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push images to the registry (else build-only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_PREFIX: ghcr.io/aithos-protocol
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Unit + integration tests (all workspaces)
+        run: npm test
+      - name: Container tests (P0 acceptance + compose lint + harness)
+        run: npm run test:container
+
+  images:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: gateway
+            dockerfile: deploy/container/gateway.Dockerfile
+            context: .
+          - image: runtime-claude-code
+            dockerfile: deploy/container/runtime-claude-code.Dockerfile
+            context: deploy/container
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide whether to push
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "push=${{ inputs.push }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.mode.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub (mirror, optional)
+        id: dockerhub
+        if: steps.mode.outputs.push == 'true' && env.DOCKERHUB_USERNAME != ''
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+            name=docker.io/aithosprotocol/${{ matrix.image }},enable=${{ env.DOCKERHUB_USERNAME != '' }}
+          tags: |
+            type=match,pattern=container-v(.*),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/container-v') }}
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+      - name: Build ${{ matrix.image }} (push=${{ steps.mode.outputs.push }})
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: ${{ steps.mode.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

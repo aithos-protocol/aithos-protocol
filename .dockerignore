@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Keep the Docker build context small and reproducible: install + build happen
+# INSIDE the image, so host node_modules / dist / VCS must not leak in.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.github
+**/.DS_Store
+**/*.log
+
+# never ship secrets or local operational material into an image context
+.claude-env
+**/.claude-env
+.aithos/
+docs/internal/
+deploy/container/run/
+
+# test-only + non-runtime material the gateway image does not need
+**/test
+**/*.test.*
+**/*.xlsx
+*.ethos
+!birth/aithos-birth.ethos

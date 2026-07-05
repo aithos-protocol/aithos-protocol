@@ -7,18 +7,19 @@
 # scope, proxies inference, records gamma.
 #
 # It holds the secrets (mandate pack, sphere keys, downstream credentials); the
-# cage holds none. Build from the monorepo root:
+# cage holds none. Build from the monorepo ROOT (the Dockerfile COPYs the whole
+# workspace so `npm ci` sees every workspace package.json the lockfile expects):
 #   docker build -f deploy/container/gateway.Dockerfile -t ghcr.io/aithos-protocol/gateway .
 
 FROM node:20-bookworm-slim AS build
 WORKDIR /src
-# Copy manifests first for layer caching.
-COPY package.json package-lock.json ./
-COPY packages/protocol-core/package.json packages/protocol-core/
-COPY packages/agent-tools/package.json packages/agent-tools/
-COPY packages/mcp/package.json packages/mcp/
-RUN npm ci --workspaces --include-workspace-root
+# Whole workspace in one shot: npm ci validates root + every packages/*
+# against the lockfile, so all nine workspace package.json files must be
+# present (a partial copy fails with "Missing … from lock file"). A root
+# .dockerignore keeps node_modules/dist/.git out of the context.
 COPY . .
+RUN npm ci --include-workspace-root
+# Only the three packages the gateway actually runs on need building.
 RUN npm run build --workspace=@aithos/agent-tools \
  && npm run build --workspace=@aithos/protocol-core \
  && npm run build --workspace=@aithos/mcp
@@ -26,9 +27,8 @@ RUN npm run build --workspace=@aithos/agent-tools \
 FROM node:20-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-# Copy the built workspace (dist + node_modules) verbatim.
+# Copy the built workspace (dist + installed node_modules) verbatim.
 COPY --from=build /src /app
-# The gateway listens on the cage-facing interface.
 EXPOSE 8787
 # Non-root: the gateway needs no privilege.
 USER node
