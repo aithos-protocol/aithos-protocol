@@ -50,6 +50,10 @@
     "./pack": {
       "types": "./dist/pack.d.ts",
       "default": "./dist/pack.js"
+    },
+    "./http": {
+      "types": "./dist/http.d.ts",
+      "default": "./dist/http.js"
     }
   },
   "files": [

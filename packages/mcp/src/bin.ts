@@ -20,7 +20,9 @@
  *                      (single `POST /mcp` + SSE fallback). Stateful session
  *                      mode by default. Requires `AITHOS_MCP_TOKEN` to be set
  *                      in the environment; clients must send
- *                      `Authorization: Bearer <token>`.
+ *                      `Authorization: Bearer <token>`. The transport itself
+ *                      lives in http.ts (startHttpGateway) so its contract is
+ *                      testable end to end.
  *
  * Usage:
  *   aithos-mcp                                          # stdio
@@ -29,9 +31,6 @@
  */
 import { Command } from "commander";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { randomUUID, timingSafeEqual } from "node:crypto";
-import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -50,6 +49,7 @@ import {
   type McpRegistry,
   type FederationHandle,
 } from "./gateway.js";
+import { startHttpGateway } from "./http.js";
 
 const nodeIo: HostIo = {
   readTextFile: (p) => readFile(p, "utf8"),
@@ -241,8 +241,6 @@ async function runStdio(
 }
 
 async function runHttp(opts: CliOpts, pack?: MandatePack): Promise<void> {
-  const port = Number(opts.port ?? "8787");
-  const host = opts.host ?? "127.0.0.1";
   const token = process.env.AITHOS_MCP_TOKEN;
   if (!token) {
     throw new Error(
@@ -250,137 +248,19 @@ async function runHttp(opts: CliOpts, pack?: MandatePack): Promise<void> {
     );
   }
 
-  // One MCP server instance + one transport *per session*. In stateful mode
-  // we keep them in a map keyed by the session id the transport hands out.
-  interface Session {
-    transport: StreamableHTTPServerTransport;
-    server: Awaited<ReturnType<typeof createServer>>;
-  }
-  const sessions = new Map<string, Session>();
-
-  // Precompute the expected token bytes once for constant-time comparison.
-  const expectedToken = Buffer.from(token, "utf8");
-  const authorize = (req: http.IncomingMessage): boolean => {
-    const h = req.headers["authorization"];
-    if (typeof h !== "string") return false;
-    const [scheme, value] = h.split(" ", 2);
-    if (scheme?.toLowerCase() !== "bearer" || typeof value !== "string") {
-      return false;
-    }
-    // Constant-time compare to avoid leaking the shared secret via a timing
-    // side channel. timingSafeEqual requires equal-length buffers, so gate on
-    // length first (the length of a rejected guess is not itself sensitive).
-    const provided = Buffer.from(value, "utf8");
-    return (
-      provided.length === expectedToken.length &&
-      timingSafeEqual(provided, expectedToken)
-    );
-  };
-
-  const httpServer = http.createServer(async (req, res) => {
-    if (!req.url) {
-      res.statusCode = 400;
-      res.end();
-      return;
-    }
-    // Only expose /mcp for JSON-RPC + SSE. /healthz for liveness.
-    if (req.url === "/healthz") {
-      res.statusCode = 200;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ ok: true, name: "aithos-mcp" }));
-      return;
-    }
-    if (!req.url.startsWith("/mcp")) {
-      res.statusCode = 404;
-      res.end();
-      return;
-    }
-    if (!authorize(req)) {
-      res.statusCode = 401;
-      res.setHeader("www-authenticate", 'Bearer realm="aithos-mcp"');
-      res.end("unauthorized");
-      return;
-    }
-
-    try {
-      const sessionHeader = req.headers["mcp-session-id"];
-      const sessionId =
-        typeof sessionHeader === "string" ? sessionHeader : undefined;
-
-      let session: Session | undefined = sessionId
-        ? sessions.get(sessionId)
-        : undefined;
-
-      // First message on a new session — construct a fresh transport+server.
-      if (!session) {
-        if (opts.stateless) {
-          const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: undefined, // stateless
-          });
-          // A per-request server cannot stage a transaction — force the
-          // per-write auto-commit behaviour in stateless mode.
-          const server = createServer(nodeServerOptions(true, pack));
-          await server.connect(transport);
-          session = { transport, server };
-          // No entry stored; each request is independent.
-        } else {
-          const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => randomUUID(),
-          });
-          const server = createServer(nodeServerOptions(opts.autoCommit === true, pack));
-          transport.onclose = () => {
-            const sid = transport.sessionId;
-            if (sid) sessions.delete(sid);
-          };
-          await server.connect(transport);
-          session = { transport, server };
-          // Defer registration until the transport hands us the session id
-          // (happens during the initialize handshake).
-        }
-      }
-
-      // Pipe the request into the transport. For POST, the transport will
-      // read the body itself; for GET (SSE) it only needs the request/response.
-      await session.transport.handleRequest(req, res);
-
-      // After the first handleRequest the transport assigns its session id;
-      // register it so future requests find the same session.
-      if (!opts.stateless && session.transport.sessionId) {
-        sessions.set(session.transport.sessionId, session);
-      }
-    } catch (err) {
-      if (!res.headersSent) {
-        res.statusCode = 500;
-        res.setHeader("content-type", "application/json");
-        res.end(
-          JSON.stringify({
-            error: (err as Error).message,
-          }),
-        );
-      } else {
-        try {
-          res.end();
-        } catch {
-          /* noop */
-        }
-      }
-    }
-  });
-
-  httpServer.listen(port, host, () => {
-    // eslint-disable-next-line no-console
-    console.log(`aithos-mcp: listening on http://${host}:${port}/mcp`);
+  const handle = await startHttpGateway({
+    host: opts.host ?? "127.0.0.1",
+    port: Number(opts.port ?? "8787"),
+    token,
+    stateless: opts.stateless === true,
+    // A per-request (stateless) server cannot stage a transaction — force the
+    // per-write auto-commit behaviour there. NEVER pass nodeIo here (S1).
+    serverOptions: ({ stateless }) =>
+      nodeServerOptions(stateless ? true : opts.autoCommit === true, pack),
   });
 
   const shutdown = () => {
-    httpServer.close();
-    for (const s of sessions.values()) {
-      try {
-        s.transport.close();
-      } catch {
-        /* noop */
-      }
-    }
+    void handle.close();
   };
   process.on("SIGINT", () => {
     shutdown();
