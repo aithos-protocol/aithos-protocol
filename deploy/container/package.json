@@ -1,0 +1,20 @@
+{
+  "name": "@aithos/container",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Aithos Mandated Container Runtime — reference deployment (gateway cage + harness). SPEC-container-runtime §13.",
+  "license": "Apache-2.0",
+  "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
+  "type": "module",
+  "scripts": {
+    "test": "node --test --import tsx test/*.test.mjs test/*.test.ts",
+    "demo": "bash scripts/demo.sh",
+    "revoke": "bash scripts/revoke.sh"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@noble/ed25519": "^2.0.0",
+    "@noble/hashes": "^1.3.0",
+    "tsx": "^4.11.0"
+  }
+}

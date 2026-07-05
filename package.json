@@ -7,7 +7,8 @@
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "deploy/container"
   ],
   "scripts": {
     "build": "npm run build --workspace=@aithos/agent-tools && npm run build --workspace=@aithos/protocol-core && npm run build --workspace=aithos && npm run build --workspace=@aithos/mcp",

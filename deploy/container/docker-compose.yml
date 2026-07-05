@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Mathieu Colla
+#
+# Reference deployment (SPEC-container-runtime §13, PLAN-CONTAINER P0.3).
+#
+#   the cage  = runtime, on an internal network with NO egress and NO ingress
+#   the pont  = gateway, the ONLY multi-homed component (cage + egress)
+#
+# The invariant the whole design rests on: the runtime can reach the gateway
+# and nothing else. That is enforced by `internal: true` on the `cage` network
+# below — a kernel boundary, not an application allowlist.
+services:
+  gateway:
+    image: ghcr.io/aithos-protocol/gateway:latest
+    build:
+      context: ../..
+      dockerfile: deploy/container/gateway.Dockerfile
+    networks: [cage, egress] # the sole two-legged component
+    environment:
+      AITHOS_MCP_TOKEN: "${AITHOS_MCP_TOKEN:?set a strong shared bearer}"
+      AITHOS_HOME: /run/aithos/home
+      AITHOS_LLM_UPSTREAM: "${AITHOS_LLM_UPSTREAM:-https://api.anthropic.com}"
+    volumes:
+      # Secrets live with the GATEWAY, never in the cage (§13.7.1):
+      - ./run/pack.json:/run/aithos/pack.json:ro
+      - ./run/registry.json:/run/aithos/registry.json:ro
+      # cas 1 — local ethos + mandate store, read-only (§13.10 E4).
+      - ${AITHOS_HOME:-~/.aithos}:/run/aithos/home:ro
+    # The app the agent acts on (e.g. browser-agent, §DESIGN-topologie) is a
+    # downstream on the host — reachable from the gateway leg only.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
+
+  runtime:
+    image: ghcr.io/aithos-protocol/runtime-claude-code:latest
+    build:
+      context: .
+      dockerfile: runtime-claude-code.Dockerfile
+    depends_on: [gateway]
+    networks: [cage] # cage ONLY — no egress path exists
+    # Hardening (§13.4 N3): non-root, read-only rootfs, all caps dropped.
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /home/agent/.cache
+    # Static limits in P0; P1 derives --cpus/--memory from the mandate ceiling.
+    cpus: "1.0"
+    mem_limit: 1g
+    environment:
+      AITHOS_GATEWAY_URL: "http://gateway:8787"
+      AITHOS_MCP_TOKEN: "${AITHOS_MCP_TOKEN}"
+      # Job mode (P0): one mission, then the container exits.
+      AITHOS_MISSION: "${AITHOS_MISSION:-List my dormant contacts and summarise who to re-engage.}"
+      # Harness mode (P1): set AITHOS_HARNESS=1 instead of AITHOS_MISSION.
+      AITHOS_HARNESS: "${AITHOS_HARNESS:-0}"
+    # EXCEPTION (§13.7.2): the owner's personal Claude subscription, RO, for
+    # local runs on the owner's own machine. NEVER for a third-party mandate.
+    # Uncomment to use your subscription instead of a gateway-held API key:
+    # volumes:
+    #   - ~/.claude:/home/agent/.claude:ro
+    restart: "no"
+
+networks:
+  # The security boundary: no egress, no ingress, no DNS to the outside.
+  cage:
+    internal: true
+  # The gateway's outward leg (model API, downstream connectors).
+  egress: {}

@@ -1,0 +1,27 @@
+{
+  "//": "Owner-controlled catalogue of connectable downstreams (SPEC-container-runtime §13.7.3). The registry says what is CONNECTABLE; the mandate sizes WHO may touch it. A tool is exposed to the caged agent iff the mandate carries its scope. Downstream credentials live HERE (with the gateway), never in the cage.",
+  "servers": [
+    {
+      "id": "demo",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["/app/deploy/container/demo/contacts-server.mjs"],
+      "tool_scopes": {
+        "list_contacts": "mcp.demo.read",
+        "get_contact": "mcp.demo.read",
+        "add_contact": "mcp.demo.write"
+      }
+    },
+    {
+      "//": "Example of a first-party HTTP connector holding its own credential (env-injected by the gateway). Grant with scope mcp.mail (whole server) or a per-verb tool_scopes map.",
+      "id": "mail",
+      "transport": "http",
+      "url": "https://connectors.aithos.be/mail/mcp",
+      "bearer_env": "AITHOS_MAIL_BEARER",
+      "tool_scopes": {
+        "list_threads": "mcp.mail.read",
+        "draft_reply": "mcp.mail.write"
+      }
+    }
+  ]
+}

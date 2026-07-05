@@ -44,3 +44,9 @@ aithos_competitive_map.md
 aithos_outreach_devs.xlsx
 aithos_outreach_*.xlsx
 cdk.out/
+
+# container demo run artifacts (packs, keys, grants — never commit)
+deploy/container/run/
+
+# gateway audit log default path (runtime artifact)
+aithos-audit.jsonl
