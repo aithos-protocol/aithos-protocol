@@ -54,6 +54,10 @@
     "./http": {
       "types": "./dist/http.d.ts",
       "default": "./dist/http.js"
+    },
+    "./llm-proxy": {
+      "types": "./dist/llm-proxy.d.ts",
+      "default": "./dist/llm-proxy.js"
     }
   },
   "files": [

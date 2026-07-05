@@ -52,6 +52,7 @@ import {
   type FederationHandle,
 } from "./gateway.js";
 import { startHttpGateway, type HttpGatewayOptions } from "./http.js";
+import { createLlmProxy } from "./llm-proxy.js";
 
 const nodeIo: HostIo = {
   readTextFile: (p) => readFile(p, "utf8"),
@@ -123,6 +124,8 @@ interface CliOpts {
   mandatePack?: string;
   mcpRegistry?: string;
   auditLog?: string;
+  llmProxy?: boolean;
+  llmUpstream?: string;
 }
 
 const program = new Command();
@@ -167,6 +170,17 @@ program
     "Append a JSONL audit line per federated tool call (default: " +
       "./aithos-audit.jsonl).",
   )
+  .option(
+    "--llm-proxy",
+    "Mount the transparent LLM pass-through proxy under /llm (http " +
+      "transport only). The cage's agent points ANTHROPIC_BASE_URL at it; " +
+      "metadata is logged, bodies and credentials never are.",
+    false,
+  )
+  .option(
+    "--llm-upstream <url>",
+    "Upstream base URL for --llm-proxy. Env: AITHOS_LLM_UPSTREAM.",
+  )
   .action(async (opts: CliOpts) => {
     const pack = await loadPack(opts.mandatePack);
     const registry = await loadRegistry(opts.mcpRegistry);
@@ -174,6 +188,9 @@ program
       throw new Error("--mcp-registry requires --mandate-pack (scopes drive exposure)");
     }
     if (opts.transport === "stdio") {
+      if (opts.llmProxy) {
+        throw new Error("--llm-proxy requires --transport http");
+      }
       await runStdio(opts.autoCommit === true, pack, registry, opts.auditLog);
     } else {
       if (registry && opts.stateless) {
@@ -262,6 +279,20 @@ async function runHttp(
             registry,
             ...(opts.auditLog ? { auditLogPath: opts.auditLog } : {}),
           }) as unknown as NonNullable<HttpGatewayOptions["onSessionServer"]>,
+        }
+      : {}),
+    // §13.5 I1/I2: the cage's inference traverses the gateway. Transparent
+    // pass-through in P0 (subscription-credential mode §13.7.2); custody,
+    // token budget and server-side tool filtering are P2.
+    ...(opts.llmProxy
+      ? {
+          extraRoutes: createLlmProxy({
+            upstream:
+              opts.llmUpstream ??
+              process.env.AITHOS_LLM_UPSTREAM ??
+              "https://api.anthropic.com",
+            prefix: "/llm",
+          }),
         }
       : {}),
   });
