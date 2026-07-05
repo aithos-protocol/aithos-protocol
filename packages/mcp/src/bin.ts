@@ -46,10 +46,12 @@ import { parseMandatePack, hexToBytes, type MandatePack } from "./pack.js";
 import {
   federate,
   parseRegistry,
+  sessionFederation,
+  isMandateWindowLive,
   type McpRegistry,
   type FederationHandle,
 } from "./gateway.js";
-import { startHttpGateway } from "./http.js";
+import { startHttpGateway, type HttpGatewayOptions } from "./http.js";
 
 const nodeIo: HostIo = {
   readTextFile: (p) => readFile(p, "utf8"),
@@ -112,18 +114,6 @@ async function loadRegistry(p?: string): Promise<McpRegistry | undefined> {
   return parseRegistry(text);
 }
 
-/**
- * T7 — the mandate's validity window. Federated tools must not be exposed under
- * an expired / not-yet-valid mandate. (Full revocation = server-side status
- * lookup; deferred for the proto — cf. PLAN-PROTO-SELFWIRED.md.)
- */
-function isMandateLive(pack: MandatePack, now = Date.now()): boolean {
-  const nb = Date.parse(pack.mandate.not_before);
-  const na = Date.parse(pack.mandate.not_after);
-  if (Number.isNaN(nb) || Number.isNaN(na)) return false;
-  return now >= nb && now <= na;
-}
-
 interface CliOpts {
   transport: "stdio" | "http";
   port?: string;
@@ -168,8 +158,9 @@ program
   .option(
     "--mcp-registry <path>",
     "Federate downstream MCP servers declared in this registry (self-wired " +
-      "gateway). A server is exposed only if the mandate carries scope " +
-      "mcp.<id>. Requires --mandate-pack.",
+      "gateway). A tool is exposed only if the mandate carries its scope " +
+      "(mcp.<id>, or the entry's per-tool tool_scopes). Requires " +
+      "--mandate-pack. Works over stdio and stateful HTTP.",
   )
   .option(
     "--audit-log <path>",
@@ -185,13 +176,14 @@ program
     if (opts.transport === "stdio") {
       await runStdio(opts.autoCommit === true, pack, registry, opts.auditLog);
     } else {
-      if (registry) {
-        // Federation is wired for the stdio host (the proto's target). HTTP
-        // federation is per-session and deferred — fail loud rather than
-        // silently ignoring the registry.
-        throw new Error("--mcp-registry is supported with --transport stdio only (proto)");
+      if (registry && opts.stateless) {
+        // Per-request servers cannot own a federation lifecycle (they would
+        // spawn + tear down every downstream on every request). Fail loud.
+        throw new Error(
+          "--mcp-registry requires stateful HTTP sessions (drop --stateless)",
+        );
       }
-      await runHttp(opts, pack);
+      await runHttp(opts, pack, registry);
     }
   });
 
@@ -209,7 +201,7 @@ async function runStdio(
   // and live; an expired/not-yet-valid mandate exposes NO federated tools.
   let federation: FederationHandle | undefined;
   if (registry && pack) {
-    if (!isMandateLive(pack)) {
+    if (!isMandateWindowLive(pack.mandate)) {
       console.error(
         "aithos-mcp gateway: mandate not live (window) — no federated tools exposed",
       );
@@ -240,7 +232,11 @@ async function runStdio(
   // The stdio transport keeps stdin open for us; no further work needed.
 }
 
-async function runHttp(opts: CliOpts, pack?: MandatePack): Promise<void> {
+async function runHttp(
+  opts: CliOpts,
+  pack?: MandatePack,
+  registry?: McpRegistry,
+): Promise<void> {
   const token = process.env.AITHOS_MCP_TOKEN;
   if (!token) {
     throw new Error(
@@ -257,6 +253,17 @@ async function runHttp(opts: CliOpts, pack?: MandatePack): Promise<void> {
     // per-write auto-commit behaviour there. NEVER pass nodeIo here (S1).
     serverOptions: ({ stateless }) =>
       nodeServerOptions(stateless ? true : opts.autoCommit === true, pack),
+    // Container gateway core (§13.6): every stateful session federates the
+    // registry against the pack's scopes; out-of-scope tools stay invisible.
+    ...(registry && pack
+      ? {
+          onSessionServer: sessionFederation({
+            pack,
+            registry,
+            ...(opts.auditLog ? { auditLogPath: opts.auditLog } : {}),
+          }) as unknown as NonNullable<HttpGatewayOptions["onSessionServer"]>,
+        }
+      : {}),
   });
 
   const shutdown = () => {

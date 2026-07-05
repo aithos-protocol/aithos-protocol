@@ -46,6 +46,13 @@ export interface StdioRegistryServer {
   readonly args?: readonly string[];
   /** Extra env for the subprocess (e.g. the downstream's own credential). */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * Optional fine-grained exposure map: downstream tool name → required scope
+   * (e.g. `list_contacts: "mcp.demo.read"`). When present, a tool is exposed
+   * iff the mandate carries its scope (or the whole-server scope `mcp.<id>`);
+   * tools NOT named here require the whole-server scope (deny by default).
+   */
+  readonly tool_scopes?: Readonly<Record<string, string>>;
 }
 
 /** A downstream MCP reached over HTTP (the only kind that works hosted/Lambda). */
@@ -58,6 +65,8 @@ export interface HttpRegistryServer {
   readonly headers?: Readonly<Record<string, string>>;
   /** Name of an env var whose value is sent as `Authorization: Bearer <value>`. */
   readonly bearer_env?: string;
+  /** See {@link StdioRegistryServer.tool_scopes}. */
+  readonly tool_scopes?: Readonly<Record<string, string>>;
 }
 
 /** One downstream MCP server the owner makes available. */
@@ -122,6 +131,16 @@ export function parseRegistry(jsonText: string): McpRegistry {
       }
     } else {
       throw new Error(`${where}.transport must be "stdio" or "http"`);
+    }
+    if (o["tool_scopes"] !== undefined) {
+      if (!isStrMap(o["tool_scopes"])) {
+        throw new Error(`${where}.tool_scopes must be an object (tool → scope)`);
+      }
+      for (const [k, v] of Object.entries(o["tool_scopes"])) {
+        if (typeof v !== "string" || !v) {
+          throw new Error(`${where}.tool_scopes.${k} must be a non-empty scope string`);
+        }
+      }
     }
   }
   return r as McpRegistry;
@@ -270,8 +289,37 @@ export interface FederationHandle {
   teardown(): Promise<void>;
 }
 
-const hasScope = (scopes: readonly string[], id: string): boolean =>
+const hasServerScope = (scopes: readonly string[], id: string): boolean =>
   scopes.includes(`mcp.${id}`);
+
+/** The scope that would grant `toolName` on `entry` (diagnostics + denials). */
+export function requiredScopeFor(entry: RegistryServer, toolName: string): string {
+  return entry.tool_scopes?.[toolName] ?? `mcp.${entry.id}`;
+}
+
+/**
+ * Is `toolName` grantable under `scopes`? The whole-server scope `mcp.<id>`
+ * wins; otherwise the tool's own `tool_scopes` entry decides; unmapped tools
+ * stay closed (deny by default, SPEC-container-runtime §13.6 G2).
+ */
+export function toolScopeGranted(
+  scopes: readonly string[],
+  entry: RegistryServer,
+  toolName: string,
+): boolean {
+  if (hasServerScope(scopes, entry.id)) return true;
+  const required = entry.tool_scopes?.[toolName];
+  return required !== undefined && scopes.includes(required);
+}
+
+/** Is at least one of `entry`'s tools grantable? Gates the connection itself. */
+export function serverScopeGranted(
+  scopes: readonly string[],
+  entry: RegistryServer,
+): boolean {
+  if (hasServerScope(scopes, entry.id)) return true;
+  return Object.values(entry.tool_scopes ?? {}).some((s) => scopes.includes(s));
+}
 
 /** Default connector: dispatch on the entry's transport. */
 async function defaultConnect(entry: RegistryServer): Promise<DownstreamClient> {
@@ -321,8 +369,8 @@ export async function federate(opts: FederateOptions): Promise<FederationHandle>
   for (const entry of opts.registry.servers) {
     // T3 — scope gate (per server): never even connect to a server the mandate
     // does not grant. (Saves spawning a subprocess for nothing.)
-    if (!hasScope(opts.scopes, entry.id)) {
-      log(`skip "${entry.id}" (mandate lacks scope mcp.${entry.id})`);
+    if (!serverScopeGranted(opts.scopes, entry)) {
+      log(`skip "${entry.id}" (mandate grants none of its scopes)`);
       continue;
     }
 
@@ -330,12 +378,22 @@ export async function federate(opts: FederateOptions): Promise<FederationHandle>
     try {
       client = await connect(entry);
       const listed = await client.listTools();
+      let exposed = 0;
       for (const tool of listed.tools) {
+        // G2 — deny by default: an out-of-scope tool is ABSENT from the list,
+        // not merely refused at dispatch.
+        if (!toolScopeGranted(opts.scopes, entry, tool.name)) {
+          log(
+            `hide "${entry.id}__${tool.name}" (mandate lacks scope ${requiredScopeFor(entry, tool.name)})`,
+          );
+          continue;
+        }
         registerFederatedTool(opts, entry, client, tool, sink);
+        exposed += 1;
       }
       clients.push(client);
       connected += 1;
-      log(`federated "${entry.id}" (${listed.tools.length} tools)`);
+      log(`federated "${entry.id}" (${exposed}/${listed.tools.length} tools)`);
     } catch (e) {
       // Degrade: skip this server, keep the session alive (T2 acceptance).
       log(`could not federate "${entry.id}": ${(e as Error).message}`);
@@ -382,11 +440,14 @@ function registerFederatedTool(
     async (args: Record<string, unknown>) => {
       // T3 — defense in depth: re-check the scope at dispatch, even though the
       // tool would not have been registered without it.
-      if (!hasScope(opts.scopes, entry.id)) {
+      if (!toolScopeGranted(opts.scopes, entry, tool.name)) {
         await emit(sink, opts.mandateId, entry.id, tool.name, args, "denied");
         return {
           content: [
-            { type: "text" as const, text: `denied: mandate lacks scope mcp.${entry.id}` },
+            {
+              type: "text" as const,
+              text: `denied: mandate lacks scope ${requiredScopeFor(entry, tool.name)}`,
+            },
           ],
           isError: true,
         };
@@ -503,4 +564,69 @@ async function emit(
     // Audit must never crash a tool call.
     console.error(`aithos-mcp gateway: audit sink failed: ${(e as Error).message}`);
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Per-session federation (HTTP hosts)                                        */
+/* -------------------------------------------------------------------------- */
+
+/** Minimal slice of a mandate pack the session federation needs. */
+export interface SessionFederationPack {
+  readonly mandate: {
+    readonly id: string;
+    readonly scopes: readonly string[];
+    readonly not_before: string;
+    readonly not_after: string;
+  };
+}
+
+/** The mandate's validity window (T7) — federation must fail closed outside it. */
+export function isMandateWindowLive(
+  mandate: SessionFederationPack["mandate"],
+  now = Date.now(),
+): boolean {
+  const nb = Date.parse(mandate.not_before);
+  const na = Date.parse(mandate.not_after);
+  if (Number.isNaN(nb) || Number.isNaN(na)) return false;
+  return now >= nb && now <= na;
+}
+
+export interface SessionFederationOptions {
+  readonly pack: SessionFederationPack;
+  readonly registry: McpRegistry;
+  readonly auditSink?: AuditSink;
+  readonly auditLogPath?: string;
+  readonly log?: (msg: string) => void;
+  readonly connect?: FederateOptions["connect"];
+  readonly now?: () => number;
+}
+
+/**
+ * Build the `onSessionServer` hook an HTTP host mounts to federate the
+ * registry PER SESSION (SPEC-container-runtime §13.6): each MCP session gets
+ * fresh downstream clients scoped by the pack's mandate, and the returned
+ * disposer tears them down when the session closes.
+ */
+export function sessionFederation(
+  opts: SessionFederationOptions,
+): (server: RegisterableServer) => Promise<(() => Promise<void>) | undefined> {
+  return async (server) => {
+    const log =
+      opts.log ?? ((m: string) => console.error(`aithos-mcp gateway: ${m}`));
+    if (!isMandateWindowLive(opts.pack.mandate, opts.now ? opts.now() : Date.now())) {
+      log("mandate not live (window) — no federated tools exposed");
+      return undefined;
+    }
+    const handle = await federate({
+      server,
+      scopes: opts.pack.mandate.scopes,
+      mandateId: opts.pack.mandate.id,
+      registry: opts.registry,
+      ...(opts.auditSink ? { auditSink: opts.auditSink } : {}),
+      ...(opts.auditLogPath ? { auditLogPath: opts.auditLogPath } : {}),
+      ...(opts.connect ? { connect: opts.connect } : {}),
+      ...(opts.log ? { log: opts.log } : {}),
+    });
+    return () => handle.teardown();
+  };
 }
