@@ -7,14 +7,14 @@
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
   "type": "module",
   "workspaces": [
-    "packages/*",
-    "deploy/container"
+    "packages/*"
   ],
   "scripts": {
     "build": "npm run build --workspace=@aithos/agent-tools && npm run build --workspace=@aithos/protocol-core && npm run build --workspace=aithos && npm run build --workspace=@aithos/mcp",
     "check-types": "npm run check-types --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:container": "node --test --import tsx deploy/container/harness/test/*.test.ts deploy/container/test/*.test.mjs"
   },
   "engines": {
     "node": ">=20"
