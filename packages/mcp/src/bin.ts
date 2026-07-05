@@ -109,6 +109,29 @@ async function loadPack(p?: string): Promise<MandatePack | undefined> {
   return parseMandatePack(text);
 }
 
+/**
+ * Per-call liveness for a mandate pack (G1/L1): validity window + a FRESH
+ * revocation lookup against the local store on every dispatch. Throws with
+ * the precise reason; callers fail closed.
+ */
+function packLiveness(pack: MandatePack): () => Promise<void> {
+  const storage = new FilesystemStorage();
+  return async () => {
+    if (!isMandateWindowLive(pack.mandate)) {
+      throw new Error(
+        `mandate ${pack.mandate.id} is outside its validity window`,
+      );
+    }
+    const rev = await storage.findRevocation(pack.mandate.id);
+    if (rev) {
+      throw new Error(
+        `mandate ${pack.mandate.id} was revoked at ${rev.revoked_at}` +
+          (rev.reason ? ` (${rev.reason})` : ""),
+      );
+    }
+  };
+}
+
 async function loadRegistry(p?: string): Promise<McpRegistry | undefined> {
   if (!p) return undefined;
   const text = await readFile(path.resolve(p), "utf8");
@@ -228,6 +251,7 @@ async function runStdio(
         scopes: pack.mandate.scopes,
         mandateId: pack.mandate.id,
         registry,
+        liveness: packLiveness(pack),
         ...(auditLog ? { auditLogPath: auditLog } : {}),
       });
     }
@@ -277,6 +301,7 @@ async function runHttp(
           onSessionServer: sessionFederation({
             pack,
             registry,
+            liveness: packLiveness(pack),
             ...(opts.auditLog ? { auditLogPath: opts.auditLog } : {}),
           }) as unknown as NonNullable<HttpGatewayOptions["onSessionServer"]>,
         }
@@ -292,6 +317,10 @@ async function runHttp(
               process.env.AITHOS_LLM_UPSTREAM ??
               "https://api.anthropic.com",
             prefix: "/llm",
+            // L1 — a revoked mandate stops inference too. Without a pack the
+            // route stays open (nothing to gate on): container deployments
+            // MUST boot the gateway with --mandate-pack.
+            ...(pack ? { liveness: packLiveness(pack) } : {}),
           }),
         }
       : {}),

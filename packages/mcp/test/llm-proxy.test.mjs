@@ -224,6 +224,40 @@ test("without a configured proxy, /llm stays 404 (nothing mounted)", async () =>
   }
 });
 
+test("revoked mandate blocks inference too (L1: the agent cannot even think)", async () => {
+  const up = await startUpstream();
+  let revoked = false;
+  const llm = createLlmProxy({
+    upstream: up.url,
+    prefix: "/llm",
+    log: () => {},
+    liveness: async () => {
+      if (revoked) throw new Error("mandate was revoked");
+    },
+  });
+  const gw = await bootGateway(llm);
+  try {
+    const ok = await fetch(`http://127.0.0.1:${gw.port}/llm/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(ok.status, 200, "live mandate: inference flows");
+
+    revoked = true;
+    const blocked = await fetch(`http://127.0.0.1:${gw.port}/llm/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(blocked.status, 403, "revoked mandate: inference refused");
+    assert.equal(up.seen.length, 1, "upstream never sees the blocked call");
+  } finally {
+    await gw.close();
+    await up.close();
+  }
+});
+
 test("paths outside the prefix are not the proxy's business", async () => {
   const up = await startUpstream();
   const llm = createLlmProxy({ upstream: up.url, prefix: "/llm", log: () => {} });

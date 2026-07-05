@@ -49,6 +49,12 @@ export interface LlmProxyOptions {
   readonly prefix?: string;
   /** Metadata sink. Default: JSON line on stdout. */
   readonly log?: (entry: LlmProxyLogEntry) => void;
+  /**
+   * Per-call liveness guard (L1, SPEC-container-runtime §13.9): throw to
+   * refuse the inference with 403. A revoked mandate stops the agent from
+   * ACTING (tools) and from THINKING (this route) alike.
+   */
+  readonly liveness?: () => Promise<void>;
 }
 
 /** Hop-by-hop headers never forwarded in either direction (RFC 9110 §7.6.1). */
@@ -100,6 +106,16 @@ export function createLlmProxy(
         return;
       }
       const suffix = url.slice(prefix.length) || "/";
+      const gate = opts.liveness ? opts.liveness() : Promise.resolve();
+      gate.then(
+        () => run(),
+        (err: Error) => {
+          res.writeHead(403, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: `inference refused: ${err.message}` }));
+          resolve(true);
+        },
+      );
+      const run = () => {
       const target = new URL(suffix, upstream);
       const started = Date.now();
       let reqBytes = 0;
@@ -180,5 +196,6 @@ export function createLlmProxy(
         forward.destroy();
       });
       req.pipe(forward);
+      };
     });
 }

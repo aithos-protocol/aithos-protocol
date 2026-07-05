@@ -280,6 +280,13 @@ export interface FederateOptions {
    * in tests to avoid spawning real subprocesses.
    */
   readonly connect?: (entry: RegistryServer) => Promise<DownstreamClient>;
+  /**
+   * Per-call liveness guard (G1, SPEC-container-runtime §13.6): called before
+   * EVERY federated dispatch; throw to refuse the call (revoked / expired /
+   * authority unreachable — all fail closed). Hosts compose the window check
+   * with a fresh revocation lookup here.
+   */
+  readonly liveness?: () => Promise<void>;
 }
 
 export interface FederationHandle {
@@ -438,6 +445,21 @@ function registerFederatedTool(
       inputSchema: inputSchemaToShape(tool.inputSchema),
     },
     async (args: Record<string, unknown>) => {
+      // G1 — fail-closed liveness on EVERY dispatch: a mandate revoked
+      // mid-session refuses the very next call, and a liveness authority
+      // that cannot be reached refuses too.
+      if (opts.liveness) {
+        try {
+          await opts.liveness();
+        } catch (e) {
+          const reason = (e as Error).message;
+          await emit(sink, opts.mandateId, entry.id, tool.name, args, "denied", reason);
+          return {
+            content: [{ type: "text" as const, text: `denied: ${reason}` }],
+            isError: true,
+          };
+        }
+      }
       // T3 — defense in depth: re-check the scope at dispatch, even though the
       // tool would not have been registered without it.
       if (!toolScopeGranted(opts.scopes, entry, tool.name)) {
@@ -599,6 +621,9 @@ export interface SessionFederationOptions {
   readonly log?: (msg: string) => void;
   readonly connect?: FederateOptions["connect"];
   readonly now?: () => number;
+  /** Extra per-call liveness (e.g. fresh revocation lookup). Composed with
+   * the window check — both must pass on every dispatch. */
+  readonly liveness?: () => Promise<void>;
 }
 
 /**
@@ -617,11 +642,21 @@ export function sessionFederation(
       log("mandate not live (window) — no federated tools exposed");
       return undefined;
     }
+    const perCallLiveness = async (): Promise<void> => {
+      const now = opts.now ? opts.now() : Date.now();
+      if (!isMandateWindowLive(opts.pack.mandate, now)) {
+        throw new Error(
+          `mandate ${opts.pack.mandate.id} is outside its validity window`,
+        );
+      }
+      if (opts.liveness) await opts.liveness();
+    };
     const handle = await federate({
       server,
       scopes: opts.pack.mandate.scopes,
       mandateId: opts.pack.mandate.id,
       registry: opts.registry,
+      liveness: perCallLiveness,
       ...(opts.auditSink ? { auditSink: opts.auditSink } : {}),
       ...(opts.auditLogPath ? { auditLogPath: opts.auditLogPath } : {}),
       ...(opts.connect ? { connect: opts.connect } : {}),

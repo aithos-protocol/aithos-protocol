@@ -231,3 +231,60 @@ test("teardown closes the downstream client", async () => {
   await handle.teardown();
   assert.equal(downstream.closed, true);
 });
+
+/* -------------------------------------------------------------------------- */
+/* per-call liveness (G1 — revocation is checked on EVERY dispatch)           */
+/* -------------------------------------------------------------------------- */
+
+test("a liveness failure (revocation) denies the NEXT dispatch, fail closed, audited", async () => {
+  let revoked = false;
+  const audit = [];
+  const server = fakeServer();
+  const downstream = fakeDownstream(["list_contacts"]);
+  const handle = await federate({
+    server,
+    scopes: ["mcp.demo.read"],
+    mandateId: "mandate_01TEST",
+    registry: registryWith(),
+    auditSink: (e) => audit.push(e),
+    log: () => {},
+    connect: async () => downstream,
+    liveness: async () => {
+      if (revoked) throw new Error("mandate mandate_01TEST was revoked at T");
+    },
+  });
+
+  const ok = await server.call("demo__list_contacts", {});
+  assert.ok(!ok.isError, "live mandate dispatches");
+
+  revoked = true; // aithos revoke happens mid-mission…
+  const denied = await server.call("demo__list_contacts", {});
+  assert.equal(denied.isError, true, "…and the very next call is refused");
+  assert.match(denied.content[0].text, /revoked/);
+
+  const last = audit[audit.length - 1];
+  assert.equal(last.status, "denied");
+  assert.match(last.error ?? "", /revoked/);
+  await handle.teardown();
+});
+
+test("a liveness check that itself crashes still fails closed", async () => {
+  const server = fakeServer();
+  const downstream = fakeDownstream(["list_contacts"]);
+  const handle = await federate({
+    server,
+    scopes: ["mcp.demo.read"],
+    mandateId: "mandate_01TEST",
+    registry: registryWith(),
+    auditSink: () => {},
+    log: () => {},
+    connect: async () => downstream,
+    liveness: async () => {
+      throw new Error("revocation authority unreachable");
+    },
+  });
+  const denied = await server.call("demo__list_contacts", {});
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /unreachable/);
+  await handle.teardown();
+});

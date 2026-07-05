@@ -233,6 +233,44 @@ test("audit entries carry the mandate id", async () => {
   }
 });
 
+test("revocation mid-session: next federated call over HTTP is refused (G1)", async () => {
+  const { connect } = fakeDownstreamFactory();
+  let revoked = false;
+  const gw = await startHttpGateway({
+    host: "127.0.0.1",
+    port: 0,
+    token: TOKEN,
+    serverOptions,
+    log: () => {},
+    onSessionServer: sessionFederation({
+      pack: packWith(["mcp.demo.read"]),
+      registry: REGISTRY,
+      auditSink: () => {},
+      log: () => {},
+      connect,
+      liveness: async () => {
+        if (revoked) throw new Error("mandate mandate_01FEDTEST was revoked at T");
+      },
+    }),
+  });
+  try {
+    const client = await connectClient(gw.port);
+    const ok = await client.callTool({ name: "demo__list_contacts", arguments: {} });
+    assert.ok(!ok.isError, "pre-revocation call passes");
+
+    revoked = true; // ~ aithos revoke while the mission runs
+    const denied = await client.callTool({
+      name: "demo__list_contacts",
+      arguments: {},
+    });
+    assert.equal(denied.isError, true, "post-revocation call refused");
+    assert.match(denied.content[0].text, /revoked/);
+    await client.close();
+  } finally {
+    await gw.close();
+  }
+});
+
 test("gateway close() disposes live sessions' downstreams", async () => {
   const { spawned, connect } = fakeDownstreamFactory();
   const gw = await bootFederated({ pack: packWith(["mcp.demo.read"]), connect });
