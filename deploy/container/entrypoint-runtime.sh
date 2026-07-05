@@ -46,9 +46,11 @@ export ANTHROPIC_BASE_URL="${AITHOS_GATEWAY_URL%/}/llm"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # 3a. Harness mode (P1): a supervisor loop owns mission state. When present,
-#     hand over to it — it spawns a fresh agent run per mission.
+#     hand over to it — it polls the mailbox and spawns a fresh agent run per
+#     mission. AITHOS_MCP_CONFIG points it at the generated .mcp.json.
 if [ "${AITHOS_HARNESS:-0}" = "1" ]; then
-  exec node /app/harness/dist/harness.js
+  export AITHOS_MCP_CONFIG="$WORK/.mcp.json"
+  exec node /app/harness/dist/bin/harness.js
 fi
 
 # 3b. Job mode (P0): one mission in, run it, exit. One container, one mission.

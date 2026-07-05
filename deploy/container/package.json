@@ -7,7 +7,9 @@
   "author": "Mathieu Colla <mathieu.colla.pro@gmail.com>",
   "type": "module",
   "scripts": {
-    "test": "node --test --import tsx test/*.test.mjs test/*.test.ts",
+    "build": "tsc -p harness/tsconfig.json",
+    "test": "node --test --import tsx harness/test/*.test.ts test/*.test.mjs",
+    "check-types": "tsc -p harness/tsconfig.json --noEmit",
     "demo": "bash scripts/demo.sh",
     "revoke": "bash scripts/revoke.sh"
   },
@@ -15,6 +17,8 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@noble/ed25519": "^2.0.0",
     "@noble/hashes": "^1.3.0",
-    "tsx": "^4.11.0"
+    "tsx": "^4.11.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.11.0"
   }
 }

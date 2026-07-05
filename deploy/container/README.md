@@ -85,18 +85,47 @@ API key — see the commented block in `docker-compose.yml`. It authorizes
 inference only, never Aithos authority, and **must not** be used for a mandate
 delegated to a third party (that path is custody mode, P2).
 
+## Missions & the harness (P1)
+
+Two work-delivery modes (§13.8):
+
+- **Job mode** (P0, shipping): one mission in `$AITHOS_MISSION`, the container
+  runs it as a single agent run and exits. One container, one mission.
+- **Mailbox mode** (P1): a **mailbox** — a designated ethos zone — is the queue.
+  The orchestrator writes mission sections (`{id, type:"mission", status,
+  payload, …}`); the **harness** (`harness/`) polls, CLAIMS one atomically
+  (`pending → in_progress`, so two harnesses never double-execute — W2), spawns
+  a *fresh* `claude -p` bound to the mission, and records the terminal status
+  (W1). A decision beyond the mandate escalates to `waiting_input` + a
+  `question`; a human answer re-queues it to `pending` with context (W3 — this
+  *is* the MVP's "validate in one click", with no direct channel). Set
+  `AITHOS_HARNESS=1` to opt in.
+
+The harness is **deterministic — not an LLM**: it owns the *when* and the state
+machine; the agent owns the *work*. Statuses transition only through the pure
+rules in `harness/src/mission.ts` (fully unit-tested). Each mission ↔ one run ↔
+`AITHOS_MISSION_ID` stamped on every gamma envelope: "who did what, and why."
+
+A **revocation/TTL watcher** (`harness/src/watcher.ts`) runs outside the cage:
+on revocation or `not_after` it pauses then stops the runtime ("revoke =
+unplug"). It is best-effort hygiene — L1 fail-closed already cut every call —
+so it never becomes the security boundary.
+
 ## Files
 
 ```
 gateway.Dockerfile            the enforcement point (built from the monorepo)
 runtime-claude-code.Dockerfile the cage (Claude Code, headless)
-entrypoint-runtime.sh         generates the agent config → runs the mission
+entrypoint-runtime.sh         generates the agent config → mission or harness
 docker-compose.yml            the topology: internal cage + two-legged gateway
 registry.example.json         downstream catalogue (what is connectable)
 demo/contacts-server.mjs      a tiny downstream MCP (list/get/add contacts)
+harness/src/                  mission state machine, mailbox, loop, watcher
+harness/bin/harness.ts        the real entrypoint (ethos mailbox + Claude Code)
 scripts/make-pack.mjs         assemble a mandate pack from grant + keyfile
 scripts/demo.sh, revoke.sh    the 90-second story
-test/                         the Docker-free acceptance + compose lint
+test/                         Docker-free P0 acceptance + compose lint
+harness/test/                 mission / harness / watcher unit + integration
 ```
 
 ## Preconditions (resolved)
