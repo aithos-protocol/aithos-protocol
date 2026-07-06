@@ -62,6 +62,10 @@
     "./actions": {
       "types": "./dist/actions.d.ts",
       "default": "./dist/actions.js"
+    },
+    "./action-federation": {
+      "types": "./dist/action-federation.d.ts",
+      "default": "./dist/action-federation.js"
     }
   },
   "files": [
