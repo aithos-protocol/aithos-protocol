@@ -88,7 +88,7 @@ before(() => {
     issuer: identity,
     actorSphere: "self",
     grantee: { id: "urn:aithos:agent:demo", pubkey: del.pubkeyMultibase },
-    scopes: ["browser.action:demo_search"], // only search granted
+    scopes: ["mcp.browser.demo_search"], // only search granted
     ttlSeconds: 3600,
   });
   ownerDidDoc = JSON.parse(core.snapshotDidJson("owner").content);
@@ -102,7 +102,7 @@ function wire(overrides = {}) {
   const handle = federateActions({
     server,
     actions: [SEARCH, POST],
-    scopes: ["browser.action:demo_search"],
+    scopes: ["mcp.browser.demo_search"],
     mandate,
     ownerDid,
     aud: AUD,

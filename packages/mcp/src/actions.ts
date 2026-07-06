@@ -9,16 +9,25 @@
  * mandate scopes allow as an MCP tool; when the caged agent calls it, the
  * gateway:
  *
- *   1. checks the mandate covers `browser.action:<id>` (scope filter),
+ *   1. checks the mandate covers `mcp.browser.<id>` (scope filter),
  *   2. VALIDATES the agent parameters against the SIGNED params_schema — the
  *      security crux: the agent's freedom is bounded by signed limits,
  *   3. signs a Mandated Intent Envelope via `signEnvelopeWithMandate`
- *      (method = action id, params = validated params, mandate, delegate key),
- *   4. hands the envelope to the downstream ("the hand"), which re-verifies it.
+ *      (method = action id, params = validated params, mandate, delegate key)
+ *      as the attributable audit record — the gamma anchor (who did what, under
+ *      which mandate), and the verifiable form for a downstream that wants it,
+ *   4. dispatches the validated action to the downstream ("the hand").
+ *
+ * The hand is a DUMB effector: it trusts the cage boundary + the authenticated
+ * channel (bearer) and executes — it holds no Aithos key and re-verifies
+ * nothing. The enforcement that matters lives here, at the gateway: mandate
+ * liveness, scope, and above all the parameter validation against the signed
+ * schema. Independent re-verification by the hand is OPTIONAL (only for a
+ * downstream that does not trust the gateway).
  *
  * The agent supplies only (id, params). It never supplies the recipe, holds no
  * key, and cannot forge intent — everything authoritative is Ethos-anchored and
- * gateway-signed. This module is the PURE core (parse / validate / scope /
+ * gateway-validated. This module is the PURE core (parse / validate / scope /
  * sign); wiring to a downstream (WS `run_action`) + gamma lives with the host.
  *
  * ISOMORPHIC: no node builtins. Signing material is injected by the host.
@@ -50,7 +59,7 @@ export type JsonSchema = {
 
 /** An owner-authored action, resolved from a signed Ethos section. */
 export interface ActionDefinition {
-  /** Stable id — drives the scope `browser.action:<id>` and the tool name. */
+  /** Stable id — drives the scope `mcp.browser.<id>` and the tool name. */
   readonly id: string;
   /** Human description (becomes the MCP tool title/description). */
   readonly goal: string;
@@ -58,9 +67,15 @@ export interface ActionDefinition {
   readonly params_schema: JsonSchema;
 }
 
-/** The scope that grants an action. */
+/**
+ * The scope that grants an action — `mcp.browser.<id>`, aligned with the
+ * downstream (browser-agent) scope vocabulary (`mcp.<service>.<verb>`). Like
+ * other `mcp.*` connector scopes it rides on the self/circle spheres; it is
+ * NOT a public-sphere scope (public is limited to ethos.*.public /
+ * ethos.read.all / gamma.read / compute.invoke / data.*).
+ */
 export function actionScope(id: string): string {
-  return `browser.action:${id}`;
+  return `mcp.browser.${id}`;
 }
 
 /** Namespaced MCP tool name for an action (avoids collision with core tools). */

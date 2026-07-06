@@ -150,14 +150,14 @@ describe("scope + tool naming", () => {
   ];
 
   test("actionsInScope keeps only granted actions (deny by default)", () => {
-    const got = actionsInScope(actions, ["browser.action:demo_search"]).map((a) => a.id);
+    const got = actionsInScope(actions, ["mcp.browser.demo_search"]).map((a) => a.id);
     assert.deepEqual(got, ["demo_search"]);
     assert.deepEqual(actionsInScope(actions, []).length, 0);
     assert.deepEqual(actionsInScope(actions, ["browser.observe"]).length, 0);
   });
 
   test("scope + tool-name helpers round-trip", () => {
-    assert.equal(actionScope("demo_search"), "browser.action:demo_search");
+    assert.equal(actionScope("demo_search"), "mcp.browser.demo_search");
     assert.equal(actionIdFromToolName(actionToolName("demo_search")), "demo_search");
     assert.equal(actionIdFromToolName("ethos_read_section"), null);
   });
@@ -187,14 +187,15 @@ describe("Mandated Intent Envelope round-trip", () => {
   const AUD = "urn:aithos:downstream:browser-agent";
 
   let counter = 0;
-  function setup(scope = "browser.action:demo_search") {
+  function setup(scope = "mcp.browser.demo_search") {
     const handle = `owner${counter++}`;
     const identity = createIdentity(handle, "Owner");
     core.writeIdentityToDisk(identity);
     core.initKeystoreV03({ handle, identity }); // lays out the ethos dir snapshotDidJson needs
     const del = delegate();
-    // self sphere: browser.action:* rides like a connector scope. (Making it
-    // sphere-neutral on `public` like mcp.* is a protocol-core follow-up.)
+    // `mcp.browser.*` rides on the self/circle spheres like any other mcp
+    // connector scope. (It is NOT a public-sphere scope: public is limited to
+    // ethos.*.public / ethos.read.all / gamma.read / compute.invoke / data.*.)
     const mandate = createMandate({
       issuer: identity,
       actorSphere: "self",

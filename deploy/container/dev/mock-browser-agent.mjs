@@ -3,18 +3,24 @@
 // Copyright 2026 Mathieu Colla
 
 /**
- * Mock "hand" downstream — the verifier half of the Mandated Intent Envelope
- * pattern (SPEC-mandated-intent-envelope 0.1.0, Annex A), standing in for the
- * real browser-agent so the whole loop is testable without Chrome or the
- * parallel dev.
+ * Mock "hand" downstream — an OPTIONAL VERIFYING downstream (SPEC-mandated-
+ * intent-envelope 0.1.0 §4.4), standing in for a hand so the whole loop is
+ * testable without Chrome or the parallel dev.
  *
- * On `run_action { envelope, action, params }` it does what the real hand must:
- *   - re-verify the Mandated Intent Envelope with the REAL §5 verifier
+ * NOTE ON TRUST MODEL: the real, local browser-agent hand is DUMB (§4.3) — it
+ * trusts the cage boundary + the authenticated channel and re-verifies nothing.
+ * This mock instead *verifies*, which is exactly the §4.4 case (a downstream
+ * that does not trust the gateway). Verifying is a strict SUPERSET of the dumb
+ * behaviour, so it's the stronger thing to test against: if a call satisfies
+ * the verifier here, the dumb hand would certainly run it too.
+ *
+ * On `run_action { envelope, action, params }` it:
+ *   - verifies the Mandated Intent Envelope with the REAL §5 verifier
  *     (`verifyEnvelope`): delegate signature, mandate window/revocation,
  *     audience, method = the claimed action id, and params bound by hash;
  *   - only on success "execute" the action (mock: echo the validated params +
  *     a fake observation) and return a run_report;
- *   - otherwise return run_stopped — it never trusts unverified intent.
+ *   - otherwise return run_stopped.
  *
  * The agent's parameters were already validated against the SIGNED schema at
  * the gateway; the envelope's params_hash proves they reach here untampered.

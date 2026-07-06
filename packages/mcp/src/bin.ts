@@ -250,7 +250,7 @@ program
   .option(
     "--actions <path>",
     "Expose owner-authored actions (Mandated Intent Envelope) as MCP tools. " +
-      "A tool per action the mandate grants (browser.action:<id>); on call the " +
+      "A tool per action the mandate grants (mcp.browser.<id>); on call the " +
       "gateway validates params against the signed schema, signs an envelope, " +
       "and dispatches it. Requires --mandate-pack and --actions-downstream.",
   )

@@ -40,7 +40,7 @@ before(() => {
     issuer: identity,
     actorSphere: "self",
     grantee: { id: "urn:aithos:agent:demo", pubkey: del.pubkeyMultibase },
-    scopes: ["browser.action:demo_search"],
+    scopes: ["mcp.browser.demo_search"],
     ttlSeconds: 3600,
   });
   const snap = core.snapshotDidJson("owner");

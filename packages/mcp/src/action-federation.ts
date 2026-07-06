@@ -10,16 +10,22 @@
  *   G2 in scope   — only actions the mandate grants are exposed (deny default);
  *   G3 validate   — agent params checked against the SIGNED schema, reject on
  *                   any violation, BEFORE signing (the security crux);
- *   G4 sign       — signActionEnvelope (delegate key, method = action id);
- *   G5 dispatch   — hand the envelope to the downstream + audit the effect.
+ *   G4 sign       — signActionEnvelope (delegate key, method = action id): the
+ *                   attributable audit anchor (gamma), NOT a hand precondition;
+ *   G5 dispatch   — send the validated action to the downstream ("the hand")
+ *                   over an authenticated channel + audit, keyed by the nonce.
  *
- * The downstream transport is injected (`dispatch`) so this stays testable and
- * transport-agnostic: the real browser-agent binding sends `run_action` over
- * its WebSocket; tests inject an in-process function.
+ * The hand is a DUMB effector: it trusts the cage boundary + the authenticated
+ * channel (bearer) and re-verifies nothing. The enforcement that matters lives
+ * here, at the gateway (G1–G3). The downstream transport is injected
+ * (`dispatch`) so this stays testable and transport-agnostic: the real
+ * browser-agent binding sends `run_action` over its WebSocket (see
+ * `wsActionDispatch`); tests inject an in-process function.
  */
-import type { Mandate } from "@aithos/protocol-core";
+import type { Mandate, SignedEnvelope } from "@aithos/protocol-core";
 
 import {
+  actionScope,
   actionToolName,
   actionsInScope,
   validateParams,
@@ -37,7 +43,11 @@ export interface RunReport {
   readonly [k: string]: unknown;
 }
 
-/** Send a signed action envelope to the downstream "hand" and get its report. */
+/**
+ * Send the validated action to the downstream "hand" and get its report. The
+ * signed `envelope` rides along for attribution (and for a downstream that
+ * chooses to verify), but a dumb hand acts on `(action, params)` alone.
+ */
 export type ActionDispatch = (req: {
   readonly envelope: unknown;
   readonly action: { readonly id: string };
@@ -48,7 +58,7 @@ export interface FederateActionsOptions {
   readonly server: RegisterableServer;
   /** Owner-authored actions resolved from the Ethos. */
   readonly actions: readonly ActionDefinition[];
-  /** The session mandate's scopes — drives `browser.action:<id>` gating. */
+  /** The session mandate's scopes — drives `mcp.browser.<id>` gating. */
   readonly scopes: readonly string[];
   /** The signed mandate (carries the grantee delegate pubkey). */
   readonly mandate: Mandate;
@@ -82,6 +92,7 @@ export function federateActions(opts: FederateActionsOptions): FederateActionsHa
     params: unknown,
     status: "ok" | "error" | "denied",
     error?: string,
+    envelopeNonce?: string,
   ) => {
     if (!opts.auditSink) return;
     try {
@@ -93,6 +104,7 @@ export function federateActions(opts: FederateActionsOptions): FederateActionsHa
         paramsSummary: summarize(params),
         status,
         ...(error ? { error } : {}),
+        ...(envelopeNonce ? { envelopeNonce } : {}),
       });
     } catch (e) {
       log(`audit sink failed: ${(e as Error).message}`);
@@ -125,8 +137,9 @@ export function federateActions(opts: FederateActionsOptions): FederateActionsHa
           await audit(action.id, args, "denied", v.error);
           return errorResult(`invalid parameters: ${v.error}`);
         }
-        // G4 — sign the Mandated Intent Envelope.
-        let envelope: unknown;
+        // G4 — sign the Mandated Intent Envelope: the attributable audit
+        // anchor (its nonce keys the gamma record), not a hand precondition.
+        let envelope: SignedEnvelope;
         try {
           envelope = signActionEnvelope({
             ownerDid: opts.ownerDid,
@@ -141,22 +154,29 @@ export function federateActions(opts: FederateActionsOptions): FederateActionsHa
           await audit(action.id, args, "error", reason);
           return errorResult(`could not sign action envelope: ${reason}`);
         }
-        // G5 — dispatch to the downstream + audit.
+        // G5 — dispatch the validated action to the hand + audit, keyed by the
+        // envelope nonce so the effect is attributable to this exact envelope.
         try {
           const report = await opts.dispatch({ envelope, action: { id: action.id }, params: args ?? {} });
-          await audit(action.id, args, report.ok ? "ok" : "error", report.ok ? undefined : report.error);
+          await audit(
+            action.id,
+            args,
+            report.ok ? "ok" : "error",
+            report.ok ? undefined : report.error,
+            envelope.nonce,
+          );
           return {
             content: [{ type: "text" as const, text: JSON.stringify(report) }],
             isError: !report.ok,
           };
         } catch (e) {
           const reason = (e as Error).message;
-          await audit(action.id, args, "error", reason);
+          await audit(action.id, args, "error", reason, envelope.nonce);
           return errorResult(`downstream unreachable: ${reason}`);
         }
       },
     );
-    log(`exposed action "${action.id}" (scope browser.action:${action.id})`);
+    log(`exposed action "${action.id}" (scope ${actionScope(action.id)})`);
   }
 
   return { exposed: inScope.length };

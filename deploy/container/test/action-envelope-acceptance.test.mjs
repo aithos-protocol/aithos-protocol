@@ -67,7 +67,7 @@ before(async () => {
     issuer: identity,
     actorSphere: "self",
     grantee: { id: "urn:aithos:agent:demo", pubkey: agentKey.pubkey_multibase },
-    scopes: ["browser.action:demo_search"], // demo_post is NOT granted
+    scopes: ["mcp.browser.demo_search"], // demo_post is NOT granted
     ttlSeconds: 3600,
   });
   core.writeMandate(mandate);

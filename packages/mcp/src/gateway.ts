@@ -530,6 +530,12 @@ export interface AuditEntry {
   readonly paramsSummary: string;
   readonly status: "ok" | "error" | "denied";
   readonly error?: string;
+  /**
+   * For a signed action call: the `nonce` of the Mandated Intent Envelope that
+   * authorized this effect — the attribution anchor linking the audit line to
+   * the exact signed envelope (the gamma record). Absent for plain MCP calls.
+   */
+  readonly envelopeNonce?: string;
 }
 
 /** Where audit entries go. Must never throw (it's called in the tool path). */
