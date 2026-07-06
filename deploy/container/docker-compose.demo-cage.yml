@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Mathieu Colla
+#
+# THE DEMO: "l'esprit en cage". Claude Code runs INSIDE the cage, is handed a
+# mission, sees ONLY the actions its mandate grants (as MCP tools), reasons,
+# calls one on its own, a real browser-agent Chrome performs it on the host,
+# then the container exits. One self-contained overlay on top of the base:
+#
+#   # terminal 1 (browser-agent repo): the sandbox target
+#   make sandbox
+#   # terminal 2 (browser-agent repo): the hand, real Chrome
+#   ./.venv-*/bin/python -m browser_agent --ws-bearer aithos-ba-demo
+#
+#   # terminal 3 (aithos-protocol repo): the cage
+#   export CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat01-…'      # your subscription (claude setup-token)
+#   export AITHOS_MCP_TOKEN=$(openssl rand -hex 24)
+#   export AITHOS_ACTIONS_BEARER=aithos-ba-demo          # = the browser-agent --ws-bearer
+#   node deploy/container/scripts/prepare-actions-demo.mjs
+#   docker compose -f deploy/container/docker-compose.yml \
+#                  -f deploy/container/docker-compose.demo-cage.yml \
+#                  up --build --abort-on-container-exit
+#
+# It combines the subscription overlay (egress-proxy → api.anthropic.com only,
+# so your subscription auth works — ÉTUDE-CAGE-ABONNEMENT B-egress) with the
+# actions wiring (gateway federates the mandated action to browser-agent). DEV
+# only: inference is not gateway-traced. NEVER for a third-party mandate.
+services:
+  # The runtime's ONLY path to the model: exactly api.anthropic.com.
+  egress-proxy:
+    image: node:20-bookworm-slim
+    command: ["node", "/proxy.mjs"]
+    volumes:
+      - ./dev/egress-allowlist-proxy.mjs:/proxy.mjs:ro
+    environment:
+      EGRESS_ALLOWLIST: "api.anthropic.com"
+      PORT: "8888"
+    networks: [cage, egress]
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  gateway:
+    # Federate the mandated action(s) to browser-agent, and keep the /llm proxy
+    # available. In direct subscription mode the runtime uses the egress-proxy,
+    # not /llm, but leaving it wired keeps the overlay valid in either mode.
+    command:
+      - "--transport"
+      - "http"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8787"
+      - "--mandate-pack"
+      - "/run/aithos/pack.json"
+      - "--mcp-registry"
+      - "/run/aithos/registry.json"
+      - "--llm-proxy"
+      - "--actions"
+      - "/run/aithos/actions.json"
+      - "--actions-downstream"
+      - "ws://host.docker.internal:8765"
+      - "--actions-bearer"
+      - "${AITHOS_ACTIONS_BEARER:?set AITHOS_ACTIONS_BEARER = browser-agent --ws-bearer}"
+    volumes:
+      - ./run/actions.json:/run/aithos/actions.json:ro
+
+  runtime:
+    depends_on: [gateway, egress-proxy]
+    environment:
+      # Subscription (direct) inference: talk to api.anthropic.com natively,
+      # reachable ONLY through the allowlist egress proxy. Actions still go
+      # through the gateway MCP (never proxied).
+      AITHOS_INFERENCE_MODE: "direct"
+      HTTPS_PROXY: "http://egress-proxy:8888"
+      HTTP_PROXY: "http://egress-proxy:8888"
+      https_proxy: "http://egress-proxy:8888"
+      http_proxy: "http://egress-proxy:8888"
+      NO_PROXY: "gateway,localhost,127.0.0.1"
+      no_proxy: "gateway,localhost,127.0.0.1"
+      # The mission the caged agent is handed. It never learns the tool name —
+      # it discovers, in its mandated tool list, an action that fits and uses it.
+      AITHOS_MISSION: >-
+        ${AITHOS_MISSION:-Inscris la personne « John Doe » sur le sandbox.
+        Utilise l'action à ta disposition, puis confirme ce que tu as fait.}
