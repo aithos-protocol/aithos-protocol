@@ -91,6 +91,34 @@ node deploy/container/scripts/revoke-demo.mjs
 > fails against a stale nested copy. Fix the CLI's dependency range to restore
 > the `aithos grant`/`revoke` path.
 
+### Run with your Claude subscription (dev)
+
+The sealed cage routes inference through the gateway `/llm` proxy, which needs
+an API key (or gateway-held custody key). To iterate with your **subscription**
+instead, use the DEV overlay — it lets Claude Code talk to `api.anthropic.com`
+natively (its own subscription auth) through an egress proxy that allowlists
+**exactly that one domain**:
+
+```bash
+export AITHOS_MCP_TOKEN=$(openssl rand -hex 24)
+export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)     # headless subscription token
+node deploy/container/scripts/prepare-demo.mjs
+docker compose \
+  -f deploy/container/docker-compose.yml \
+  -f deploy/container/docker-compose.subscription-dev.yml \
+  up --build --abort-on-container-exit
+```
+
+Why this is legitimate and still bounded: it is **Claude Code itself** making
+the subscription calls (not an injected credential — that would breach
+Anthropic's ToS). And **actions stay fully gated**: tools/connectors are reached
+only via the gateway MCP under the mandate, so the runtime can reach exactly the
+gateway (to act) and `api.anthropic.com` (to think) — nothing else. Conceded in
+dev only: inference is not gateway-traced, and a revoked mandate still cuts
+actions but not thinking. Rationale + the sealed alternative (B-MITM): see
+`ETUDE-CAGE-ABONNEMENT-CLAUDE`. **Never use this overlay for a third-party
+mandate.**
+
 ## Docker-free proof
 
 The five acceptance assertions run **without Docker** against the real gateway

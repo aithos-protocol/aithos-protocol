@@ -30,9 +30,26 @@ cat > "$WORK/.mcp.json" <<JSON
 }
 JSON
 
-# 2. Settings: no direct web (that egress does not exist anyway), and redirect
-#    inference through the gateway's LLM proxy — the cage's only path out.
-cat > "$CLAUDE_CONFIG_DIR/settings.json" <<JSON
+# Inference mode:
+#   gateway (default) — route inference through the gateway /llm proxy (sealed
+#                       cage; the only path out). Custody/API-key auth.
+#   direct            — DEV subscription mode (ÉTUDE-CAGE-ABONNEMENT "B-egress"):
+#                       do NOT redirect the base URL. Claude Code talks to
+#                       api.anthropic.com natively (its own subscription auth),
+#                       reaching it only through the allowlist egress proxy set
+#                       via HTTPS_PROXY. Actions still go through the gateway MCP.
+INFER_MODE="${AITHOS_INFERENCE_MODE:-gateway}"
+
+# 2. Settings: never let the agent browse the web directly.
+if [ "$INFER_MODE" = "direct" ]; then
+  cat > "$CLAUDE_CONFIG_DIR/settings.json" <<JSON
+{
+  "permissions": { "deny": ["WebSearch", "WebFetch"] },
+  "env": { "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1" }
+}
+JSON
+else
+  cat > "$CLAUDE_CONFIG_DIR/settings.json" <<JSON
 {
   "permissions": { "deny": ["WebSearch", "WebFetch"] },
   "env": {
@@ -41,8 +58,8 @@ cat > "$CLAUDE_CONFIG_DIR/settings.json" <<JSON
   }
 }
 JSON
-
-export ANTHROPIC_BASE_URL="${AITHOS_GATEWAY_URL%/}/llm"
+  export ANTHROPIC_BASE_URL="${AITHOS_GATEWAY_URL%/}/llm"
+fi
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # Inference auth preflight: Claude Code needs a credential to send to the /llm

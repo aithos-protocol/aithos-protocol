@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Mathieu Colla
+#
+# DEV subscription mode overlay (ÉTUDE-CAGE-ABONNEMENT "B-egress"). Run your
+# LOCAL Claude subscription inside the cage, LEGITIMATELY — it is Claude Code
+# itself making the calls (not an injected credential). Apply ON TOP of the base
+# compose (two -f flags):
+#
+#   export AITHOS_MCP_TOKEN=$(openssl rand -hex 24)
+#   export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)   # headless subscription token
+#   node deploy/container/scripts/prepare-demo.mjs
+#   docker compose \
+#     -f deploy/container/docker-compose.yml \
+#     -f deploy/container/docker-compose.subscription-dev.yml \
+#     up --build --abort-on-container-exit
+#
+# What this changes vs the sealed base:
+#   - adds an egress-proxy that bridges the cage to EXACTLY api.anthropic.com;
+#   - the runtime keeps talking ONLY to the gateway (actions, gated by mandate)
+#     and to the egress-proxy (thinking) — nothing else is reachable;
+#   - inference goes to Anthropic natively (AITHOS_INFERENCE_MODE=direct), so
+#     the subscription OAuth/admin endpoints (hard-coded to api.anthropic.com,
+#     claude-code #48011) work again.
+#
+# Conceded in this DEV mode only: inference is not gateway-traced, and a revoked
+# mandate still cuts ACTIONS but not "thinking". The sealed+traced variant is
+# B-MITM (later). NEVER use this overlay for a third-party mandate.
+services:
+  egress-proxy:
+    image: node:20-bookworm-slim
+    command: ["node", "/proxy.mjs"]
+    volumes:
+      - ./dev/egress-allowlist-proxy.mjs:/proxy.mjs:ro
+    environment:
+      # The ONLY domain the cage can reach through here. Add a comma-separated
+      # host if the first run logs a legitimate "deny" you recognise.
+      EGRESS_ALLOWLIST: "api.anthropic.com"
+      PORT: "8888"
+    networks: [cage, egress] # the sole bridge: cage-facing + one allowed domain
+    user: "1000:1000" # node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  runtime:
+    depends_on: [gateway, egress-proxy]
+    environment:
+      # Talk to api.anthropic.com natively (no /llm redirect) so subscription
+      # auth works; reach it ONLY through the allowlist egress proxy.
+      AITHOS_INFERENCE_MODE: "direct"
+      HTTPS_PROXY: "http://egress-proxy:8888"
+      HTTP_PROXY: "http://egress-proxy:8888"
+      https_proxy: "http://egress-proxy:8888"
+      http_proxy: "http://egress-proxy:8888"
+      # The gateway (actions) is reached directly on the cage network, NOT via
+      # the egress proxy — the MCP tool channel stays gateway-mediated & gated.
+      NO_PROXY: "gateway,localhost,127.0.0.1"
+      no_proxy: "gateway,localhost,127.0.0.1"
+    # Subscription credential: use CLAUDE_CODE_OAUTH_TOKEN (headless, works on
+    # macOS where creds live in the Keychain, not ~/.claude). It is already
+    # passed through by the base compose. On a Linux host you MAY instead mount
+    # the real login store (read-write, so token refresh can persist):
+    # volumes:
+    #   - ${HOME}/.claude:/home/agent/.claude
