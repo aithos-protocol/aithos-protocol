@@ -68,25 +68,27 @@ export interface ActionDefinition {
 }
 
 /**
- * The scope that grants an action — `mcp.browser.<id>`, aligned with the
- * downstream (browser-agent) scope vocabulary (`mcp.<service>.<verb>`). Like
- * other `mcp.*` connector scopes it rides on the self/circle spheres; it is
- * NOT a public-sphere scope (public is limited to ethos.*.public /
- * ethos.read.all / gamma.read / compute.invoke / data.*).
+ * The scope that grants an action — `mcp.<service>.<id>` (default service
+ * `browser`). An action is just one kind of `mcp.*` tool, so it shares the
+ * connector scope family (`mcp.<service>.<verb>`): the same gateway serves a
+ * browser action, a mail action, a data write… Like other `mcp.*` scopes it
+ * rides on the self/circle spheres; it is NOT a public-sphere scope (public is
+ * limited to ethos.*.public / ethos.read.all / gamma.read / compute.invoke /
+ * data.*).
  */
-export function actionScope(id: string): string {
-  return `mcp.browser.${id}`;
+export function actionScope(id: string, service = "browser"): string {
+  return `mcp.${service}.${id}`;
 }
 
 /** Namespaced MCP tool name for an action (avoids collision with core tools). */
-export function actionToolName(id: string): string {
-  return `browser_action__${id}`;
+export function actionToolName(id: string, service = "browser"): string {
+  return `${service}_action__${id}`;
 }
 
 /** Recover the action id from a tool name (inverse of {@link actionToolName}). */
 export function actionIdFromToolName(name: string): string | null {
-  const prefix = "browser_action__";
-  return name.startsWith(prefix) ? name.slice(prefix.length) : null;
+  const m = /^.+_action__(.+)$/.exec(name);
+  return m ? m[1] : null;
 }
 
 /**
@@ -132,9 +134,10 @@ export function parseActionSection(section: {
 export function actionsInScope(
   actions: readonly ActionDefinition[],
   scopes: readonly string[],
+  service = "browser",
 ): ActionDefinition[] {
   const set = new Set(scopes);
-  return actions.filter((a) => set.has(actionScope(a.id)));
+  return actions.filter((a) => set.has(actionScope(a.id, service)));
 }
 
 /* -------------------------------------------------------------------------- */

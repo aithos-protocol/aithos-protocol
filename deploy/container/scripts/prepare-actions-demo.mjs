@@ -36,9 +36,10 @@ mkdirSync(RUN, { recursive: true });
 
 const action = argValue("--action") ?? "inscription-sandbox";
 const param = argValue("--param") ?? "nom";
+const service = argValue("--service") ?? "browser";
 const handle = argValue("--handle") ?? "demo";
 const ttlHours = Number(argValue("--ttl-hours") ?? "1");
-const scope = `mcp.browser.${action}`;
+const scope = `mcp.${service}.${action}`;
 
 const core = await import("@aithos/protocol-core");
 
@@ -77,6 +78,7 @@ writeFileSync(
   JSON.stringify(
     {
       aud: "urn:aithos:downstream:browser-agent",
+      service,
       actions: [
         {
           id: action,
@@ -101,7 +103,7 @@ writeFileSync(join(RUN, "mandate-id.txt"), mandate.id + "\n");
 console.log(`✓ identity + keystore   $AITHOS_HOME = ${HOME}`);
 console.log(`✓ mandate               ${mandate.id}  (scope: ${scope})`);
 console.log(`✓ pack                  ${join(RUN, "pack.json")}`);
-console.log(`✓ actions               ${join(RUN, "actions.json")}  (tool: browser_action__${action}, param: ${param})`);
+console.log(`✓ actions               ${join(RUN, "actions.json")}  (tool: ${service}_action__${action}, param: ${param})`);
 console.log("");
 console.log("Next (see deploy/container/CONTAINER-ACTIONS-GUIDE.md):");
 console.log("  export AITHOS_MCP_TOKEN=$(openssl rand -hex 24)");

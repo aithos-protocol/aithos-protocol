@@ -62,11 +62,14 @@ const DEFAULT_HAND_AUD = "urn:aithos:downstream:browser-agent";
 
 interface ActionsFile {
   readonly aud?: string;
+  /** Action service namespace (default `browser`): drives `mcp.<service>.<id>`. */
+  readonly service?: string;
   readonly actions: readonly ActionDefinition[];
 }
 
 /**
- * Load an actions catalogue: `{ aud?, actions: [{ id, goal, params_schema }] }`.
+ * Load an actions catalogue:
+ * `{ aud?, service?, actions: [{ id, goal, params_schema }] }`.
  * (For the demo these are a file; the production source is signed Ethos
  * sections — parseActionSection reads that shape from a section body.)
  */
@@ -74,6 +77,7 @@ async function loadActions(p?: string): Promise<ActionsFile | undefined> {
   if (!p) return undefined;
   const raw = JSON.parse(await readFile(path.resolve(p), "utf8")) as {
     aud?: string;
+    service?: string;
     actions?: unknown[];
   };
   if (!Array.isArray(raw.actions)) {
@@ -92,7 +96,7 @@ async function loadActions(p?: string): Promise<ActionsFile | undefined> {
       params_schema: (o.params_schema as ActionDefinition["params_schema"]) ?? { type: "object", properties: {} },
     };
   });
-  return { ...(raw.aud ? { aud: raw.aud } : {}), actions };
+  return { ...(raw.aud ? { aud: raw.aud } : {}), ...(raw.service ? { service: raw.service } : {}), actions };
 }
 
 const nodeIo: HostIo = {
@@ -383,6 +387,7 @@ async function runHttp(
               scopes: pack.mandate.scopes,
               mandate: pack.mandate,
               ownerDid: pack.mandate.issuer,
+              ...(actions.service ? { service: actions.service } : {}),
               aud: actions.aud ?? DEFAULT_HAND_AUD,
               delegateKey: {
                 seed: hexToBytes(pack.agent_key.seed_hex),

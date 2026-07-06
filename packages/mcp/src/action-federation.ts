@@ -60,12 +60,18 @@ export interface FederateActionsOptions {
   readonly server: RegisterableServer;
   /** Owner-authored actions resolved from the Ethos. */
   readonly actions: readonly ActionDefinition[];
-  /** The session mandate's scopes — drives `mcp.browser.<id>` gating. */
+  /** The session mandate's scopes — drives `mcp.<service>.<id>` gating. */
   readonly scopes: readonly string[];
   /** The signed mandate (carries the grantee delegate pubkey). */
   readonly mandate: Mandate;
   /** The owner (subject) DID — the envelope issuer. */
   readonly ownerDid: string;
+  /**
+   * The action service namespace (default `browser`): drives the scope
+   * (`mcp.<service>.<id>`) and tool name. An action is just one `mcp.*` tool
+   * kind, so the same code serves browser / mail / data downstreams.
+   */
+  readonly service?: string;
   /** The downstream audience identifier (signed into the envelope aud). */
   readonly aud: string;
   /** Delegate signing material (from the mandate pack). */
@@ -89,6 +95,7 @@ export interface FederateActionsHandle {
  */
 export function federateActions(opts: FederateActionsOptions): FederateActionsHandle {
   const log = opts.log ?? ((m: string) => console.error(`aithos-mcp actions: ${m}`));
+  const service = opts.service ?? "browser";
   const audit = async (
     action: string,
     params: unknown,
@@ -101,7 +108,7 @@ export function federateActions(opts: FederateActionsOptions): FederateActionsHa
       await opts.auditSink({
         ts: new Date().toISOString(),
         mandateId: opts.mandate.id,
-        server: "browser-agent",
+        server: service,
         tool: action,
         paramsSummary: summarize(params),
         status,
@@ -113,12 +120,12 @@ export function federateActions(opts: FederateActionsOptions): FederateActionsHa
     }
   };
 
-  const inScope = actionsInScope(opts.actions, opts.scopes);
+  const inScope = actionsInScope(opts.actions, opts.scopes, service);
   for (const action of inScope) {
     opts.server.registerTool(
-      actionToolName(action.id),
+      actionToolName(action.id, service),
       {
-        description: `[browser-agent] ${action.goal}`,
+        description: `[${service}] ${action.goal}`,
         inputSchema: inputSchemaToShape(action.params_schema),
       },
       async (args: Record<string, unknown>) => {
@@ -178,7 +185,7 @@ export function federateActions(opts: FederateActionsOptions): FederateActionsHa
         }
       },
     );
-    log(`exposed action "${action.id}" (scope ${actionScope(action.id)})`);
+    log(`exposed action "${action.id}" (scope ${actionScope(action.id, service)})`);
   }
 
   return { exposed: inScope.length };

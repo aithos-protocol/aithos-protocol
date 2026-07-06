@@ -161,6 +161,17 @@ describe("scope + tool naming", () => {
     assert.equal(actionIdFromToolName(actionToolName("demo_search")), "demo_search");
     assert.equal(actionIdFromToolName("ethos_read_section"), null);
   });
+
+  test("the service is generic — an action is just an mcp.<service> tool", () => {
+    // browser is only the default; the same helpers serve any service.
+    assert.equal(actionScope("reply", "mail"), "mcp.mail.reply");
+    assert.equal(actionToolName("reply", "mail"), "mail_action__reply");
+    assert.equal(actionIdFromToolName("mail_action__reply"), "reply");
+    // and in-scope filtering follows the service namespace.
+    const mailActions = [{ id: "reply", goal: "Reply", params_schema: { type: "object", properties: {} } }];
+    assert.deepEqual(actionsInScope(mailActions, ["mcp.mail.reply"], "mail").map((a) => a.id), ["reply"]);
+    assert.equal(actionsInScope(mailActions, ["mcp.browser.reply"], "mail").length, 0);
+  });
 });
 
 /* -------------------------------------------------------------------------- */
