@@ -53,7 +53,7 @@ import {
 } from "./gateway.js";
 import { startHttpGateway, type HttpGatewayOptions } from "./http.js";
 import { createLlmProxy } from "./llm-proxy.js";
-import { federateActions, httpActionDispatch } from "./action-federation.js";
+import { federateActions, httpActionDispatch, wsActionDispatch } from "./action-federation.js";
 import { parseActionSection, type ActionDefinition } from "./actions.js";
 import { fileAuditSink } from "./gateway.js";
 
@@ -192,6 +192,7 @@ interface CliOpts {
   llmUpstream?: string;
   actions?: string;
   actionsDownstream?: string;
+  actionsBearer?: string;
 }
 
 const program = new Command();
@@ -256,10 +257,18 @@ program
   )
   .option(
     "--actions-downstream <url>",
-    "Base URL of the hand that executes actions (POST <url>/run_action). The " +
-      "real browser-agent sends the same message over its WebSocket.",
+    "URL of the hand that executes actions. http(s):// -> POST <url>/run_action; " +
+      "ws(s):// -> run_action over the WebSocket (the real browser-agent at /ws).",
+  )
+  .option(
+    "--actions-bearer <token>",
+    "Bearer presented to a ws(s):// actions downstream at the handshake. " +
+      "Env: AITHOS_ACTIONS_BEARER.",
   )
   .action(async (opts: CliOpts) => {
+    if (!opts.actionsBearer && process.env.AITHOS_ACTIONS_BEARER) {
+      opts.actionsBearer = process.env.AITHOS_ACTIONS_BEARER;
+    }
     const pack = await loadPack(opts.mandatePack);
     const registry = await loadRegistry(opts.mcpRegistry);
     const actions = await loadActions(opts.actions);
@@ -379,7 +388,9 @@ async function runHttp(
                 seed: hexToBytes(pack.agent_key.seed_hex),
                 pubkeyMultibase: pack.agent_key.pubkey_multibase,
               },
-              dispatch: httpActionDispatch(opts.actionsDownstream),
+              dispatch: /^wss?:\/\//.test(opts.actionsDownstream)
+                ? wsActionDispatch(opts.actionsDownstream, { bearer: opts.actionsBearer })
+                : httpActionDispatch(opts.actionsDownstream),
               liveness: packLiveness(pack),
               ...(opts.auditLog ? { auditSink: fileAuditSink(opts.auditLog) } : {}),
             });

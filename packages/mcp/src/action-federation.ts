@@ -22,6 +22,8 @@
  * browser-agent binding sends `run_action` over its WebSocket (see
  * `wsActionDispatch`); tests inject an in-process function.
  */
+import WebSocket from "ws";
+
 import type { Mandate, SignedEnvelope } from "@aithos/protocol-core";
 
 import {
@@ -215,6 +217,80 @@ export function httpActionDispatch(baseUrl: string): ActionDispatch {
     // Trust the report's own ok flag, but never let a 4xx/5xx masquerade as ok.
     return { ...r, ok: r.ok === true && res.ok };
   };
+}
+
+/** Options for {@link wsActionDispatch}. */
+export interface WsDispatchOptions {
+  /** Downstream bearer (sent as `Authorization: Bearer <bearer>` at handshake). */
+  readonly bearer?: string;
+  /** WS path on the downstream (browser-agent serves the command API at /ws). */
+  readonly wsPath?: string;
+  /** Give up (fail closed) after this long without a report. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * The real browser-agent binding: open a WebSocket to the hand, authenticate
+ * with the bearer at the handshake, send `run_action(action_id, params)` (the
+ * signed `envelope` rides along for attribution — the dumb hand ignores it),
+ * and map its reply to a {@link RunReport}. One connection per call keeps this
+ * stateless; the gateway signs per call anyway.
+ */
+export function wsActionDispatch(baseUrl: string, opts: WsDispatchOptions = {}): ActionDispatch {
+  const url = `${baseUrl.replace(/\/$/, "")}${opts.wsPath ?? "/ws"}`;
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  return (req) =>
+    new Promise<RunReport>((resolve) => {
+      const socket = new WebSocket(url, {
+        headers: opts.bearer ? { Authorization: `Bearer ${opts.bearer}` } : undefined,
+      });
+      let settled = false;
+      const finish = (r: RunReport) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          socket.close();
+        } catch {
+          /* already closing */
+        }
+        resolve(r);
+      };
+      const stopped = (error: string): RunReport => ({ ok: false, type: "run_stopped", error });
+      const timer = setTimeout(
+        () => finish(stopped(`downstream timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+
+      socket.on("open", () => {
+        socket.send(
+          JSON.stringify({
+            type: "run_action",
+            action_id: req.action.id,
+            params: req.params,
+            envelope: req.envelope,
+          }),
+        );
+      });
+      socket.on("message", (raw: WebSocket.RawData) => {
+        let msg: { type?: string; ok?: boolean; reason?: string; error?: string; [k: string]: unknown };
+        try {
+          msg = JSON.parse(raw.toString());
+        } catch {
+          return finish(stopped("downstream sent non-JSON"));
+        }
+        if (msg.type === "run_report") return finish({ ...msg, ok: msg.ok === true });
+        if (msg.type === "run_stopped")
+          return finish({ ...msg, ok: false, type: "run_stopped", error: msg.reason ?? msg.error ?? "run stopped" });
+        if (msg.type === "error") return finish(stopped(msg.error ?? "downstream error"));
+        return finish(stopped(`unexpected downstream message: ${String(msg.type)}`));
+      });
+      socket.on("unexpected-response", (_req, res) =>
+        finish(stopped(`downstream rejected the connection (HTTP ${res.statusCode})`)),
+      );
+      socket.on("error", (e: Error) => finish(stopped(`ws error: ${e.message}`)));
+      socket.on("close", (code: number) => finish(stopped(`ws closed (${code}) before a report`)));
+    });
 }
 
 function summarize(args: unknown): string {
