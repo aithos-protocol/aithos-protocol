@@ -21,11 +21,13 @@ services:
       AITHOS_HOME: /run/aithos/home
       AITHOS_LLM_UPSTREAM: "${AITHOS_LLM_UPSTREAM:-https://api.anthropic.com}"
     volumes:
-      # Secrets live with the GATEWAY, never in the cage (§13.7.1):
+      # Secrets live with the GATEWAY, never in the cage (§13.7.1). These paths
+      # are what `scripts/prepare-demo.mjs` writes under ./run (relative to this
+      # compose file). Override AITHOS_HOME to point at your own ethos store.
       - ./run/pack.json:/run/aithos/pack.json:ro
       - ./run/registry.json:/run/aithos/registry.json:ro
       # cas 1 — local ethos + mandate store, read-only (§13.10 E4).
-      - ${AITHOS_HOME:-~/.aithos}:/run/aithos/home:ro
+      - ${AITHOS_HOME:-./run/home}:/run/aithos/home:ro
     # The app the agent acts on (e.g. browser-agent, §DESIGN-topologie) is a
     # downstream on the host — reachable from the gateway leg only.
     extra_hosts:
@@ -54,13 +56,21 @@ services:
     environment:
       AITHOS_GATEWAY_URL: "http://gateway:8787"
       AITHOS_MCP_TOKEN: "${AITHOS_MCP_TOKEN}"
+      # Inference auth — pick ONE:
+      #  (a) API key (simplest first test): export ANTHROPIC_API_KEY before `up`.
+      #      Claude sends it, the gateway /llm proxy forwards it, done. This is
+      #      a secret in the cage, tolerated like the subscription exception for
+      #      a local run; custody mode (key held by the gateway) is P2.
+      #  (b) Subscription: leave this empty and uncomment the ~/.claude mount
+      #      below — but watch the OAuth-refresh domain (the one open unknown).
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # Job mode (P0): one mission, then the container exits.
       AITHOS_MISSION: "${AITHOS_MISSION:-List my dormant contacts and summarise who to re-engage.}"
       # Harness mode (P1): set AITHOS_HARNESS=1 instead of AITHOS_MISSION.
       AITHOS_HARNESS: "${AITHOS_HARNESS:-0}"
     # EXCEPTION (§13.7.2): the owner's personal Claude subscription, RO, for
     # local runs on the owner's own machine. NEVER for a third-party mandate.
-    # Uncomment to use your subscription instead of a gateway-held API key:
+    # Uncomment to use your subscription instead of ANTHROPIC_API_KEY:
     # volumes:
     #   - ~/.claude:/home/agent/.claude:ro
     restart: "no"

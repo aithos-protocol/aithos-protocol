@@ -53,20 +53,40 @@ is ours to trust.
 > publishes. Docker Hub mirroring (`aithosprotocol/*`) activates automatically
 > when `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets are set.
 
+## Fastest check — no Docker
+
+Prove the five assertions in seconds against the real gateway process:
+
+```bash
+npm ci && npm run build          # once, at the repo root
+node deploy/container/scripts/check.mjs
+```
+
+It boots `aithos-mcp` under a fresh read-only mandate, federates the demo
+contacts server, exercises in-scope / out-of-scope / inference / revoke, and
+tears everything down. Only criterion 3's kernel network isolation needs
+Docker.
+
 ## Quick start (Docker)
 
 ```bash
 # 1. Prepare identity, mandate, pack, registry (writes ./run/).
-bash scripts/demo.sh
+node deploy/container/scripts/prepare-demo.mjs
 
 # 2. Boot the cage + gateway and run one mission (job mode).
 export AITHOS_MCP_TOKEN=$(openssl rand -hex 24)
-export AITHOS_HOME=./run/home
-docker compose up --abort-on-container-exit
+export ANTHROPIC_API_KEY=sk-ant-...        # inference auth (a); or use the subscription mount
+docker compose -f deploy/container/docker-compose.yml up --abort-on-container-exit
 
 # 3. The punchline — revoke, and watch everything stop.
-bash scripts/revoke.sh
+node deploy/container/scripts/revoke-demo.mjs
 ```
+
+> **CLI note.** Prep uses `prepare-demo.mjs` (workspace protocol-core), not the
+> `aithos` CLI: the CLI package pins an old protocol-core (`^0.8.0`) that
+> rejects sphere-neutral `mcp.*` scopes, so `aithos grant --scope mcp.demo.read`
+> fails against a stale nested copy. Fix the CLI's dependency range to restore
+> the `aithos grant`/`revoke` path.
 
 ## Docker-free proof
 

@@ -10,8 +10,10 @@
     "build": "tsc -p harness/tsconfig.json",
     "test": "node --test --import tsx harness/test/*.test.ts test/*.test.mjs",
     "check-types": "tsc -p harness/tsconfig.json --noEmit",
+    "check": "node scripts/check.mjs",
+    "prepare-demo": "node scripts/prepare-demo.mjs",
     "demo": "bash scripts/demo.sh",
-    "revoke": "bash scripts/revoke.sh"
+    "revoke": "node scripts/revoke-demo.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
