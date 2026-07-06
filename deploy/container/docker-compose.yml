@@ -56,21 +56,30 @@ services:
     environment:
       AITHOS_GATEWAY_URL: "http://gateway:8787"
       AITHOS_MCP_TOKEN: "${AITHOS_MCP_TOKEN}"
-      # Inference auth — pick ONE:
-      #  (a) API key (simplest first test): export ANTHROPIC_API_KEY before `up`.
-      #      Claude sends it, the gateway /llm proxy forwards it, done. This is
-      #      a secret in the cage, tolerated like the subscription exception for
-      #      a local run; custody mode (key held by the gateway) is P2.
-      #  (b) Subscription: leave this empty and uncomment the ~/.claude mount
-      #      below — but watch the OAuth-refresh domain (the one open unknown).
+      # Inference auth — set exactly ONE of the two below (leave the other empty):
+      #
+      #  (a) Your Claude subscription, headless (recommended for a local run on
+      #      your own machine — §13.7.2). On the HOST once:  claude setup-token
+      #      → a long-lived OAuth token. Export it, and it rides through here.
+      #      Claude Code sends it as a bearer to ANTHROPIC_BASE_URL (the /llm
+      #      proxy → api.anthropic.com). No ~/.claude mount, no refresh churn.
+      #      Caveat: Claude Code issue #48011 — OAuth/admin calls are NOT routed
+      #      through ANTHROPIC_BASE_URL, so a token *validation* hit may target a
+      #      hard-coded domain the cage blocks. If the first run fails on auth,
+      #      read the blocked host in the gateway proxy log and either add it to
+      #      the LLM allowlist or fall back to (b).
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      #
+      #  (b) A plain API key (from the Claude Console). Simplest, no OAuth quirks.
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      #
       # Job mode (P0): one mission, then the container exits.
       AITHOS_MISSION: "${AITHOS_MISSION:-List my dormant contacts and summarise who to re-engage.}"
       # Harness mode (P1): set AITHOS_HARNESS=1 instead of AITHOS_MISSION.
       AITHOS_HARNESS: "${AITHOS_HARNESS:-0}"
-    # EXCEPTION (§13.7.2): the owner's personal Claude subscription, RO, for
-    # local runs on the owner's own machine. NEVER for a third-party mandate.
-    # Uncomment to use your subscription instead of ANTHROPIC_API_KEY:
+    # Alternative to (a): mount the subscription store read-only instead of a
+    # setup-token. Same §13.7.2 exception; more prone to the refresh caveat.
+    # NEVER for a third-party mandate. Uncomment to use:
     # volumes:
     #   - ~/.claude:/home/agent/.claude:ro
     restart: "no"

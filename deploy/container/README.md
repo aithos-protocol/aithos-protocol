@@ -75,7 +75,10 @@ node deploy/container/scripts/prepare-demo.mjs
 
 # 2. Boot the cage + gateway and run one mission (job mode).
 export AITHOS_MCP_TOKEN=$(openssl rand -hex 24)
-export ANTHROPIC_API_KEY=sk-ant-...        # inference auth (a); or use the subscription mount
+# Inference auth — ONE of:
+#   (a) your Claude subscription, headless:  claude setup-token  → then
+export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)   # long-lived, no browser in the cage
+#   (b) a plain API key:  export ANTHROPIC_API_KEY=sk-ant-...
 docker compose -f deploy/container/docker-compose.yml up --abort-on-container-exit
 
 # 3. The punchline — revoke, and watch everything stop.

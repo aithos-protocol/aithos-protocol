@@ -45,6 +45,17 @@ JSON
 export ANTHROPIC_BASE_URL="${AITHOS_GATEWAY_URL%/}/llm"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
+# Inference auth preflight: Claude Code needs a credential to send to the /llm
+# proxy — a subscription OAuth token (claude setup-token) or an API key, or a
+# mounted ~/.claude. Warn early with an actionable message rather than let the
+# first model call fail cryptically inside the cage.
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] \
+   && [ ! -e "$HOME/.claude" ]; then
+  echo "entrypoint-runtime: no inference credential — set CLAUDE_CODE_OAUTH_TOKEN" \
+       "(claude setup-token) or ANTHROPIC_API_KEY, or mount ~/.claude. See" \
+       "docker-compose.yml." >&2
+fi
+
 # 3a. Harness mode (P1): a supervisor loop owns mission state. When present,
 #     hand over to it — it polls the mailbox and spawns a fresh agent run per
 #     mission. AITHOS_MCP_CONFIG points it at the generated .mcp.json.
