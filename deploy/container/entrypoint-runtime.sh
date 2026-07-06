@@ -67,7 +67,9 @@ fi
 # 3b. Job mode (P0): one mission in, run it, exit. One container, one mission.
 : "${AITHOS_MISSION:?AITHOS_MISSION is required in job mode (or set AITHOS_HARNESS=1)}"
 cd "$WORK"
+# --output-format stream-json requires --verbose (Claude Code CLI contract).
 exec claude -p "$AITHOS_MISSION" \
   --output-format stream-json \
+  --verbose \
   --mcp-config "$WORK/.mcp.json" \
   --dangerously-skip-permissions
