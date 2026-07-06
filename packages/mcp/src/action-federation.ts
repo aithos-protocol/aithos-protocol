@@ -166,6 +166,37 @@ function errorResult(text: string) {
   return { content: [{ type: "text" as const, text }], isError: true };
 }
 
+/**
+ * Default `ActionDispatch`: POST `{ envelope, action, params }` to
+ * `<baseUrl>/run_action` and return the downstream's report. The real
+ * browser-agent binding will send the same message over its WebSocket; this
+ * HTTP form matches the mock hand and any HTTP-fronted connector.
+ */
+export function httpActionDispatch(baseUrl: string): ActionDispatch {
+  const url = `${baseUrl.replace(/\/$/, "")}/run_action`;
+  return async (req) => {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(req),
+      });
+    } catch (e) {
+      return { ok: false, type: "run_stopped", error: `downstream unreachable: ${(e as Error).message}` };
+    }
+    let report: unknown;
+    try {
+      report = await res.json();
+    } catch {
+      return { ok: false, type: "run_stopped", error: `downstream returned non-JSON (status ${res.status})` };
+    }
+    const r = report as RunReport;
+    // Trust the report's own ok flag, but never let a 4xx/5xx masquerade as ok.
+    return { ...r, ok: r.ok === true && res.ok };
+  };
+}
+
 function summarize(args: unknown): string {
   try {
     const s = JSON.stringify(args ?? {});

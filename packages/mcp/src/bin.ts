@@ -53,6 +53,47 @@ import {
 } from "./gateway.js";
 import { startHttpGateway, type HttpGatewayOptions } from "./http.js";
 import { createLlmProxy } from "./llm-proxy.js";
+import { federateActions, httpActionDispatch } from "./action-federation.js";
+import { parseActionSection, type ActionDefinition } from "./actions.js";
+import { fileAuditSink } from "./gateway.js";
+
+/** Default audience for the browser-agent "hand" (overridable per actions file). */
+const DEFAULT_HAND_AUD = "urn:aithos:downstream:browser-agent";
+
+interface ActionsFile {
+  readonly aud?: string;
+  readonly actions: readonly ActionDefinition[];
+}
+
+/**
+ * Load an actions catalogue: `{ aud?, actions: [{ id, goal, params_schema }] }`.
+ * (For the demo these are a file; the production source is signed Ethos
+ * sections — parseActionSection reads that shape from a section body.)
+ */
+async function loadActions(p?: string): Promise<ActionsFile | undefined> {
+  if (!p) return undefined;
+  const raw = JSON.parse(await readFile(path.resolve(p), "utf8")) as {
+    aud?: string;
+    actions?: unknown[];
+  };
+  if (!Array.isArray(raw.actions)) {
+    throw new Error("actions file: \"actions\" must be an array");
+  }
+  const actions = raw.actions.map((a) => {
+    const o = a as { id?: string; goal?: string; body?: string; title?: string; params_schema?: unknown };
+    // Accept either a ready ActionDefinition or a raw Ethos-section shape.
+    if (typeof o.body === "string") {
+      return parseActionSection({ id: o.id ?? "", title: o.title, body: o.body });
+    }
+    if (typeof o.id !== "string" || !o.id) throw new Error("actions file: an action is missing id");
+    return {
+      id: o.id,
+      goal: typeof o.goal === "string" ? o.goal : o.id,
+      params_schema: (o.params_schema as ActionDefinition["params_schema"]) ?? { type: "object", properties: {} },
+    };
+  });
+  return { ...(raw.aud ? { aud: raw.aud } : {}), actions };
+}
 
 const nodeIo: HostIo = {
   readTextFile: (p) => readFile(p, "utf8"),
@@ -149,6 +190,8 @@ interface CliOpts {
   auditLog?: string;
   llmProxy?: boolean;
   llmUpstream?: string;
+  actions?: string;
+  actionsDownstream?: string;
 }
 
 const program = new Command();
@@ -204,11 +247,30 @@ program
     "--llm-upstream <url>",
     "Upstream base URL for --llm-proxy. Env: AITHOS_LLM_UPSTREAM.",
   )
+  .option(
+    "--actions <path>",
+    "Expose owner-authored actions (Mandated Intent Envelope) as MCP tools. " +
+      "A tool per action the mandate grants (browser.action:<id>); on call the " +
+      "gateway validates params against the signed schema, signs an envelope, " +
+      "and dispatches it. Requires --mandate-pack and --actions-downstream.",
+  )
+  .option(
+    "--actions-downstream <url>",
+    "Base URL of the hand that executes actions (POST <url>/run_action). The " +
+      "real browser-agent sends the same message over its WebSocket.",
+  )
   .action(async (opts: CliOpts) => {
     const pack = await loadPack(opts.mandatePack);
     const registry = await loadRegistry(opts.mcpRegistry);
+    const actions = await loadActions(opts.actions);
     if (registry && !pack) {
       throw new Error("--mcp-registry requires --mandate-pack (scopes drive exposure)");
+    }
+    if (actions && (!pack || !opts.actionsDownstream)) {
+      throw new Error("--actions requires --mandate-pack and --actions-downstream");
+    }
+    if (actions && opts.transport !== "http") {
+      throw new Error("--actions is supported with --transport http (stateful) only");
     }
     if (opts.transport === "stdio") {
       if (opts.llmProxy) {
@@ -223,7 +285,7 @@ program
           "--mcp-registry requires stateful HTTP sessions (drop --stateless)",
         );
       }
-      await runHttp(opts, pack, registry);
+      await runHttp(opts, pack, registry, actions);
     }
   });
 
@@ -277,6 +339,7 @@ async function runHttp(
   opts: CliOpts,
   pack?: MandatePack,
   registry?: McpRegistry,
+  actions?: ActionsFile,
 ): Promise<void> {
   const token = process.env.AITHOS_MCP_TOKEN;
   if (!token) {
@@ -284,6 +347,46 @@ async function runHttp(
       "AITHOS_MCP_TOKEN must be set in the environment when using --transport http",
     );
   }
+
+  // Compose the per-session hook: registry (MCP downstreams) + actions
+  // (Mandated Intent Envelope). Both register tools before the transport
+  // connects; only actions has no teardown (its dispatch is stateless).
+  const regHook =
+    registry && pack
+      ? sessionFederation({
+          pack,
+          registry,
+          liveness: packLiveness(pack),
+          ...(opts.auditLog ? { auditLogPath: opts.auditLog } : {}),
+        })
+      : undefined;
+
+  const onSessionServer =
+    regHook || (actions && pack)
+      ? async (server: ReturnType<typeof createServer>) => {
+          const dispose = regHook
+            ? await regHook(server as unknown as Parameters<NonNullable<typeof regHook>>[0])
+            : undefined;
+          if (actions && pack && opts.actionsDownstream && isMandateWindowLive(pack.mandate)) {
+            federateActions({
+              server: server as unknown as Parameters<typeof federateActions>[0]["server"],
+              actions: actions.actions,
+              scopes: pack.mandate.scopes,
+              mandate: pack.mandate,
+              ownerDid: pack.mandate.issuer,
+              aud: actions.aud ?? DEFAULT_HAND_AUD,
+              delegateKey: {
+                seed: hexToBytes(pack.agent_key.seed_hex),
+                pubkeyMultibase: pack.agent_key.pubkey_multibase,
+              },
+              dispatch: httpActionDispatch(opts.actionsDownstream),
+              liveness: packLiveness(pack),
+              ...(opts.auditLog ? { auditSink: fileAuditSink(opts.auditLog) } : {}),
+            });
+          }
+          return dispose;
+        }
+      : undefined;
 
   const handle = await startHttpGateway({
     host: opts.host ?? "127.0.0.1",
@@ -295,16 +398,10 @@ async function runHttp(
     serverOptions: ({ stateless }) =>
       nodeServerOptions(stateless ? true : opts.autoCommit === true, pack),
     // Container gateway core (§13.6): every stateful session federates the
-    // registry against the pack's scopes; out-of-scope tools stay invisible.
-    ...(registry && pack
-      ? {
-          onSessionServer: sessionFederation({
-            pack,
-            registry,
-            liveness: packLiveness(pack),
-            ...(opts.auditLog ? { auditLogPath: opts.auditLog } : {}),
-          }) as unknown as NonNullable<HttpGatewayOptions["onSessionServer"]>,
-        }
+    // registry (MCP downstreams) AND the actions (Mandated Intent Envelope)
+    // against the pack's scopes; out-of-scope tools/actions stay invisible.
+    ...(onSessionServer
+      ? { onSessionServer: onSessionServer as unknown as NonNullable<HttpGatewayOptions["onSessionServer"]> }
       : {}),
     // §13.5 I1/I2: the cage's inference traverses the gateway. Transparent
     // pass-through in P0 (subscription-credential mode §13.7.2); custody,
