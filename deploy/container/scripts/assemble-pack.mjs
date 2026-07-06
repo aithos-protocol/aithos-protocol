@@ -30,9 +30,12 @@ const arg = (f) => {
   return i >= 0 ? process.argv[i + 1] : undefined;
 };
 
+const bundlePath = arg("--bundle");
 const mandatePath = arg("--mandate");
-if (!mandatePath) {
-  console.error("usage: assemble-pack.mjs --mandate <mandate.json> [--action <id> --param <name> --service <svc>]");
+if (!bundlePath && !mandatePath) {
+  console.error("usage: assemble-pack.mjs --bundle <delegate-bundle.json>   (app.aithos.be / example app export)");
+  console.error("   or: assemble-pack.mjs --mandate <mandate.json> [--agent-seed <hex>]");
+  console.error("   [--action <id> --param <name> --service <svc>]");
   process.exit(2);
 }
 const service = arg("--service") ?? "browser";
@@ -40,25 +43,35 @@ const action = arg("--action") ?? "inscription-sandbox";
 const param = arg("--param") ?? "nom";
 const scope = `mcp.${service}.${action}`;
 
-// 1. read the agent key (from new-agent-key.mjs) or an explicit --agent-seed.
-let agentKey;
-const seedHex = arg("--agent-seed");
-if (seedHex) {
+async function keyFromSeed(seedHex) {
   const core = await import("@aithos/protocol-core");
   const ed = await import("@noble/ed25519");
   const { sha512 } = await import("@noble/hashes/sha512");
   ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
   const seed = Uint8Array.from(Buffer.from(seedHex, "hex"));
-  agentKey = { seed_hex: seedHex, pubkey_multibase: core.ed25519PublicKeyToMultibase(ed.getPublicKey(seed)) };
-} else {
-  agentKey = JSON.parse(readFileSync(join(RUN, "agent-key.json"), "utf8"));
+  return { seed_hex: seedHex, pubkey_multibase: core.ed25519PublicKeyToMultibase(ed.getPublicKey(seed)) };
 }
 
-// 2. read the mandate (accept a bare Mandate, a { mandate } wrapper, or a full pack).
-const rawMandate = JSON.parse(readFileSync(resolve(mandatePath), "utf8"));
-const mandate = rawMandate.mandate ?? rawMandate;
+// 1. get the mandate + agent key. A DELEGATE BUNDLE carries both (the export
+//    from app.aithos.be / the example app: { mandate, delegate_seed_hex }). A
+//    bare mandate uses a separate agent key (--agent-seed or run/agent-key.json).
+let mandate, agentKey;
+if (bundlePath) {
+  const b = JSON.parse(readFileSync(resolve(bundlePath), "utf8"));
+  mandate = b.mandate;
+  if (!mandate || typeof b.delegate_seed_hex !== "string") {
+    console.error("bundle: expected a delegate bundle { mandate, delegate_seed_hex }.");
+    process.exit(1);
+  }
+  agentKey = await keyFromSeed(b.delegate_seed_hex);
+} else {
+  const seedHex = arg("--agent-seed");
+  agentKey = seedHex ? await keyFromSeed(seedHex) : JSON.parse(readFileSync(join(RUN, "agent-key.json"), "utf8"));
+  const raw = JSON.parse(readFileSync(resolve(mandatePath), "utf8"));
+  mandate = raw.mandate ?? raw;
+}
 if (!mandate || typeof mandate !== "object" || !Array.isArray(mandate.scopes)) {
-  console.error("mandate: not a valid Mandate (no scopes[]). Export the mandate object itself.");
+  console.error("mandate: not a valid Mandate (no scopes[]).");
   process.exit(1);
 }
 
