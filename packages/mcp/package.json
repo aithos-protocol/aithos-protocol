@@ -58,6 +58,10 @@
     "./llm-proxy": {
       "types": "./dist/llm-proxy.d.ts",
       "default": "./dist/llm-proxy.js"
+    },
+    "./actions": {
+      "types": "./dist/actions.d.ts",
+      "default": "./dist/actions.js"
     }
   },
   "files": [
