@@ -22,7 +22,10 @@ RUN useradd --create-home --uid 10001 agent
 USER agent
 WORKDIR /home/agent
 
-COPY --chown=agent:agent entrypoint-runtime.sh /usr/local/bin/entrypoint-runtime.sh
+# --chmod pins the execute bit in the image regardless of the host file mode
+# (a plain COPY preserves the context file's mode, which may lack +x → the
+# container fails to exec the entrypoint).
+COPY --chmod=0755 --chown=agent:agent entrypoint-runtime.sh /usr/local/bin/entrypoint-runtime.sh
 
 # The cage exposes NO port (N2): work is pulled, never pushed in.
 # Contract for any agent placed here:
