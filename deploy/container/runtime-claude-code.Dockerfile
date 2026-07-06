@@ -12,9 +12,12 @@
 
 FROM node:20-bookworm-slim
 
-# Claude Code, the first reference agent. Pinned major; the cage makes
+# Claude Code, the first reference agent. Track the CURRENT major (2.x): a 1.x
+# pin predates CLAUDE_CODE_OAUTH_TOKEN (→ apiKeySource "none") and carries a
+# no-credential ByteString bug, and a host token from `claude setup-token` (2.x)
+# is not understood by a 1.x container (version skew). The cage makes
 # --dangerously-skip-permissions safe (there is nothing unsafe to reach).
-RUN npm install -g @anthropic-ai/claude-code@^1 \
+RUN npm install -g @anthropic-ai/claude-code@^2 \
  && npm cache clean --force
 
 # Non-root agent user; the entrypoint writes only to tmpfs mounts.
