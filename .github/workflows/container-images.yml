@@ -41,9 +41,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22: several packages' test scripts use a `test/**/*.test.ts`
+          # glob that the built-in test runner only expands on Node 21+.
+          node-version: 22
           cache: npm
       - run: npm ci
+      # Build first: packages that run tests via tsx still import the built
+      # @aithos/protocol-core/dist (canonical/envelope/identity …).
+      - run: npm run build
       - name: Unit + integration tests (all workspaces)
         run: npm test
       - name: Container tests (P0 acceptance + compose lint + harness)
