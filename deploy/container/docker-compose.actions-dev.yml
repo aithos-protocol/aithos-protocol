@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Mathieu Colla
+#
+# Overlay: test the ACTIONS path (Mandated Intent Envelope → browser-agent) with
+# the REAL gateway container, by hand. Layer it over the base compose:
+#
+#   node deploy/container/scripts/prepare-actions-demo.mjs
+#   export AITHOS_MCP_TOKEN=$(openssl rand -hex 24)
+#   export AITHOS_ACTIONS_BEARER=<same token as browser-agent --ws-bearer>
+#   docker compose -f deploy/container/docker-compose.yml \
+#                  -f deploy/container/docker-compose.actions-dev.yml up --build gateway
+#
+# Only the gateway is started (no runtime / no inference): we drive the action
+# ourselves from the host with scripts/call-action.mjs. The gateway signs +
+# validates + dispatches run_action to the hand on the host over the WebSocket.
+services:
+  gateway:
+    # Replace the base CMD: federate actions instead of mounting the LLM proxy.
+    command:
+      - "--transport"
+      - "http"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8787"
+      - "--mandate-pack"
+      - "/run/aithos/pack.json"
+      - "--mcp-registry"
+      - "/run/aithos/registry.json"
+      - "--actions"
+      - "/run/aithos/actions.json"
+      - "--actions-downstream"
+      - "ws://host.docker.internal:8765"
+      - "--actions-bearer"
+      - "${AITHOS_ACTIONS_BEARER:?set AITHOS_ACTIONS_BEARER = browser-agent --ws-bearer}"
+    # Append the action catalogue to the base mounts (pack, registry, home).
+    volumes:
+      - ./run/actions.json:/run/aithos/actions.json:ro
+    # Expose the gateway's MCP to the host (loopback only) so we can call it.
+    ports:
+      - "127.0.0.1:8787:8787"
