@@ -73,6 +73,22 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] \
        "docker-compose.yml." >&2
 fi
 
+# A credential must be a SINGLE token with no whitespace. The classic mistake is
+# `export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)` — setup-token is
+# interactive, so $(...) captures its whole UI (banner, spinner, the OAuth URL,
+# the token). Claude Code would then put that blob in the Authorization header
+# and fail with a cryptic "invalid header value". Fail fast, clearly, instead.
+for _var in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY; do
+  eval "_val=\${$_var:-}"
+  case "$_val" in
+    *[[:space:]]*)
+      echo "entrypoint-runtime: $_var contains whitespace/newlines — it looks" \
+           "like the full 'claude setup-token' output was captured. Set it to" \
+           "JUST the token value (e.g. sk-ant-oat01-…), single-quoted." >&2
+      exit 1 ;;
+  esac
+done
+
 # 3a. Harness mode (P1): a supervisor loop owns mission state. When present,
 #     hand over to it — it polls the mailbox and spawns a fresh agent run per
 #     mission. AITHOS_MCP_CONFIG points it at the generated .mcp.json.
