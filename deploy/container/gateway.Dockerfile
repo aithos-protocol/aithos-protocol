@@ -18,7 +18,14 @@ WORKDIR /src
 # present (a partial copy fails with "Missing … from lock file"). A root
 # .dockerignore keeps node_modules/dist/.git out of the context.
 COPY . .
-RUN npm ci --include-workspace-root
+# --ignore-scripts skips dependency lifecycle scripts. This deliberately
+# avoids esbuild's postinstall, which writes then immediately execs its own
+# binary to check the version — a race that fails with ETXTBSY ("text file
+# busy") on some Docker storage drivers (notably Docker Desktop for macOS).
+# The gateway never runs esbuild (it is only a devDep behind mcp's
+# `check:browser` script); the build below is plain tsc, so nothing here needs
+# an install script.
+RUN npm ci --include-workspace-root --ignore-scripts
 # Only the three packages the gateway actually runs on need building.
 RUN npm run build --workspace=@aithos/agent-tools \
  && npm run build --workspace=@aithos/protocol-core \
